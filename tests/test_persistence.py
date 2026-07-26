@@ -95,6 +95,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         engine.state.greenery_processed_today = True
         engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
         engine.state.turn_settled = True
+        engine.state.day_campsite_groups_served = 7
 
         # 帐篷内部字段
         engine.tents[2].level = 2
@@ -150,6 +151,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertTrue(s.greenery_processed_today)
         self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
         self.assertTrue(s.turn_settled)
+        self.assertEqual(s.day_campsite_groups_served, 7)
 
         # 帐篷键恢复为 int
         self.assertIn(2, restored.tents)
@@ -355,6 +357,25 @@ class SnapshotVersionMismatchTests(PersistenceTestCase):
         new_payload = json.loads(rows[0][1])
         self.assertEqual(new_payload["snapshot_version"], CampingPlazaEngine.SNAPSHOT_VERSION)
         self.assertEqual(new_payload["state"]["day"], 1)
+
+
+class MissingDayCampsiteFieldFallbackTests(PersistenceTestCase):
+    """旧快照缺少日间营位计数字段时安全回退到默认值"""
+
+    def test_missing_day_campsite_groups_served_defaults_to_zero(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        original_rows = self._snapshot_rows()
+        valid_payload = json.loads(original_rows[0][1])
+
+        del valid_payload["state"]["day_campsite_groups_served"]
+        valid_payload["state"]["day"] = 4
+        valid_payload["state"]["turn"] = 3
+        self._write_snapshot_dict(valid_payload)
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(restored.state.day, 4)
+        self.assertEqual(restored.state.turn, 3)
+        self.assertEqual(restored.state.day_campsite_groups_served, 0)
 
 
 if __name__ == "__main__":

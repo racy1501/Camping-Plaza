@@ -121,6 +121,259 @@ class Turn4OrderTests(unittest.TestCase):
         self.assertEqual(len(engine.state.day_to_overnight_cache), 0)
 
 
+class DayCampsiteCapacityTests(unittest.TestCase):
+    """日间营位每日10组上限与生命周期"""
+
+    def test_new_game_counter_starts_at_zero(self):
+        engine = make_engine()
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 0)
+        self.assertEqual(engine.get_day_campsite_remaining(), 10)
+
+    def test_successful_day_guest_checkin_increments_counter_by_group(self):
+        engine = make_engine()
+        engine.state.turn = 2
+
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=3,
+            visit_type="day",
+        )
+        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[guest]):
+            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    result = {"events": []}
+                    engine._process_checkin(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 1)
+        self.assertEqual(engine.get_day_campsite_remaining(), 9)
+        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
+        self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
+        self.assertEqual(len(engine.npc_pool), 1)
+
+    def test_counter_accumulates_across_business_turns_up_to_ten(self):
+        engine = make_engine()
+        engine.state.day_campsite_groups_served = 0
+
+        with mock.patch("game_engine.random.randint", return_value=4):
+            guests_turn2 = engine._generate_day_guests()
+            engine.state.day_campsite_groups_served += len(guests_turn2)
+            guests_turn3 = engine._generate_day_guests()
+            engine.state.day_campsite_groups_served += len(guests_turn3)
+            guests_turn4 = engine._generate_day_guests()
+
+        self.assertEqual(len(guests_turn2), 4)
+        self.assertEqual(len(guests_turn3), 4)
+        self.assertEqual(len(guests_turn4), 2)
+        self.assertEqual(engine.state.day_campsite_groups_served + len(guests_turn4), 10)
+
+    def test_remaining_two_slots_caps_generation_and_revenue(self):
+        engine = make_engine()
+        engine.state.turn = 3
+        engine.state.day_campsite_groups_served = 8
+
+        with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+            with mock.patch("game_engine.random.randint", side_effect=[5, 2, 3]):
+                with mock.patch("game_engine.random.choices", side_effect=[[1], [1], [1], [1], [1], [1]]):
+                    with mock.patch("game_engine.random.random", return_value=0.0):
+                        result = {"events": []}
+                        engine._process_checkin(result)
+
+        day_guests = [n for n in engine.npc_pool if n.visit_type == "day"]
+        self.assertEqual(len(day_guests), 2)
+        self.assertEqual(engine.state.day_campsite_groups_served, 10)
+        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE * 2)
+        self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE * 2)
+
+    def test_no_new_day_guests_or_fee_after_capacity_reached(self):
+        engine = make_engine()
+        engine.state.turn = 4
+        engine.state.day_campsite_groups_served = 10
+        balance_before = engine.state.balance
+
+        with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+            with mock.patch("game_engine.random.random", return_value=0.0):
+                result = {"events": []}
+                engine._process_checkin(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 10)
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.today_income["campsite"], 0)
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day"]), 0)
+
+    def test_overnight_guests_do_not_increase_day_counter(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.day_campsite_groups_served = 3
+        overnight_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[]):
+            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[overnight_guest]):
+                result = {"events": []}
+                engine._process_checkin(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 3)
+        self.assertEqual(engine.state.today_income["campsite"], 0)
+
+    def test_reserved_overnight_guest_does_not_increase_day_counter(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.day_campsite_groups_served = 4
+        engine.state.reservation = {
+            "group_size": 1,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+        engine.state.reserved_tent_id = 1
+        engine.state.reserved_tent_day = 2
+        engine.tents[1].status = "reserved"
+
+        result = {"events": []}
+        engine._process_reservations(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 4)
+        reserved_npcs = [n for n in engine.npc_pool if n.is_reserved]
+        self.assertEqual(len(reserved_npcs), 1)
+
+    def test_day_to_overnight_does_not_refund_capacity(self):
+        engine = make_engine()
+        engine.state.day_campsite_groups_served = 5
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="dining",
+            total_satisfaction=90,
+        )
+        engine.npc_pool.append(guest)
+
+        engine._process_day_to_overnight({"events": []})
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 5)
+        self.assertEqual(guest.visit_type, "overnight")
+
+    def test_turn4_still_accepts_new_day_guests(self):
+        engine = make_engine()
+        engine.state.turn = 4
+        engine.state.day_campsite_groups_served = 9
+        new_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[new_guest]):
+            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    result = {"events": []}
+                    engine._process_checkin(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 10)
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day"]), 1)
+
+    def test_turn5_departs_all_remaining_day_guests_but_keeps_overnight(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        day_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            location="dining",
+            total_satisfaction=65,
+        )
+        overnight_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            total_satisfaction=80,
+        )
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = overnight_guest.id
+        engine.npc_pool.extend([day_guest, overnight_guest])
+
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day" and not n.has_left]), 0)
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "overnight" and not n.has_left]), 1)
+        self.assertGreaterEqual(len(engine.npc_history), 1)
+
+    def test_turn5_departure_not_repeated_when_turn_is_retried_after_breakdown(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        day_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="entertainment",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(day_guest)
+        engine.tents[1].status = "available"
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            first = engine.advance_turn()
+
+        self.assertTrue(engine.state.turn_settled)
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day" and not n.has_left]), 0)
+        self.assertIn("repair_tent_1", first["next_actions"])
+        history_len = len(engine.npc_history)
+
+        engine.repair_tent(1)
+        second = engine.advance_turn()
+
+        self.assertEqual(len(engine.npc_history), history_len)
+        self.assertEqual(second["turn"], 6)
+
+    def test_new_day_resets_day_campsite_counter_once(self):
+        engine = make_engine()
+        engine.state.day = 3
+        engine.state.turn = 6
+        engine.state.day_campsite_groups_served = 10
+
+        engine._new_day()
+
+        self.assertEqual(engine.state.day, 4)
+        self.assertEqual(engine.state.turn, 1)
+        self.assertEqual(engine.state.day_campsite_groups_served, 0)
+
+    def test_turn_settled_retry_does_not_duplicate_day_guest_fee_or_counter(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.tents[1].status = "available"
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+
+        day_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+        )
+        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[day_guest]):
+            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    first = engine.advance_turn()
+
+        self.assertTrue(engine.state.turn_settled)
+        self.assertEqual(engine.state.day_campsite_groups_served, 1)
+        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
+        self.assertIn("repair_tent_1", first["next_actions"])
+
+        engine.repair_tent(1)
+        engine.advance_turn()
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 1)
+        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
+
+
 class BreakdownBlockingTests(unittest.TestCase):
     """故障帐篷阻塞回合推进"""
 

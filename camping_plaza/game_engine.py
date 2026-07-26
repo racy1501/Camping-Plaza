@@ -92,6 +92,7 @@ class GameState:
     })
     today_events: list = field(default_factory=list)
     decisions_left: int = 3
+    day_campsite_groups_served: int = 0
 
     # 预定
     reservation: Optional[dict] = None  # 待处理的预定请求
@@ -115,6 +116,7 @@ class GameState:
 class CampingPlazaEngine:
     """露营广场游戏引擎"""
 
+    DAY_CAMPSITE_CAPACITY = 10
     TENT_PRICES = {1: 80, 2: 120, 3: 120, 4: 180, 5: 180, 6: 300}
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
@@ -329,6 +331,8 @@ class CampingPlazaEngine:
                 self._process_business_turn(result)
                 self._process_dining(result)
                 self._process_entertainment(result)
+                if self.state.turn == 5:
+                    self._process_turn5_day_guest_departures(result)
                 self._handle_breakdowns(result)
 
                 # 修复：营业回合结算中新产生故障，阻塞回合推进
@@ -465,6 +469,7 @@ class CampingPlazaEngine:
         for guest in day_guests:
             guest.location = "dining" if random.random() < 0.5 else "entertainment"
             self.npc_pool.append(guest)
+            self.state.day_campsite_groups_served += 1
             self.state.balance += self.CAMPSITE_FEE
             self.state.today_income["campsite"] += self.CAMPSITE_FEE
             result["events"].append(
@@ -703,6 +708,19 @@ class CampingPlazaEngine:
         self._try_leave_review(npc, temp_result)
         for event in temp_result["events"]:
             self.state.day_to_overnight_cache.append(event)
+
+    def _process_turn5_day_guest_departures(self, result: dict):
+        """Turn 5营业结算完成后，统一让仍在场的日间客离场。"""
+        departing_guests = [
+            n for n in self.npc_pool
+            if n.visit_type == "day" and not n.has_left
+        ]
+        if not departing_guests:
+            return
+
+        for guest in departing_guests:
+            self._leave_day_guest(guest)
+        self._cleanup_left_npcs()
 
     def _process_day_to_overnight(self, result: dict):
         """Turn 4: 日间游客转过夜。修复 #4：结果写入缓存，不立即展示"""
@@ -1001,11 +1019,16 @@ class CampingPlazaEngine:
     def _generate_day_guests(self) -> list[NPCGroup]:
         """生成日间游客"""
         guests = []
+        remaining = self.get_day_campsite_remaining()
+        if remaining <= 0:
+            return guests
+
         count = random.randint(2, 5)
         if self.state.reputation_rate > 70:
             count += 1
         elif self.state.reputation_rate < 50:
             count = max(1, count - 1)
+        count = min(count, remaining)
 
         for _ in range(count):
             npc = NPCGroup(
@@ -1040,6 +1063,10 @@ class CampingPlazaEngine:
         npc.economic_level = random.choices([0, 1, 2], weights=[0.3, 0.5, 0.2])[0]
         npc.spending_habit = random.choices([0, 1, 2], weights=[0.3, 0.5, 0.2])[0]
         npc.temperament = random.choices([0, 1, 2], weights=[0.4, 0.4, 0.2])[0]
+
+    def get_day_campsite_remaining(self) -> int:
+        """获取当天剩余可接待的日间客组数。"""
+        return max(0, self.DAY_CAMPSITE_CAPACITY - self.state.day_campsite_groups_served)
 
     # -------------------------------------------------------------------------
     # 评价系统
@@ -1132,6 +1159,7 @@ class CampingPlazaEngine:
         self.state.turn_settled = False
         # 修复 #4：防御性清空缓存
         self.state.day_to_overnight_cache.clear()
+        self.state.day_campsite_groups_served = 0
         # 重置绿化标记
         self.state.greenery_processed_today = False
 
