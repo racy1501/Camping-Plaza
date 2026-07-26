@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>露营广场 · CEDAR TOY</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部状态栏 -->
+        <header class="status-bar">
+            <div class="status-item">
+                <span class="status-label">📅 第</span>
+                <span class="status-value" id="day">1</span>
+                <span class="status-label">天</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">🔄 回合</span>
+                <span class="status-value" id="turn">1</span>
+                <span class="status-label">/ 5</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">💰</span>
+                <span class="status-value" id="balance">1000</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">⭐</span>
+                <span class="status-value" id="reputation">60</span>
+                <span class="status-label">%</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">🎯 决策点</span>
+                <span class="status-value" id="decisions">3</span>
+            </div>
+        </header>
+
+        <!-- 营地地图 -->
+        <div class="map-container">
+            <canvas id="campMap" width="600" height="800"></canvas>
+        </div>
+
+        <!-- 今日收入面板 -->
+        <div class="income-panel">
+            <h3>今日收入</h3>
+            <div class="income-grid">
+                <div class="income-item">
+                    <span class="income-icon">🏕️</span>
+                    <span class="income-label">住宿</span>
+                    <span class="income-value" id="income-accommodation">0</span>
+                </div>
+                <div class="income-item">
+                    <span class="income-icon">⛺</span>
+                    <span class="income-label">营位</span>
+                    <span class="income-value" id="income-campsite">0</span>
+                </div>
+                <div class="income-item">
+                    <span class="income-icon">🍖</span>
+                    <span class="income-label">餐饮</span>
+                    <span class="income-value" id="income-dining">0</span>
+                </div>
+                <div class="income-item">
+                    <span class="income-icon">🎮</span>
+                    <span class="income-label">娱乐</span>
+                    <span class="income-value" id="income-entertainment">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 帐篷状态面板 -->
+        <div class="tents-panel">
+            <h3>帐篷状态</h3>
+            <div class="tents-grid" id="tentsGrid">
+                <!-- 动态生成 -->
+            </div>
+        </div>
+
+        <!-- 回合日志 -->
+        <div class="log-panel">
+            <h3>回合动态</h3>
+            <div class="log-list" id="logList">
+                <div class="log-empty">等待游戏开始...</div>
+            </div>
+        </div>
+
+        <!-- 操作按钮（围观模式下隐藏） -->
+        <div class="action-panel" id="actionPanel" style="display:none;">
+            <button class="btn-action" id="btnAdvance" onclick="advanceTurn()">
+                推进回合 ▶
+            </button>
+        </div>
+    </div>
+
+    <script src="scripts/map.js"></script>
+    <script src="scripts/app.js"></script>
+</body>
+</html>

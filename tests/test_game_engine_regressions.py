@@ -1,0 +1,787 @@
+"""露营广场核心链路回归测试
+
+仅使用 Python 标准库 unittest，不依赖 pytest/httpx/FastAPI/网络/真实数据库。
+所有测试使用独立 CampingPlazaEngine 实例，对随机行为使用 mock 控制。
+"""
+
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+# 将 camping_plaza 包加入路径（不依赖 __init__.py，Python 3 命名空间包）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
+
+from game_engine import CampingPlazaEngine, NPCGroup, Tent
+
+# 每个测试使用独立临时数据库，避免共享正式 camping_plaza.db 互相污染
+_TEMP_DIRS = []
+
+
+def make_engine() -> CampingPlazaEngine:
+    """创建使用独立临时目录数据库的引擎实例，测试结束统一清理"""
+    td = tempfile.TemporaryDirectory()
+    _TEMP_DIRS.append(td)
+    return CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
+
+
+def tearDownModule():
+    for td in _TEMP_DIRS:
+        td.cleanup()
+    _TEMP_DIRS.clear()
+
+
+class Turn4OrderTests(unittest.TestCase):
+    """Turn 4 日间客转过夜执行顺序"""
+
+    def _engine_at_turn4(self):
+        engine = make_engine()
+        engine.state.day = 1
+        engine.state.turn = 4
+        # 屏蔽故障干扰
+        for t in engine.tents.values():
+            t.next_breakdown_turn = 99999
+        return engine
+
+    def test_existing_day_guest_converts(self):
+        """Turn 4 开始前已存在的高满意度日间客参与转过夜"""
+        engine = self._engine_at_turn4()
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            arrival_turn=3,
+            location="dining",
+            total_satisfaction=80,
+        )
+        engine.npc_pool.append(guest)
+
+        result = {"events": []}
+        engine._process_business_turn(result)
+
+        self.assertEqual(guest.visit_type, "overnight")
+        self.assertTrue(guest.location.startswith("tent_"))
+        self.assertTrue(
+            any("日间游客转为过夜" in e for e in engine.state.day_to_overnight_cache)
+        )
+
+    def test_new_day_guest_not_processed_same_turn(self):
+        """Turn 4 当回合新生成的日间客不被同一回合处理"""
+        engine = self._engine_at_turn4()
+        new_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            arrival_turn=0,
+            location="dining",
+            total_satisfaction=80,
+        )
+        with mock.patch.object(
+            CampingPlazaEngine, "_generate_day_guests", return_value=[new_guest]
+        ):
+            with mock.patch.object(
+                CampingPlazaEngine, "_generate_overnight_guests", return_value=[]
+            ):
+                result = {"events": []}
+                engine._process_business_turn(result)
+
+        self.assertEqual(new_guest.visit_type, "day")
+        self.assertFalse(new_guest.has_left)
+        self.assertIn(new_guest.location, ("dining", "entertainment"))
+
+    def test_cache_flushed_on_turn5(self):
+        """转过夜事件写入缓存，Turn 5 展示后清空"""
+        engine = self._engine_at_turn4()
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            arrival_turn=3,
+            location="entertainment",
+            total_satisfaction=80,
+        )
+        engine.npc_pool.append(guest)
+
+        result4 = {"events": []}
+        engine._process_business_turn(result4)
+        cache = list(engine.state.day_to_overnight_cache)
+        self.assertGreater(len(cache), 0)
+        self.assertFalse(
+            any("日间游客转为过夜" in e for e in result4["events"])
+        )
+
+        engine.state.turn = 5
+        result5 = {"events": []}
+        engine._process_business_turn(result5)
+
+        for event in cache:
+            self.assertIn(event, result5["events"])
+        self.assertEqual(len(engine.state.day_to_overnight_cache), 0)
+
+
+class BreakdownBlockingTests(unittest.TestCase):
+    """故障帐篷阻塞回合推进"""
+
+    def test_broken_tent_blocks_advance(self):
+        """存在 broken 帐篷时 advance_turn 不推进回合"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].next_breakdown_turn = 0
+        engine.state.decisions_left = 0
+        original_turn = engine.state.turn
+
+        result = engine.advance_turn()
+
+        self.assertEqual(engine.state.turn, original_turn)
+        self.assertIn("repair_tent_1", result["next_actions"])
+
+    def test_decisions_replenished_when_broken(self):
+        """决策点不足时补足到 broken 帐篷数量"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[2].status = "broken"
+        engine.tents[1].next_breakdown_turn = 0
+        engine.tents[2].next_breakdown_turn = 0
+        engine.state.decisions_left = 0
+
+        engine.advance_turn()
+
+        self.assertEqual(engine.state.decisions_left, 2)
+
+    def test_repair_consumes_decision_point(self):
+        """维修每顶帐篷消耗 1 点决策点"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].next_breakdown_turn = 0
+        engine.state.decisions_left = 3
+
+        engine.repair_tent(1)
+
+        self.assertEqual(engine.state.decisions_left, 2)
+        self.assertEqual(engine.tents[1].status, "available")
+
+    def test_can_advance_after_all_repairs(self):
+        """全部维修后可继续推进回合"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[2].status = "broken"
+        engine.tents[1].next_breakdown_turn = 0
+        engine.tents[2].next_breakdown_turn = 0
+        engine.state.decisions_left = 3
+
+        engine.repair_tent(1)
+        engine.repair_tent(2)
+        # 屏蔽后续故障，避免新故障再次阻塞
+        for t in engine.tents.values():
+            t.next_breakdown_turn = 99999
+        result = engine.advance_turn()
+
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertEqual(engine.tents[2].status, "available")
+        self.assertGreater(engine.state.turn, 1)
+        self.assertNotIn("repair_tent_1", result.get("next_actions", []))
+
+    def test_turn_settled_no_duplicate(self):
+        """turn_settled 不会重复结算收入或生成客人"""
+        engine = make_engine()
+        engine.state.turn = 2
+        # 让某帐篷在营业结算中触发故障
+        engine.tents[1].next_breakdown_turn = 1
+        engine.tents[1].status = "available"
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            result = engine.advance_turn()
+
+        self.assertTrue(engine.state.turn_settled)
+        self.assertIn("repair_tent_1", result["next_actions"])
+        income_after_first = dict(engine.state.today_income)
+        balance_after_first = engine.state.balance
+        npc_count_after_first = len(engine.npc_pool)
+
+        # 修好故障并屏蔽新故障，再推进回合
+        engine.repair_tent(1)
+        for t in engine.tents.values():
+            t.next_breakdown_turn = 99999
+        second_result = engine.advance_turn()
+
+        # 不应重复结算
+        self.assertEqual(dict(engine.state.today_income), income_after_first)
+        self.assertEqual(engine.state.balance, balance_after_first)
+        self.assertEqual(len(engine.npc_pool), npc_count_after_first)
+        # turn_settled 应被清除，回合正常推进
+        self.assertFalse(engine.state.turn_settled)
+        self.assertGreater(second_result["turn"], result["turn"])
+
+
+class RepairStateRecoveryTests(unittest.TestCase):
+    """维修后帐篷状态恢复"""
+
+    def test_occupied_tent_repair_restores_occupied(self):
+        """有住客的 broken 帐篷修好后恢复 occupied"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = 42
+        engine.tents[1].next_breakdown_turn = 0
+        engine.state.decisions_left = 3
+
+        result = engine.repair_tent(1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[1].status, "occupied")
+        self.assertEqual(engine.tents[1].occupied_by, 42)
+
+    def test_reserved_tent_repair_restores_reserved(self):
+        """今日预定帐篷修好后恢复 reserved"""
+        engine = make_engine()
+        engine.state.day = 1
+        engine.state.reserved_tent_id = 1
+        engine.state.reserved_tent_day = 1
+        engine.tents[1].status = "broken"
+        engine.tents[1].next_breakdown_turn = 0
+        engine.state.decisions_left = 3
+
+        result = engine.repair_tent(1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[1].status, "reserved")
+
+    def test_available_tent_repair_restores_available(self):
+        """普通空帐篷修好后恢复 available"""
+        engine = make_engine()
+        engine.tents[3].status = "broken"
+        engine.tents[3].occupied_by = None
+        engine.tents[3].next_breakdown_turn = 0
+        engine.state.decisions_left = 3
+
+        result = engine.repair_tent(3)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[3].status, "available")
+
+    def test_repair_non_broken_fails(self):
+        """维修非 broken 帐篷失败且不补决策点"""
+        engine = make_engine()
+        engine.tents[1].status = "available"
+        decisions_before = engine.state.decisions_left
+
+        result = engine.repair_tent(1)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.decisions_left, decisions_before)
+
+    def test_repair_invalid_tent_fails(self):
+        """维修不存在帐篷失败且不补决策点"""
+        engine = make_engine()
+        decisions_before = engine.state.decisions_left
+
+        result = engine.repair_tent(99)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.decisions_left, decisions_before)
+
+
+class ReservationProtectionTests(unittest.TestCase):
+    """预定系统保护规则"""
+
+    def _make_pending_reservation(self, engine):
+        engine.state.reservation = {
+            "group_size": 2,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+
+    def test_broken_tent_blocks_accept(self):
+        """broken 帐篷存在时不能接受预定"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        self._make_pending_reservation(engine)
+
+        result = engine.accept_reservation(2)
+
+        self.assertFalse(result["success"])
+        self.assertIn("故障", result["message"])
+
+    def test_broken_tent_blocks_reject(self):
+        """broken 帐篷存在时不能拒绝预定"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        self._make_pending_reservation(engine)
+
+        result = engine.reject_reservation()
+
+        self.assertFalse(result["success"])
+        self.assertIn("故障", result["message"])
+
+    def test_turn6_blocks_accept(self):
+        """Turn 6 不能接受预定"""
+        engine = make_engine()
+        engine.state.turn = 6
+        self._make_pending_reservation(engine)
+
+        result = engine.accept_reservation(2)
+
+        self.assertFalse(result["success"])
+        self.assertIn("营业回合", result["message"])
+
+    def test_turn6_blocks_reject(self):
+        """Turn 6 不能拒绝预定"""
+        engine = make_engine()
+        engine.state.turn = 6
+        self._make_pending_reservation(engine)
+
+        result = engine.reject_reservation()
+
+        self.assertFalse(result["success"])
+        self.assertIn("营业回合", result["message"])
+
+    def test_accepted_reservation_cannot_reject(self):
+        """已接受预定不能再次拒绝"""
+        engine = make_engine()
+        self._make_pending_reservation(engine)
+        engine.accept_reservation(2)
+
+        result = engine.reject_reservation()
+
+        self.assertFalse(result["success"])
+        self.assertIn("已接受", result["message"])
+
+    def test_reject_without_reservation_no_complaint(self):
+        """没有预定请求时拒绝不会触发随机抱怨"""
+        engine = make_engine()
+        engine.state.reservation = None
+        # 即使 random < 0.3 也不应抱怨
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            result = engine.reject_reservation()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(len(engine.state.today_events), 0)
+
+    def test_accept_no_suitable_tent_records_complaint(self):
+        """容量不足且随机值小于0.3时，接受预定失败并写入抱怨"""
+        engine = make_engine()
+        self._make_pending_reservation(engine)
+        # 让所有帐篷容量都不足
+        for t in engine.tents.values():
+            t.capacity = 1
+        balance_before = engine.state.balance
+        accommodation_before = engine.state.today_income["accommodation"]
+        reserved_id_before = engine.state.reserved_tent_id
+        reserved_day_before = engine.state.reserved_tent_day
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            result = engine.accept_reservation(2)
+
+        self.assertFalse(result["success"])
+        self.assertIn("没有容量合适的帐篷", result["message"])
+        self.assertEqual(len(engine.state.today_events), 1)
+        self.assertIn("不太满意的帖子", engine.state.today_events[0])
+        self.assertIsNotNone(engine.state.reservation)
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.today_income["accommodation"], accommodation_before)
+        self.assertEqual(engine.state.reserved_tent_id, reserved_id_before)
+        self.assertEqual(engine.state.reserved_tent_day, reserved_day_before)
+
+    def test_accept_no_suitable_tent_no_complaint(self):
+        """容量不足且随机值大于等于0.3时，不写抱怨事件"""
+        engine = make_engine()
+        self._make_pending_reservation(engine)
+        for t in engine.tents.values():
+            t.capacity = 1
+
+        with mock.patch("game_engine.random.random", return_value=0.5):
+            result = engine.accept_reservation(2)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(len(engine.state.today_events), 0)
+        self.assertIsNotNone(engine.state.reservation)
+
+    def test_reject_reservation_uses_shared_recorder(self):
+        """主动拒绝预定使用同一抱怨判定并清空待处理请求"""
+        engine = make_engine()
+        self._make_pending_reservation(engine)
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            result = engine.reject_reservation()
+
+        self.assertTrue(result["success"])
+        self.assertIsNone(engine.state.reservation)
+        self.assertEqual(len(engine.state.today_events), 1)
+        self.assertIn("不太满意的帖子", engine.state.today_events[0])
+
+    def test_accept_charges_once(self):
+        """接受预定立即收取住宿费，入住时不重复收费"""
+        engine = make_engine()
+        self._make_pending_reservation(engine)
+        balance_before = engine.state.balance
+        accommodation_before = engine.state.today_income["accommodation"]
+
+        result = engine.accept_reservation(2)
+
+        self.assertTrue(result["success"])
+        payment = result["payment"]
+        self.assertEqual(engine.state.balance, balance_before + payment)
+        self.assertEqual(
+            engine.state.today_income["accommodation"],
+            accommodation_before + payment,
+        )
+
+        # 模拟第二天预定客入住
+        engine.state.day = 2
+        engine.state.reserved_tent_day = 2
+        engine.tents[engine.state.reserved_tent_id].status = "reserved"
+        result_checkin = {"events": []}
+        engine._process_reservations(result_checkin)
+
+        # 余额和住宿收入不应再次增加
+        self.assertEqual(engine.state.balance, balance_before + payment)
+        self.assertEqual(
+            engine.state.today_income["accommodation"],
+            accommodation_before + payment,
+        )
+
+
+class HiddenInfoTests(unittest.TestCase):
+    """对外状态隐藏内部字段"""
+
+    def test_tents_hide_internal_fields(self):
+        """tents 不含 next_breakdown_turn 和 satisfaction_bonus"""
+        engine = make_engine()
+        state = engine.get_full_state()
+
+        for tid, tent in state["tents"].items():
+            self.assertNotIn("next_breakdown_turn", tent)
+            self.assertNotIn("satisfaction_bonus", tent)
+
+    def test_reservation_hides_hidden_tags(self):
+        """reservation 不暴露三个隐藏标签"""
+        engine = make_engine()
+        engine.state.reservation = {
+            "group_size": 2,
+            "economic_level": 1,
+            "spending_habit": 2,
+            "temperament": 0,
+        }
+        state = engine.get_full_state()
+
+        self.assertIsNotNone(state["reservation"])
+        self.assertNotIn("economic_level", state["reservation"])
+        self.assertNotIn("spending_habit", state["reservation"])
+        self.assertNotIn("temperament", state["reservation"])
+
+    def test_active_npcs_hide_hidden_tags(self):
+        """active_npcs 不暴露三个隐藏标签"""
+        engine = make_engine()
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            economic_level=1,
+            spending_habit=2,
+            temperament=0,
+        )
+        engine.npc_pool.append(npc)
+        state = engine.get_full_state()
+
+        self.assertEqual(len(state["active_npcs"]), 1)
+        safe_npc = state["active_npcs"][0]
+        self.assertNotIn("economic_level", safe_npc)
+        self.assertNotIn("spending_habit", safe_npc)
+        self.assertNotIn("temperament", safe_npc)
+
+
+class IncomeAndSpendingTagTests(unittest.TestCase):
+    """隐藏标签对收入的影响范围"""
+
+    def test_economic_level_affects_amount_only(self):
+        """economic_level 只影响消费金额，不影响消费概率"""
+        engine = make_engine()
+        prob_low = engine._calc_spend_probability(0.6, 1)
+        prob_mid = engine._calc_spend_probability(0.6, 1)
+        prob_high = engine._calc_spend_probability(0.6, 1)
+        self.assertEqual(prob_low, prob_mid)
+        self.assertEqual(prob_mid, prob_high)
+
+        amount_low = engine._calc_spend_amount(30, 0, 1.0)
+        amount_mid = engine._calc_spend_amount(30, 1, 1.0)
+        amount_high = engine._calc_spend_amount(30, 2, 1.0)
+        self.assertLess(amount_low, amount_high)
+        self.assertAlmostEqual(amount_mid, 30, delta=1)
+
+    def test_spending_habit_affects_probability_only(self):
+        """spending_habit 只影响消费概率，不影响消费金额"""
+        engine = make_engine()
+        prob_low = engine._calc_spend_probability(0.6, 0)
+        prob_mid = engine._calc_spend_probability(0.6, 1)
+        prob_high = engine._calc_spend_probability(0.6, 2)
+        self.assertLess(prob_low, prob_mid)
+        self.assertLess(prob_mid, prob_high)
+
+        amount_low = engine._calc_spend_amount(30, 1, 1.0)
+        amount_mid = engine._calc_spend_amount(30, 1, 1.0)
+        amount_high = engine._calc_spend_amount(30, 1, 1.0)
+        self.assertEqual(amount_low, amount_mid)
+        self.assertEqual(amount_mid, amount_high)
+
+    def test_dining_entertainment_income_multipliers(self):
+        """餐饮和娱乐使用各自的收入倍率"""
+        engine = make_engine()
+        engine.facilities["dining"].dining_spend_probability = 0.5
+        engine.facilities["dining"].dining_income_multiplier = 2.0
+        engine.facilities["entertainment"].entertainment_income_multiplier = 3.0
+
+        dining_npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="dining",
+            economic_level=1,
+            spending_habit=1,
+        )
+        entertainment_npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="entertainment",
+            economic_level=1,
+            spending_habit=1,
+        )
+        engine.npc_pool.extend([dining_npc, entertainment_npc])
+
+        # random.random 返回 0.0 保证一定消费
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+            engine._process_entertainment({"events": []})
+
+        # economic_level=1 倍率为 1.0
+        # dining: 30 * 1.0 * 2.0 = 60
+        # entertainment: 40 * 1.0 * 3.0 = 120
+        self.assertEqual(engine.state.today_income["dining"], 60)
+        self.assertEqual(engine.state.today_income["entertainment"], 120)
+
+    def test_dining_entertainment_spending_habit_probability(self):
+        """餐饮和娱乐使用各自的消费习惯概率倍率"""
+        engine = make_engine()
+        engine.facilities["dining"].dining_spend_probability = 0.6
+
+        # 餐饮：low=0.6, mid=1.0, high=1.5
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 0), 0.36
+        )
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 1), 0.60
+        )
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 2), 0.90
+        )
+
+        # 娱乐：low=0.7, mid=1.0, high=1.3
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 0, low_multiplier=0.7, high_multiplier=1.3),
+            0.42
+        )
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 1, low_multiplier=0.7, high_multiplier=1.3),
+            0.60
+        )
+        self.assertAlmostEqual(
+            engine._calc_spend_probability(0.6, 2, low_multiplier=0.7, high_multiplier=1.3),
+            0.78
+        )
+
+
+class TentCleaningTests(unittest.TestCase):
+    """帐篷主动清洁"""
+
+    def test_checkout_leaves_tent_cleaning(self):
+        """客人退房后帐篷保持 cleaning，不会自动恢复"""
+        engine = make_engine()
+        engine.state.turn = 2
+        tent = engine.tents[1]
+        tent.status = "occupied"
+        tent.occupied_by = 10
+        npc = NPCGroup(
+            id=10,
+            group_size=1,
+            visit_type="overnight",
+            arrival_turn=2,
+            location="tent_1",
+        )
+        engine.npc_pool.append(npc)
+
+        result = {"events": []}
+        engine._process_checkout_all(result)
+        # 营业回合处理完毕后不应自动清洁
+        engine._process_business_turn(result)
+
+        self.assertEqual(engine.tents[1].status, "cleaning")
+        self.assertIsNone(engine.tents[1].occupied_by)
+
+    def test_clean_tents_all_by_default(self):
+        """不传 tent_ids 时清洁所有 cleaning 帐篷"""
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.tents[2].status = "cleaning"
+        engine.tents[3].status = "available"
+
+        result = engine.clean_tents()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(set(result["cleaned_tent_ids"]), {1, 2})
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertEqual(engine.tents[2].status, "available")
+
+    def test_clean_tents_partial_list(self):
+        """传入部分 tent_ids 时只清洁指定的 cleaning 帐篷"""
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.tents[2].status = "cleaning"
+
+        result = engine.clean_tents([1])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["cleaned_tent_ids"], [1])
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertEqual(engine.tents[2].status, "cleaning")
+
+    def test_clean_tents_no_decision_cost(self):
+        """清洁不消耗决策点"""
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.state.decisions_left = 3
+
+        engine.clean_tents()
+
+        self.assertEqual(engine.state.decisions_left, 3)
+
+    def test_clean_tents_reserved_restores_reserved(self):
+        """今日预定帐篷清洁后恢复 reserved"""
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.reserved_tent_id = 1
+        engine.state.reserved_tent_day = 2
+        engine.tents[1].status = "cleaning"
+
+        result = engine.clean_tents([1])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[1].status, "reserved")
+
+    def test_clean_tents_normal_restores_available(self):
+        """普通帐篷清洁后恢复 available"""
+        engine = make_engine()
+        engine.tents[4].status = "cleaning"
+
+        result = engine.clean_tents([4])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[4].status, "available")
+
+    def test_clean_tents_none_fails(self):
+        """没有可清洁帐篷时返回失败"""
+        engine = make_engine()
+        for t in engine.tents.values():
+            t.status = "available"
+
+        result = engine.clean_tents()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["cleaned_tent_ids"], [])
+
+    def test_clean_tents_blocked_by_broken(self):
+        """存在 broken 帐篷时不能清洁"""
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.tents[2].status = "broken"
+
+        result = engine.clean_tents()
+
+        self.assertFalse(result["success"])
+        self.assertIn("故障", result["message"])
+        self.assertEqual(engine.tents[1].status, "cleaning")
+
+    def test_clean_tents_blocked_when_turn_settled(self):
+        """turn_settled 为 True 时不能清洁"""
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.state.turn_settled = True
+
+        result = engine.clean_tents()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.tents[1].status, "cleaning")
+
+    def test_clean_tents_preserves_other_fields(self):
+        """清洁不改变余额、等级、occupied_by 和 next_breakdown_turn"""
+        engine = make_engine()
+        tent = engine.tents[1]
+        tent.status = "cleaning"
+        tent.level = 2
+        tent.occupied_by = None
+        tent.next_breakdown_turn = 123
+        balance_before = engine.state.balance
+
+        engine.clean_tents([1])
+
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(tent.level, 2)
+        self.assertIsNone(tent.occupied_by)
+        self.assertEqual(tent.next_breakdown_turn, 123)
+
+
+class GreeneryAndPhaseProtectionTests(unittest.TestCase):
+    """绿化管理与阶段保护"""
+
+    def test_greenery_blocked_on_turn1(self):
+        """Turn 1 不能管理绿化"""
+        engine = make_engine()
+        engine.state.turn = 1
+        engine.state.greenery_processed_today = False
+
+        message = engine.manage_greenery("maintain")
+
+        self.assertNotEqual(message, "绿化已打理，花费50金币")
+        self.assertFalse(engine.state.greenery_processed_today)
+
+    def test_greenery_allowed_on_turn6(self):
+        """Turn 6 可以管理绿化"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.greenery_processed_today = False
+        engine.state.balance = 1000
+
+        message = engine.manage_greenery("maintain")
+
+        self.assertIn("绿化已打理", message)
+        self.assertTrue(engine.state.greenery_processed_today)
+
+    def test_greenery_once_per_day(self):
+        """同一天不能重复处理绿化"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.greenery_processed_today = False
+        engine.state.balance = 1000
+
+        engine.manage_greenery("maintain")
+        message2 = engine.manage_greenery("maintain")
+
+        self.assertEqual(message2, "今天已经处理过绿化了")
+
+    def test_greenery_lv2_auto_maintain_free(self):
+        """绿化 Lv2 自动维护且不扣维护费"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.greenery_processed_today = False
+        engine.facilities["greenery"].level = 2
+        balance_before = engine.state.balance
+
+        message = engine.manage_greenery("maintain")
+
+        self.assertIn("自动维护", message)
+        self.assertEqual(engine.state.balance, balance_before)
+
+
+if __name__ == "__main__":
+    unittest.main()
