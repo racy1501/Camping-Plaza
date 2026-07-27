@@ -85,6 +85,7 @@ class GameState:
     reputation_rate: float = 60.0
     total_reviews: int = 0
     total_rating_sum: int = 0
+    pending_reviews: list = field(default_factory=list)
 
     today_income: dict = field(default_factory=lambda: {
         "accommodation": 0,
@@ -426,6 +427,7 @@ class CampingPlazaEngine:
         turn = self.state.turn
 
         if turn == 1:
+            self._settle_pending_reviews(result)
             self._process_checkout_partial(result)
 
         elif turn == 2:
@@ -1132,25 +1134,56 @@ class CampingPlazaEngine:
     # -------------------------------------------------------------------------
 
     def _try_leave_review(self, npc: NPCGroup, result: dict):
-        """尝试留评价"""
+        """尝试留评价，并延迟到次日晨间结算。"""
         if random.random() < 0.5:
             rating = self._calculate_rating(npc.total_satisfaction)
             npc.review_rating = rating
             npc.review_left = True
+            self.state.pending_reviews.append({
+                "created_day": self.state.day,
+                "rating": rating,
+                "npc_id": npc.id,
+                "visit_type": npc.visit_type,
+                "group_size": npc.group_size,
+            })
+            result["events"].append("有客人离场后留下评价，将在次日晨间结算")
 
-            self.state.total_reviews += 1
-            self.state.total_rating_sum += rating
+    def _settle_pending_reviews(self, result: dict):
+        """Turn 1 晨间统一结算前一日及更早产生的评价。"""
+        due_reviews = [
+            review for review in self.state.pending_reviews
+            if review.get("created_day", self.state.day) < self.state.day
+        ]
+        if not due_reviews:
+            return
 
-            if self.state.total_reviews <= 10:
-                self.state.reputation_rate = (
-                    self.state.total_rating_sum / (self.state.total_reviews * 5) * 100
-                )
-            else:
-                self.state.reputation_rate = (
-                    self.state.reputation_rate * 0.9 + rating * 20 * 0.1
-                )
+        ratings = []
+        for review in due_reviews:
+            rating = int(review["rating"])
+            self._apply_review_rating(rating)
+            ratings.append(rating)
 
-            result["events"].append(f"客人留下{rating}星评价")
+        self.state.pending_reviews = [
+            review for review in self.state.pending_reviews
+            if review.get("created_day", self.state.day) >= self.state.day
+        ]
+        joined_ratings = "、".join(f"{rating}星" for rating in ratings)
+        result["events"].append(
+            f"晨间结算了{len(ratings)}条昨日评价：{joined_ratings}"
+        )
+
+    def _apply_review_rating(self, rating: int):
+        self.state.total_reviews += 1
+        self.state.total_rating_sum += rating
+
+        if self.state.total_reviews <= 10:
+            self.state.reputation_rate = (
+                self.state.total_rating_sum / (self.state.total_reviews * 5) * 100
+            )
+        else:
+            self.state.reputation_rate = (
+                self.state.reputation_rate * 0.9 + rating * 20 * 0.1
+            )
 
     def _calculate_rating(self, satisfaction: int) -> int:
         if satisfaction >= 90:

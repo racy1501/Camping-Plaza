@@ -748,6 +748,92 @@ class HiddenInfoTests(unittest.TestCase):
         self.assertNotIn("spending_habit", safe_npc)
         self.assertNotIn("temperament", safe_npc)
 
+    def test_full_state_hides_pending_reviews(self):
+        """对外完整状态不暴露待结算评价队列"""
+        engine = make_engine()
+        engine.state.pending_reviews.append({
+            "created_day": 1,
+            "rating": 4,
+            "npc_id": 7,
+            "visit_type": "day",
+            "group_size": 2,
+        })
+
+        state = engine.get_full_state()
+
+        self.assertNotIn("pending_reviews", state)
+
+
+class DelayedReviewSettlementTests(unittest.TestCase):
+    """评价延迟生成与 Turn 1 晨间结算"""
+
+    def _make_overnight_guest(self, engine, *, total_satisfaction=80):
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            location="tent_1",
+            total_satisfaction=total_satisfaction,
+        )
+        engine.npc_pool.append(npc)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+        engine.tents[1].next_breakdown_turn = 99999
+        return npc
+
+    def test_checkout_creates_pending_review_without_immediate_totals_change(self):
+        engine = make_engine()
+        npc = self._make_overnight_guest(engine)
+        result = {"events": []}
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._checkout_npc(npc, result)
+
+        self.assertTrue(npc.review_left)
+        self.assertEqual(npc.review_rating, 4)
+        self.assertEqual(engine.state.total_reviews, 0)
+        self.assertEqual(engine.state.total_rating_sum, 0)
+        self.assertEqual(engine.state.reputation_rate, 60.0)
+        self.assertEqual(len(engine.state.pending_reviews), 1)
+        self.assertEqual(engine.state.pending_reviews[0]["created_day"], engine.state.day)
+        self.assertIn("将在次日晨间结算", "".join(result["events"]))
+
+    def test_no_review_does_not_create_pending_record(self):
+        engine = make_engine()
+        npc = self._make_overnight_guest(engine)
+
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            engine._checkout_npc(npc, {"events": []})
+
+        self.assertFalse(npc.review_left)
+        self.assertEqual(npc.review_rating, 0)
+        self.assertEqual(engine.state.pending_reviews, [])
+
+    def test_turn1_settles_previous_day_reviews_but_keeps_new_turn1_review_pending(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 1
+        engine.state.pending_reviews = [{
+            "created_day": 1,
+            "rating": 5,
+            "npc_id": 99,
+            "visit_type": "day",
+            "group_size": 2,
+        }]
+        npc = self._make_overnight_guest(engine, total_satisfaction=80)
+
+        with mock.patch("game_engine.random.random", side_effect=[0.0, 0.0]):
+            result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 2)
+        self.assertEqual(engine.state.total_reviews, 1)
+        self.assertEqual(engine.state.total_rating_sum, 5)
+        self.assertEqual(engine.state.reputation_rate, 100.0)
+        self.assertEqual(len(engine.state.pending_reviews), 1)
+        self.assertEqual(engine.state.pending_reviews[0]["created_day"], 2)
+        self.assertEqual(engine.state.pending_reviews[0]["rating"], 4)
+        self.assertTrue(any("晨间结算了1条昨日评价" in event for event in result["events"]))
+
 
 class IncomeAndSpendingTagTests(unittest.TestCase):
     """隐藏标签对收入的影响范围"""

@@ -96,6 +96,13 @@ class FullSaveRestoreTests(PersistenceTestCase):
         engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
         engine.state.turn_settled = True
         engine.state.day_campsite_groups_served = 7
+        engine.state.pending_reviews = [{
+            "created_day": 2,
+            "rating": 4,
+            "npc_id": 7,
+            "visit_type": "overnight",
+            "group_size": 2,
+        }]
 
         # 帐篷内部字段
         engine.tents[2].level = 2
@@ -155,6 +162,13 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
         self.assertTrue(s.turn_settled)
         self.assertEqual(s.day_campsite_groups_served, 7)
+        self.assertEqual(s.pending_reviews, [{
+            "created_day": 2,
+            "rating": 4,
+            "npc_id": 7,
+            "visit_type": "overnight",
+            "group_size": 2,
+        }])
 
         # 帐篷键恢复为 int
         self.assertIn(2, restored.tents)
@@ -476,6 +490,60 @@ class MissingLastDiningDayFallbackTests(PersistenceTestCase):
 
         restored = CampingPlazaEngine(db_path=self.db_path)
         self.assertEqual(restored.npc_pool[0].last_dining_day, 0)
+
+
+class PendingReviewPersistenceTests(PersistenceTestCase):
+    def test_missing_pending_reviews_defaults_to_empty_list(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        original_rows = self._snapshot_rows()
+        valid_payload = json.loads(original_rows[0][1])
+
+        valid_payload["state"].pop("pending_reviews", None)
+        self._write_snapshot_dict(valid_payload)
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(restored.state.pending_reviews, [])
+
+    def test_pending_reviews_do_not_settle_during_restore(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.pending_reviews = [{
+            "created_day": 1,
+            "rating": 4,
+            "npc_id": 3,
+            "visit_type": "day",
+            "group_size": 2,
+        }]
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+
+        self.assertEqual(restored.state.total_reviews, 0)
+        self.assertEqual(restored.state.total_rating_sum, 0)
+        self.assertEqual(len(restored.state.pending_reviews), 1)
+
+    def test_settled_pending_reviews_do_not_reapply_after_save_and_restore(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.day = 2
+        engine.state.turn = 1
+        engine.state.pending_reviews = [{
+            "created_day": 1,
+            "rating": 4,
+            "npc_id": 3,
+            "visit_type": "day",
+            "group_size": 2,
+        }]
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        restored.advance_turn()
+        self.assertTrue(restored.save_state())
+
+        reloaded = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(reloaded.state.total_reviews, 1)
+        self.assertEqual(reloaded.state.total_rating_sum, 4)
+        self.assertEqual(reloaded.state.pending_reviews, [])
 
 
 if __name__ == "__main__":

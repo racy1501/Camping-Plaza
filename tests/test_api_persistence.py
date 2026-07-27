@@ -253,5 +253,35 @@ class IsolationTests(ApiPersistenceTestCase):
         )
 
 
+class HiddenPendingReviewApiTests(ApiPersistenceTestCase):
+    """待结算评价不应通过 API 提前暴露"""
+
+    def test_api_state_hides_pending_reviews(self):
+        self.engine.state.pending_reviews = [{
+            "created_day": 1,
+            "rating": 5,
+            "npc_id": 11,
+            "visit_type": "day",
+            "group_size": 2,
+        }]
+
+        state = game_api.get_state()
+
+        self.assertNotIn("pending_reviews", state)
+
+    def test_mcp_state_hides_pending_reviews(self):
+        self.engine.state.pending_reviews = [{
+            "created_day": 1,
+            "rating": 5,
+            "npc_id": 11,
+            "visit_type": "day",
+            "group_size": 2,
+        }]
+
+        state = game_api.mcp_state()
+
+        self.assertNotIn("pending_reviews", state)
+
+
 if __name__ == "__main__":
     unittest.main()
