@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
 import game_api
 from game_engine import CampingPlazaEngine, NPCGroup
 
-EXPECTED_CAPACITY = {1: 1, 2: 2, 3: 2, 4: 3, 5: 3, 6: 5}
+EXPECTED_CAPACITY = {1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5}
 INCOME_KEYS = ("accommodation", "campsite", "dining", "entertainment")
 
 
@@ -53,6 +53,7 @@ class LongRunTestCase(unittest.TestCase):
         self.engine = CampingPlazaEngine(db_path=self.db_path)
         self._original_engine = game_api.engine
         game_api.engine = self.engine
+        self.expected_unlocked_tent_ids = {1}
 
     def tearDown(self):
         game_api.engine = self._original_engine
@@ -84,10 +85,19 @@ class LongRunTestCase(unittest.TestCase):
         game_api.engine = self.engine
         return restored
 
+    def _unlock_tents(self, *tent_ids):
+        """场景准备：仅为当前测试显式开放所需帐篷，不改变默认开局规则。"""
+        for tent_id in tent_ids:
+            self.engine.tents[tent_id].is_unlocked = True
+            self.expected_unlocked_tent_ids.add(tent_id)
+
     def _check_invariants(self, step_tag=""):
         eng = self.engine
         s = eng.state
         tag = f"[{step_tag}] " if step_tag else ""
+        unlocked_ids = {tid for tid, tent in eng.tents.items() if tent.is_unlocked}
+        self.assertEqual(unlocked_ids, self.expected_unlocked_tent_ids,
+                         f"{tag}帐篷解锁集合异常")
 
         # 全局字段
         self.assertGreaterEqual(s.day, 1, f"{tag}day 非法")
@@ -103,6 +113,13 @@ class LongRunTestCase(unittest.TestCase):
             self.assertIn(tent.status,
                           ("available", "occupied", "cleaning", "broken", "reserved"),
                           f"{tag}帐篷{tid}非法状态 {tent.status}")
+            if not tent.is_unlocked:
+                self.assertEqual(tent.status, "available",
+                                 f"{tag}锁定帐篷{tid}不应进入运营状态")
+                self.assertIsNone(tent.occupied_by,
+                                  f"{tag}锁定帐篷{tid}不应携带住客")
+                self.assertEqual(tent.next_breakdown_turn, 0,
+                                 f"{tag}锁定帐篷{tid}不应持有故障计划")
             if tent.status == "occupied":
                 self.assertIsNotNone(tent.occupied_by, f"{tag}帐篷{tid}occupied却无住客")
             # broken 帐篷允许保留 occupied_by（故障不赶客，修好后恢复 occupied）
@@ -254,11 +271,12 @@ class DeterministicScenarioTests(LongRunTestCase):
 
     def _disable_breakdowns(self):
         for t in self.engine.tents.values():
-            t.next_breakdown_turn = 999999
+            t.next_breakdown_turn = 999999 if t.is_unlocked else 0
 
     def test_multiple_broken_same_turn_repair_and_advance(self):
         """同一回合多顶 broken，逐顶维修后正常推进"""
         self._disable_breakdowns()
+        self._unlock_tents(3)
         self.engine.state.turn = 2
         self.engine.tents[1].status = "broken"
         self.engine.tents[3].status = "broken"
@@ -291,6 +309,7 @@ class DeterministicScenarioTests(LongRunTestCase):
     def test_priority_turn_settled_broken_cleaning(self):
         """turn_settled + broken + cleaning 同时存在时的操作优先级"""
         self._disable_breakdowns()
+        self._unlock_tents(2, 4)
         self.engine.state.turn = 3
         self.engine.state.turn_settled = True
         self.engine.tents[2].status = "broken"
@@ -334,6 +353,7 @@ class DeterministicScenarioTests(LongRunTestCase):
         """今日预定帐篷退房→cleaning→批量清洁→reserved→预定客入住"""
         self._disable_breakdowns()
         eng = self.engine
+        self._unlock_tents(3)
         eng.state.day = 2
         eng.state.turn = 1
         eng.state.reservation = {
@@ -458,6 +478,7 @@ class DeterministicScenarioTests(LongRunTestCase):
     def test_clean_then_restart_not_back_to_cleaning(self):
         """批量清洁后立刻重启，状态不得回到 cleaning"""
         self._disable_breakdowns()
+        self._unlock_tents(2)
         self.engine.tents[1].status = "cleaning"
         self.engine.tents[2].status = "cleaning"
 

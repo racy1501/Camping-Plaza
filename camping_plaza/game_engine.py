@@ -21,13 +21,14 @@ class Tent:
     """帐篷"""
     id: int
     capacity: int
+    is_unlocked: bool = False
     level: int = 0
     status: str = "available"  # available, occupied, cleaning, broken, reserved
     occupied_by: Optional[int] = None  # NPC组ID
     next_breakdown_turn: int = 0
     satisfaction_bonus: float = 0.0
 
-    CAPACITY_MAP = {1: 1, 2: 2, 3: 2, 4: 3, 5: 3, 6: 5}
+    CAPACITY_MAP = {1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5}
 
 
 @dataclass
@@ -236,8 +237,13 @@ class CampingPlazaEngine:
                 if key in state_fields:
                     setattr(restored_state, key, value)
 
-            restored_tents = {int(tid): Tent(**tdata)
-                              for tid, tdata in payload["tents"].items()}
+            restored_tents = {}
+            for tid, tdata in payload["tents"].items():
+                tent_id = int(tid)
+                normalized_tdata = dict(tdata)
+                if "is_unlocked" not in normalized_tdata:
+                    normalized_tdata["is_unlocked"] = self._default_tent_unlocked_state(tent_id)
+                restored_tents[tent_id] = Tent(**normalized_tdata)
             restored_facilities = {name: Facility(**fdata)
                                    for name, fdata in payload["facilities"].items()}
             restored_npc_pool = [NPCGroup(**ndata)
@@ -259,7 +265,11 @@ class CampingPlazaEngine:
     def _init_game(self):
         """初始化游戏"""
         for i in range(1, 7):
-            self.tents[i] = Tent(id=i, capacity=Tent.CAPACITY_MAP[i])
+            self.tents[i] = Tent(
+                id=i,
+                capacity=Tent.CAPACITY_MAP[i],
+                is_unlocked=self._default_tent_unlocked_state(i),
+            )
             self._set_next_breakdown(self.tents[i])
 
         self.facilities["dining"] = Facility(name="餐饮区")
@@ -286,6 +296,39 @@ class CampingPlazaEngine:
         return (self.state.reserved_tent_id == tent_id
                 and self.state.reserved_tent_day == self.state.day)
 
+    def _default_tent_unlocked_state(self, tent_id: int) -> bool:
+        return tent_id == 1
+
+    def _is_tent_unlocked(self, tent: Tent) -> bool:
+        return tent.is_unlocked
+
+    def _get_unlocked_tents(self) -> list[Tent]:
+        return [
+            self.tents[tid]
+            for tid in sorted(self.tents.keys())
+            if self._is_tent_unlocked(self.tents[tid])
+        ]
+
+    def _get_broken_tents(self) -> list[Tent]:
+        return [tent for tent in self._get_unlocked_tents() if tent.status == "broken"]
+
+    def _get_available_unlocked_tents(
+        self,
+        group_size: Optional[int] = None,
+        *,
+        exclude_today_reserved: bool = True,
+    ) -> list[Tent]:
+        tents = []
+        for tent in self._get_unlocked_tents():
+            if tent.status != "available":
+                continue
+            if group_size is not None and tent.capacity < group_size:
+                continue
+            if exclude_today_reserved and self._is_today_reserved_tent(tent.id):
+                continue
+            tents.append(tent)
+        return tents
+
     def _absolute_turn(self) -> int:
         """计算绝对回合数，避免跨天重置导致故障无法正常触发"""
         return (self.state.day - 1) * 6 + self.state.turn
@@ -297,7 +340,7 @@ class CampingPlazaEngine:
     def advance_turn(self) -> dict:
         """推进一个回合，返回结算后的真实状态"""
         # 修复：存在故障帐篷时阻塞回合推进，必须先维修
-        broken_tents = [t for t in self.tents.values() if t.status == "broken"]
+        broken_tents = self._get_broken_tents()
         if broken_tents:
             # 修复：旧异常状态中 broken 帐篷决策点不足时补足，避免死锁
             self.state.decisions_left = max(self.state.decisions_left, len(broken_tents))
@@ -336,7 +379,7 @@ class CampingPlazaEngine:
                 self._handle_breakdowns(result)
 
                 # 修复：营业回合结算中新产生故障，阻塞回合推进
-                broken_tents = [t for t in self.tents.values() if t.status == "broken"]
+                broken_tents = self._get_broken_tents()
                 if broken_tents:
                     self.state.turn_settled = True
                     # 修复：保证紧急维修不会因决策点不足而死锁
@@ -571,6 +614,8 @@ class CampingPlazaEngine:
         if (self.state.reserved_tent_id is not None
                 and self.state.reserved_tent_day == self.state.day):
             tent = self.tents[self.state.reserved_tent_id]
+            if not self._is_tent_unlocked(tent):
+                return
             if tent.status == "available":
                 tent.status = "reserved"
             elif tent.status == "cleaning":
@@ -584,6 +629,8 @@ class CampingPlazaEngine:
 
         tent_id = self.state.reserved_tent_id
         tent = self.tents[tent_id]
+        if not self._is_tent_unlocked(tent):
+            return
 
         # 只有帐篷可入住时才处理
         if tent.status in ["available", "reserved"]:
@@ -626,7 +673,7 @@ class CampingPlazaEngine:
         if self.state.turn_settled:
             return {"success": False, "message": "本回合已经结算，请进入下一回合"}
         # 修复：存在故障帐篷时禁止经营操作
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         # 修复：预定操作仅限营业回合
         if self.state.turn < 1 or self.state.turn > 5:
@@ -642,17 +689,16 @@ class CampingPlazaEngine:
         # 修复 #3：使用当前 reservation 中保存的资料，不重新随机生成
         reserved_group_size = self.state.reservation["group_size"]
         economic_level = self.state.reservation.get("economic_level", 1)
-        suitable = any(t.capacity >= reserved_group_size for t in self.tents.values())
-        if not suitable:
+        suitable_tents = [
+            tent for tent in self._get_unlocked_tents()
+            if tent.capacity >= reserved_group_size
+        ]
+        if not suitable_tents:
             # 策划确认：无法接受预定与主动拒绝统一进行抱怨判定
             self._record_reservation_rejection_event()
             return {"success": False, "message": "没有容量合适的帐篷可预留"}
 
-        tent_id = None
-        for tid in sorted(self.tents.keys(), key=lambda t: self.tents[t].capacity):
-            if self.tents[tid].capacity >= reserved_group_size:
-                tent_id = tid
-                break
+        tent_id = min(suitable_tents, key=lambda tent: (tent.capacity, tent.id)).id
 
         payment = self.TENT_PRICES[tent_id]
         self.state.balance += payment
@@ -676,7 +722,7 @@ class CampingPlazaEngine:
         if self.state.turn_settled:
             return {"success": False, "message": "本回合已经结算，请进入下一回合"}
         # 修复：存在故障帐篷时禁止经营操作
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         # 修复：预定操作仅限营业回合
         if self.state.turn < 1 or self.state.turn > 5:
@@ -769,6 +815,8 @@ class CampingPlazaEngine:
         """处理帐篷故障"""
         current_turn = self._absolute_turn()
         for tent_id, tent in self.tents.items():
+            if not self._is_tent_unlocked(tent):
+                continue
             if (tent.status in ["occupied", "available", "reserved"]
                     and current_turn >= tent.next_breakdown_turn
                     and tent.next_breakdown_turn > 0):
@@ -792,7 +840,7 @@ class CampingPlazaEngine:
                 "message": "本回合已经结算，请进入下一回合",
                 "cleaned_tent_ids": []
             }
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {
                 "success": False,
                 "message": "存在故障帐篷，必须先完成维修",
@@ -800,10 +848,15 @@ class CampingPlazaEngine:
             }
 
         if tent_ids is None:
-            target_ids = [tid for tid, t in self.tents.items() if t.status == "cleaning"]
+            target_ids = [
+                tid for tid, t in self.tents.items()
+                if t.status == "cleaning" and self._is_tent_unlocked(t)
+            ]
         else:
             target_ids = [tid for tid in tent_ids
-                         if tid in self.tents and self.tents[tid].status == "cleaning"]
+                         if tid in self.tents
+                         and self._is_tent_unlocked(self.tents[tid])
+                         and self.tents[tid].status == "cleaning"]
 
         if not target_ids:
             return {
@@ -868,7 +921,7 @@ class CampingPlazaEngine:
         if self.state.turn != 6:
             return "绿化管理只能在日终管理阶段（Turn 6）进行"
         # 修复：引擎内部故障保护
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return "存在故障帐篷，必须先完成维修"
         if self.state.greenery_processed_today:
             return "今天已经处理过绿化了"
@@ -897,11 +950,11 @@ class CampingPlazaEngine:
         """维修帐篷"""
         # 修复：先确认目标帐篷存在且确实为 broken
         tent = self.tents.get(tent_id)
-        if not tent or tent.status != "broken":
+        if not tent or not self._is_tent_unlocked(tent) or tent.status != "broken":
             return {"success": False, "message": "帐篷无需维修"}
 
         # 修复：旧异常状态中 broken 帐篷决策点不足时补足，避免死锁
-        broken_count = len([t for t in self.tents.values() if t.status == "broken"])
+        broken_count = len(self._get_broken_tents())
         self.state.decisions_left = max(self.state.decisions_left, broken_count)
 
         # 修复：紧急维修优先级高于阶段限制，只要帐篷 broken 任何 Turn 都允许
@@ -928,10 +981,10 @@ class CampingPlazaEngine:
         if self.state.turn != 6:
             return {"success": False, "message": "升级帐篷只能在日终管理阶段（Turn 6）进行"}
         # 修复：引擎内部故障保护
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         tent = self.tents.get(tent_id)
-        if not tent or tent.level >= 3:
+        if not tent or not self._is_tent_unlocked(tent) or tent.level >= 3:
             return {"success": False, "message": "无法升级"}
 
         cost = self.TENT_UPGRADE_COST[tent.level + 1]
@@ -953,7 +1006,7 @@ class CampingPlazaEngine:
         if self.state.turn != 6:
             return {"success": False, "message": "升级设施只能在日终管理阶段（Turn 6）进行"}
         # 修复：引擎内部故障保护
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         facility = self.facilities.get(facility_name)
         if not facility:
@@ -998,7 +1051,7 @@ class CampingPlazaEngine:
         if self.state.turn > 5:
             return {"success": False, "message": "提升服务只能在营业回合（Turn 1-5）进行"}
         # 修复：故障优先，存在故障帐篷时必须先把决策点留给维修
-        if any(t.status == "broken" for t in self.tents.values()):
+        if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         if self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
@@ -1043,9 +1096,7 @@ class CampingPlazaEngine:
     def _generate_overnight_guests(self) -> list[NPCGroup]:
         """生成直接过夜客。修复 #3：排除今日预定帐篷"""
         guests = []
-        available_tents = [t for t in self.tents.values()
-                          if t.status == "available"
-                          and not self._is_today_reserved_tent(t.id)]
+        available_tents = self._get_available_unlocked_tents()
 
         for tent in available_tents:
             if random.random() < 0.6:
@@ -1111,19 +1162,12 @@ class CampingPlazaEngine:
 
     def _find_available_tent(self, group_size: int) -> Optional[int]:
         """找合适的空帐篷。修复 #3：排除今日预定帐篷"""
-        for tent_id in sorted(self.tents.keys()):
-            tent = self.tents[tent_id]
-            if tent.status != "available":
-                continue
-            # 修复 #3：只有今日预定帐篷才被排除
-            if self._is_today_reserved_tent(tent_id):
-                continue
-            if tent.capacity >= group_size:
-                return tent_id
+        for tent in self._get_available_unlocked_tents(group_size):
+            return tent.id
         return None
 
     def _has_available_capacity(self) -> bool:
-        return any(t.status == "available" for t in self.tents.values())
+        return any(t.status == "available" for t in self._get_unlocked_tents())
 
     def _find_npc(self, npc_id: int) -> Optional[NPCGroup]:
         for npc in self.npc_pool:
@@ -1132,6 +1176,9 @@ class CampingPlazaEngine:
         return None
 
     def _set_next_breakdown(self, tent: Tent):
+        if not self._is_tent_unlocked(tent):
+            tent.next_breakdown_turn = 0
+            return
         base_interval = 15 + tent.level * 5
         interval = random.randint(base_interval, base_interval + 10)
         tent.next_breakdown_turn = self._absolute_turn() + interval
@@ -1228,6 +1275,7 @@ class CampingPlazaEngine:
             tid: {
                 "id": t.id,
                 "capacity": t.capacity,
+                "unlocked": t.is_unlocked,
                 "level": t.level,
                 "status": t.status,
                 "occupied_by": t.occupied_by
@@ -1251,6 +1299,7 @@ class CampingPlazaEngine:
     def _get_tents_summary(self) -> dict:
         return {tid: {
             "status": t.status,
+            "unlocked": t.is_unlocked,
             "level": t.level,
             "occupied_by": t.occupied_by,
             "capacity": t.capacity

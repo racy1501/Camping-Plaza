@@ -100,9 +100,11 @@ class FullSaveRestoreTests(PersistenceTestCase):
         # 帐篷内部字段
         engine.tents[2].level = 2
         engine.tents[2].status = "occupied"
+        engine.tents[2].is_unlocked = False
         engine.tents[2].occupied_by = 99
         engine.tents[2].next_breakdown_turn = 123
         engine.tents[2].satisfaction_bonus = 6.0
+        engine.tents[5].is_unlocked = True
         engine.tents[5].status = "reserved"
 
         # 设施字段
@@ -159,9 +161,12 @@ class FullSaveRestoreTests(PersistenceTestCase):
         t2 = restored.tents[2]
         self.assertEqual(t2.level, 2)
         self.assertEqual(t2.status, "occupied")
+        self.assertFalse(t2.is_unlocked)
         self.assertEqual(t2.occupied_by, 99)
         self.assertEqual(t2.next_breakdown_turn, 123)
         self.assertEqual(t2.satisfaction_bonus, 6.0)
+        self.assertTrue(restored.tents[1].is_unlocked)
+        self.assertTrue(restored.tents[5].is_unlocked)
         self.assertEqual(restored.tents[5].status, "reserved")
 
         self.assertEqual(restored.facilities["dining"].level, 2)
@@ -376,6 +381,23 @@ class MissingDayCampsiteFieldFallbackTests(PersistenceTestCase):
         self.assertEqual(restored.state.day, 4)
         self.assertEqual(restored.state.turn, 3)
         self.assertEqual(restored.state.day_campsite_groups_served, 0)
+
+
+class MissingTentUnlockedFieldFallbackTests(PersistenceTestCase):
+    def test_missing_tent_unlocked_fields_default_to_new_unlock_rule(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        original_rows = self._snapshot_rows()
+        valid_payload = json.loads(original_rows[0][1])
+
+        for tent_data in valid_payload["tents"].values():
+            tent_data.pop("is_unlocked", None)
+
+        self._write_snapshot_dict(valid_payload)
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertTrue(restored.tents[1].is_unlocked)
+        for tent_id in range(2, 7):
+            self.assertFalse(restored.tents[tent_id].is_unlocked)
 
 
 if __name__ == "__main__":

@@ -93,11 +93,11 @@ def get_map_data():
     # 地图坐标（相对于600x800画布）
     map_positions = {
         "tents": {
-            "1": {"x": 120, "y": 150, "capacity": 1},
+            "1": {"x": 120, "y": 150, "capacity": 2},
             "2": {"x": 280, "y": 100, "capacity": 2},
-            "3": {"x": 450, "y": 180, "capacity": 2},
+            "3": {"x": 450, "y": 180, "capacity": 3},
             "4": {"x": 150, "y": 380, "capacity": 3},
-            "5": {"x": 350, "y": 320, "capacity": 3},
+            "5": {"x": 350, "y": 320, "capacity": 4},
             "6": {"x": 480, "y": 450, "capacity": 5}
         },
         "hot_spring": {"x": 80, "y": 250},
@@ -246,6 +246,7 @@ def mcp_state():
         "tents": {
             tid: {
                 "status": t["status"],
+                "unlocked": t["unlocked"],
                 "level": t["level"],
                 "capacity": t["capacity"]
             }
@@ -272,7 +273,7 @@ def mcp_available_actions():
 
     # 修复：只要存在故障帐篷，只返回维修操作
     for tid, t in state["tents"].items():
-        if t["status"] == "broken":
+        if t["unlocked"] and t["status"] == "broken":
             actions.append({
                 "action": "repair_tent",
                 "params": {"tent_id": int(tid)},
@@ -291,7 +292,10 @@ def mcp_available_actions():
         }
 
     # 存在待清洁帐篷时提供批量清洁操作（营业和日终阶段均可）
-    cleaning_tent_ids = [int(tid) for tid, t in state["tents"].items() if t["status"] == "cleaning"]
+    cleaning_tent_ids = [
+        int(tid) for tid, t in state["tents"].items()
+        if t["unlocked"] and t["status"] == "cleaning"
+    ]
     if cleaning_tent_ids:
         actions.append({
             "action": "clean_tents",
@@ -312,7 +316,8 @@ def mcp_available_actions():
             group_size = state["reservation"]["group_size"]
             # 修复：能否接受只检查是否存在容量足够的帐篷，不要求当前为 available
             has_capacity = any(
-                t["capacity"] >= group_size for t in state["tents"].values()
+                t["unlocked"] and t["capacity"] >= group_size
+                for t in state["tents"].values()
             )
             if has_capacity:
                 actions.append({
@@ -328,7 +333,7 @@ def mcp_available_actions():
     else:
         # 日终管理：为每顶可升级帐篷和每个可升级设施提供带完整 params 的操作
         for tid, t in state["tents"].items():
-            if t["level"] < 3:
+            if t["unlocked"] and t["level"] < 3:
                 actions.append({
                     "action": "upgrade_tent",
                     "params": {"tent_id": int(tid)},

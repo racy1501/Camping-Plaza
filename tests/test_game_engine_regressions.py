@@ -15,6 +15,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
 
 from game_engine import CampingPlazaEngine, NPCGroup, Tent
+import game_api
 
 # 每个测试使用独立临时数据库，避免共享正式 camping_plaza.db 互相污染
 _TEMP_DIRS = []
@@ -394,6 +395,7 @@ class BreakdownBlockingTests(unittest.TestCase):
         """决策点不足时补足到 broken 帐篷数量"""
         engine = make_engine()
         engine.tents[1].status = "broken"
+        engine.tents[2].is_unlocked = True
         engine.tents[2].status = "broken"
         engine.tents[1].next_breakdown_turn = 0
         engine.tents[2].next_breakdown_turn = 0
@@ -419,6 +421,7 @@ class BreakdownBlockingTests(unittest.TestCase):
         """全部维修后可继续推进回合"""
         engine = make_engine()
         engine.tents[1].status = "broken"
+        engine.tents[2].is_unlocked = True
         engine.tents[2].status = "broken"
         engine.tents[1].next_breakdown_turn = 0
         engine.tents[2].next_breakdown_turn = 0
@@ -503,6 +506,7 @@ class RepairStateRecoveryTests(unittest.TestCase):
     def test_available_tent_repair_restores_available(self):
         """普通空帐篷修好后恢复 available"""
         engine = make_engine()
+        engine.tents[3].is_unlocked = True
         engine.tents[3].status = "broken"
         engine.tents[3].occupied_by = None
         engine.tents[3].next_breakdown_turn = 0
@@ -876,6 +880,7 @@ class TentCleaningTests(unittest.TestCase):
         """不传 tent_ids 时清洁所有 cleaning 帐篷"""
         engine = make_engine()
         engine.tents[1].status = "cleaning"
+        engine.tents[2].is_unlocked = True
         engine.tents[2].status = "cleaning"
         engine.tents[3].status = "available"
 
@@ -925,6 +930,7 @@ class TentCleaningTests(unittest.TestCase):
     def test_clean_tents_normal_restores_available(self):
         """普通帐篷清洁后恢复 available"""
         engine = make_engine()
+        engine.tents[4].is_unlocked = True
         engine.tents[4].status = "cleaning"
 
         result = engine.clean_tents([4])
@@ -947,6 +953,7 @@ class TentCleaningTests(unittest.TestCase):
         """存在 broken 帐篷时不能清洁"""
         engine = make_engine()
         engine.tents[1].status = "cleaning"
+        engine.tents[2].is_unlocked = True
         engine.tents[2].status = "broken"
 
         result = engine.clean_tents()
@@ -1034,6 +1041,180 @@ class GreeneryAndPhaseProtectionTests(unittest.TestCase):
 
         self.assertIn("自动维护", message)
         self.assertEqual(engine.state.balance, balance_before)
+
+class TentLockingAndCapacityTests(unittest.TestCase):
+    def test_tent_capacity_map_updated(self):
+        engine = make_engine()
+        capacities = [engine.tents[i].capacity for i in range(1, 7)]
+        self.assertEqual(capacities, [2, 2, 3, 3, 4, 5])
+        self.assertNotEqual(capacities, [1, 2, 2, 3, 3, 5])
+
+    def test_new_game_only_tent_one_unlocked(self):
+        engine = make_engine()
+        self.assertTrue(engine.tents[1].is_unlocked)
+        self.assertEqual(
+            {tid for tid, tent in engine.tents.items() if tent.is_unlocked},
+            {1},
+        )
+        self.assertEqual(set(engine.tents.keys()), {1, 2, 3, 4, 5, 6})
+
+    def test_find_available_tent_ignores_locked_tents(self):
+        engine = make_engine()
+        self.assertEqual(engine._find_available_tent(2), 1)
+        self.assertIsNone(engine._find_available_tent(3))
+
+    def test_locked_tent_not_used_for_direct_overnight_guests(self):
+        engine = make_engine()
+        engine.tents[1].status = "occupied"
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            guests = engine._generate_overnight_guests()
+        self.assertEqual(guests, [])
+
+    def test_accept_reservation_fails_when_only_locked_tent_has_capacity(self):
+        engine = make_engine()
+        engine.state.reservation = {
+            "group_size": 3,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+        balance_before = engine.state.balance
+        decisions_before = engine.state.decisions_left
+
+        with mock.patch("game_engine.random.random", return_value=0.9):
+            result = engine.accept_reservation(3)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.decisions_left, decisions_before)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNotNone(engine.state.reservation)
+
+    def test_accept_reservation_uses_unlocked_tent(self):
+        engine = make_engine()
+        engine.state.reservation = {
+            "group_size": 2,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+
+        result = engine.accept_reservation(2)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.reserved_tent_id, 1)
+
+    def test_day_to_overnight_does_not_use_locked_tent(self):
+        engine = make_engine()
+        engine.tents[1].status = "occupied"
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=3,
+            visit_type="day",
+            location="dining",
+            total_satisfaction=90,
+        )
+        engine.npc_pool.append(guest)
+        engine.state.day_campsite_groups_served = 1
+
+        engine._process_day_to_overnight({"events": []})
+
+        self.assertEqual(guest.visit_type, "day")
+        self.assertTrue(guest.has_left)
+        self.assertEqual(engine.state.day_campsite_groups_served, 1)
+
+    def test_clean_tents_ignores_locked_cleaning_tent(self):
+        engine = make_engine()
+        engine.tents[1].status = "cleaning"
+        engine.tents[2].status = "cleaning"
+
+        result = engine.clean_tents()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["cleaned_tent_ids"], [1])
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertEqual(engine.tents[2].status, "cleaning")
+
+    def test_locked_tent_never_breaks_naturally(self):
+        engine = make_engine()
+        engine.tents[2].next_breakdown_turn = 1
+        result = {"events": [], "next_actions": []}
+
+        engine._handle_breakdowns(result)
+
+        self.assertEqual(engine.tents[2].status, "available")
+        self.assertEqual(result["next_actions"], [])
+
+    def test_repair_locked_tent_fails_without_spending_decision(self):
+        engine = make_engine()
+        engine.tents[2].status = "broken"
+        decisions_before = engine.state.decisions_left
+
+        result = engine.repair_tent(2)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.decisions_left, decisions_before)
+
+    def test_upgrade_locked_tent_fails_without_spending_balance(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        balance_before = engine.state.balance
+
+        result = engine.upgrade_tent(2)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.balance, balance_before)
+
+    def test_full_state_exposes_unlocked_flag(self):
+        engine = make_engine()
+        state = engine.get_full_state()
+
+        self.assertTrue(state["tents"][1]["unlocked"])
+        self.assertFalse(state["tents"][2]["unlocked"])
+
+
+class McpLockingStateTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = make_engine()
+        self.original_engine = game_api.engine
+        game_api.engine = self.engine
+
+    def tearDown(self):
+        game_api.engine = self.original_engine
+
+    def test_mcp_state_includes_unlocked_flags(self):
+        state = game_api.mcp_state()
+
+        self.assertTrue(state["tents"][1]["unlocked"])
+        self.assertFalse(state["tents"][2]["unlocked"])
+
+    def test_mcp_actions_do_not_offer_locked_tent_upgrade(self):
+        self.engine.state.turn = 6
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        upgrade_tent_ids = [
+            action["params"]["tent_id"]
+            for action in actions
+            if action["action"] == "upgrade_tent"
+        ]
+
+        self.assertEqual(upgrade_tent_ids, [1])
+        self.assertNotIn("unlock_tent", [action["action"] for action in actions])
+
+    def test_mcp_actions_reservation_capacity_ignores_locked_tents(self):
+        self.engine.state.turn = 3
+        self.engine.state.reservation = {
+            "group_size": 3,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        action_names = [action["action"] for action in actions]
+
+        self.assertNotIn("accept_reservation", action_names)
+        self.assertIn("reject_reservation", action_names)
 
 
 if __name__ == "__main__":
