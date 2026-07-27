@@ -8,7 +8,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
 
@@ -49,6 +49,11 @@ class ActionRequest(BaseModel):
     params: Optional[dict] = None
 
 
+class TurnPlanRequest(BaseModel):
+    free_actions: list[ActionRequest] = Field(default_factory=list)
+    actions: list[ActionRequest] = Field(default_factory=list)
+
+
 class ReservationRequest(BaseModel):
     group_size: int
     economic_level: Optional[int] = 1
@@ -56,6 +61,32 @@ class ReservationRequest(BaseModel):
 
 class FacilityUpgradeRequest(BaseModel):
     facility_name: str
+
+
+TURN_PLAN_IMMEDIATE_ACTIONS = {
+    name for name, config in CampingPlazaEngine.TURN_PLAN_ACTIONS.items()
+    if config["kind"] in {"free", "decision"}
+}
+
+
+def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
+    normalized = []
+    for item in actions:
+        params = item.params or {}
+        if not isinstance(params, dict):
+            raise HTTPException(400, "params必须为对象")
+        normalized.append({"action": item.action, **params})
+    return normalized
+
+
+def _get_turn_plan_status(eng: CampingPlazaEngine) -> tuple[bool, bool, Optional[int]]:
+    plan = eng.state.pending_turn_plan
+    has_current_plan = bool(
+        plan and (plan.get("target_day"), plan.get("target_turn")) == (eng.state.day, eng.state.turn)
+    )
+    plan_target_turn = plan.get("target_turn") if has_current_plan else None
+    planning_available = eng.state.turn in (2, 3, 4, 5) and not has_current_plan
+    return planning_available, has_current_plan, plan_target_turn
 
 
 # =============================================================================
@@ -154,10 +185,37 @@ def advance_turn():
     return result
 
 
+@app.post("/api/turn/plan")
+def submit_turn_plan(req: TurnPlanRequest):
+    """提交下一营业Turn行动计划"""
+    eng = get_engine()
+    result = eng.submit_turn_plan(
+        _normalize_turn_plan_actions(req.free_actions),
+        _normalize_turn_plan_actions(req.actions),
+    )
+    eng.save_state()
+    return {
+        "success": result["success"],
+        "message": result.get("message", ""),
+        "target_day": result.get("target_day"),
+        "target_turn": result.get("target_turn"),
+        "free_action_count": result.get("free_actions_count", len(req.free_actions)),
+        "action_count": result.get("actions_count", len(req.actions)),
+    }
+
+
 @app.post("/api/action")
 def do_action(req: ActionRequest):
     """执行经营操作"""
     eng = get_engine()
+
+    if req.action in TURN_PLAN_IMMEDIATE_ACTIONS and eng.state.turn <= 5:
+        result = {
+            "success": False,
+            "message": "请通过 /api/turn/plan 安排下一营业Turn行动。"
+        }
+        eng.save_state()
+        return result
 
     if req.action == "repair_tent":
         tent_id = req.params.get("tent_id") if req.params else None
@@ -235,6 +293,7 @@ def mcp_state():
     """
     eng = get_engine()
     state = eng.get_full_state()
+    planning_available, plan_submitted, plan_target_turn = _get_turn_plan_status(eng)
 
     # 只返回AI决策需要的信息
     return {
@@ -258,7 +317,10 @@ def mcp_state():
             for k, v in state["facilities"].items()
         },
         "reservation": state["reservation"],
-        "today_income": state["today_income"]
+        "today_income": state["today_income"],
+        "planning_available": planning_available,
+        "plan_submitted": plan_submitted,
+        "plan_target_turn": plan_target_turn,
     }
 
 
@@ -270,17 +332,7 @@ def mcp_available_actions():
     eng = get_engine()
     state = eng.get_full_state()
     actions = []
-
-    # 修复：只要存在故障帐篷，只返回维修操作
-    for tid, t in state["tents"].items():
-        if t["unlocked"] and t["status"] == "broken":
-            actions.append({
-                "action": "repair_tent",
-                "params": {"tent_id": int(tid)},
-                "description": f"维修{tid}号帐篷（紧急）"
-            })
-    if actions:
-        return {"available_actions": actions}
+    planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
 
     # 修复：已结算回合只返回 advance_turn
     if eng.state.turn_settled:
@@ -304,11 +356,17 @@ def mcp_available_actions():
         })
 
     if state["turn"] <= 5:
-        # 营业回合：仅允许提升服务和维修，不允许升级类操作
-        if state["decisions_left"] > 0:
+        actions = []
+        if planning_available:
             actions.append({
-                "action": "improve_service",
-                "description": "提升服务质量"
+                "action": "submit_turn_plan",
+                "params": {"free_actions": [], "actions": []},
+                "description": "提交下一营业Turn计划（free_actions支持clean_tents，actions最多3项）"
+            })
+        if plan_submitted:
+            actions.append({
+                "action": "advance_turn",
+                "description": "执行已提交的下一营业Turn计划并推进回合"
             })
 
         # 修复：仅 pending 状态的预定显示接受/拒绝，accepted 不显示
@@ -331,6 +389,20 @@ def mcp_available_actions():
             })
 
     else:
+        actions = []
+        for tid, t in state["tents"].items():
+            if t["unlocked"] and t["status"] == "broken":
+                actions.append({
+                    "action": "repair_tent",
+                    "params": {"tent_id": int(tid)},
+                    "description": f"维修{tid}号帐篷"
+                })
+        if cleaning_tent_ids:
+            actions.append({
+                "action": "clean_tents",
+                "params": {"tent_ids": cleaning_tent_ids},
+                "description": "批量清洁待清洁帐篷（不消耗决策点）"
+            })
         # 日终管理：为每顶可升级帐篷和每个可升级设施提供带完整 params 的操作
         for tid, t in state["tents"].items():
             if t["unlocked"] and t["level"] < 3:

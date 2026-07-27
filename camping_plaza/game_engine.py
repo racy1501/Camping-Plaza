@@ -86,6 +86,7 @@ class GameState:
     total_reviews: int = 0
     total_rating_sum: int = 0
     pending_reviews: list = field(default_factory=list)
+    pending_turn_plan: Optional[dict] = None
 
     today_income: dict = field(default_factory=lambda: {
         "accommodation": 0,
@@ -128,6 +129,23 @@ class CampingPlazaEngine:
     TENT_UPGRADE_COST = [0, 500, 1200, 2500]
     FACILITY_UPGRADE_COST = [0, 400, 1000, 2000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
+    TURN_PLAN_ACTIONS = {
+        "clean_tents": {
+            "kind": "free",
+            "required": (),
+            "optional": ("tent_ids",),
+        },
+        "repair_tent": {
+            "kind": "decision",
+            "required": ("tent_id",),
+            "optional": (),
+        },
+        "improve_service": {
+            "kind": "decision",
+            "required": (),
+            "optional": (),
+        },
+    }
 
     # 快照版本号，结构变更时递增
     SNAPSHOT_VERSION = 1
@@ -145,6 +163,145 @@ class CampingPlazaEngine:
         self._ensure_snapshot_table()
         if not self.load_state():
             self.save_state()
+
+    def _current_turn_plan_target(self) -> tuple[int, int]:
+        return self.state.day, self.state.turn
+
+    def _validate_turn_plan_action(
+        self, action_data: dict, expected_kind: str
+    ) -> tuple[bool, Optional[dict], str]:
+        if not isinstance(action_data, dict):
+            return False, None, "invalid action payload"
+
+        action_name = action_data.get("action")
+        config = self.TURN_PLAN_ACTIONS.get(action_name)
+        if not config or config["kind"] != expected_kind:
+            return False, None, "unsupported action"
+
+        allowed_keys = {"action", *config["required"], *config["optional"]}
+        if any(key not in allowed_keys for key in action_data):
+            return False, None, "invalid action payload"
+        if any(key not in action_data for key in config["required"]):
+            return False, None, "invalid action payload"
+
+        normalized = {"action": action_name}
+        for key in config["required"] + config["optional"]:
+            if key in action_data:
+                normalized[key] = action_data[key]
+
+        if action_name == "clean_tents":
+            tent_ids = normalized.get("tent_ids")
+            if tent_ids is not None:
+                if (
+                    not isinstance(tent_ids, list)
+                    or any(not isinstance(tid, int) for tid in tent_ids)
+                    or len(set(tent_ids)) != len(tent_ids)
+                ):
+                    return False, None, "invalid action payload"
+        elif action_name == "repair_tent":
+            if not isinstance(normalized.get("tent_id"), int):
+                return False, None, "invalid action payload"
+
+        return True, normalized, ""
+
+    def _drop_expired_turn_plan(self, result: Optional[dict] = None) -> bool:
+        plan = self.state.pending_turn_plan
+        if not plan:
+            return False
+        if (plan.get("target_day"), plan.get("target_turn")) == self._current_turn_plan_target():
+            return False
+        self.state.pending_turn_plan = None
+        if result is not None:
+            result["events"].append("stale turn plan discarded")
+        return True
+
+    def _require_turn_plan_for_advance(self, result: dict) -> bool:
+        self._drop_expired_turn_plan(result)
+        if self.state.turn not in (2, 3, 4, 5):
+            return True
+        if self.state.pending_turn_plan is not None:
+            return True
+        result["events"].append("submit turn plan first")
+        return False
+
+    def submit_turn_plan(self, free_actions: Optional[list], actions: Optional[list]) -> dict:
+        free_actions = [] if free_actions is None else free_actions
+        actions = [] if actions is None else actions
+
+        self._drop_expired_turn_plan()
+
+        if self.state.turn not in (2, 3, 4, 5):
+            return {"success": False, "message": "planning unavailable"}
+        if self.state.pending_turn_plan is not None:
+            return {"success": False, "message": "turn plan already submitted"}
+        if not isinstance(free_actions, list) or not isinstance(actions, list):
+            return {"success": False, "message": "invalid turn plan"}
+        if len(actions) > 3:
+            return {"success": False, "message": "too many actions"}
+
+        normalized_free_actions = []
+        for action_data in free_actions:
+            ok, normalized, message = self._validate_turn_plan_action(action_data, "free")
+            if not ok:
+                return {"success": False, "message": message}
+            normalized_free_actions.append(normalized)
+
+        normalized_actions = []
+        for action_data in actions:
+            ok, normalized, message = self._validate_turn_plan_action(action_data, "decision")
+            if not ok:
+                return {"success": False, "message": message}
+            normalized_actions.append(normalized)
+
+        target_day, target_turn = self._current_turn_plan_target()
+        self.state.pending_turn_plan = {
+            "target_day": target_day,
+            "target_turn": target_turn,
+            "free_actions": normalized_free_actions,
+            "actions": normalized_actions,
+        }
+        self.state.decisions_left = 0
+        return {
+            "success": True,
+            "target_day": target_day,
+            "target_turn": target_turn,
+            "free_actions_count": len(normalized_free_actions),
+            "actions_count": len(normalized_actions),
+        }
+
+    def _run_turn_plan_action(self, action_data: dict) -> dict:
+        action_name = action_data["action"]
+        if action_name == "clean_tents":
+            result = self.clean_tents(action_data.get("tent_ids"))
+        elif action_name == "repair_tent":
+            result = self.repair_tent(action_data["tent_id"], consume_decision=False)
+        else:
+            result = self.improve_service(consume_decision=False)
+        return {
+            "action": action_name,
+            "success": bool(result.get("success")),
+            "message": result.get("message", ""),
+        }
+
+    def _execute_pending_turn_plan(self, result: dict):
+        plan = self.state.pending_turn_plan
+        result["plan_execution"] = {"free_actions": [], "actions": []}
+        if not plan:
+            return
+        if (plan.get("target_day"), plan.get("target_turn")) != self._current_turn_plan_target():
+            result["events"].append("stale turn plan discarded")
+            self.state.pending_turn_plan = None
+            return
+
+        for action_data in plan.get("free_actions", []):
+            result["plan_execution"]["free_actions"].append(
+                self._run_turn_plan_action(action_data)
+            )
+        for action_data in plan.get("actions", []):
+            result["plan_execution"]["actions"].append(
+                self._run_turn_plan_action(action_data)
+            )
+        self.state.pending_turn_plan = None
 
     # -------------------------------------------------------------------------
     # SQLite JSON 快照持久化（单行覆盖，runtime_snapshot 为唯一权威存档）
@@ -344,23 +501,6 @@ class CampingPlazaEngine:
 
     def advance_turn(self) -> dict:
         """推进一个回合，返回结算后的真实状态"""
-        # 修复：存在故障帐篷时阻塞回合推进，必须先维修
-        broken_tents = self._get_broken_tents()
-        if broken_tents:
-            # 修复：旧异常状态中 broken 帐篷决策点不足时补足，避免死锁
-            self.state.decisions_left = max(self.state.decisions_left, len(broken_tents))
-            return {
-                "events": ["⚠️ 存在故障帐篷，必须先完成维修才能继续营业"],
-                "next_actions": [f"repair_tent_{t.id}" for t in broken_tents],
-                "day": self.state.day,
-                "turn": self.state.turn,
-                "income": dict(self.state.today_income),
-                "balance": self.state.balance,
-                "reputation": self.state.reputation_rate,
-                "tents": self._get_tents_summary(),
-                "npcs": self._get_npcs_summary()
-            }
-
         result = {
             "events": [],
             "next_actions": []
@@ -371,35 +511,23 @@ class CampingPlazaEngine:
         self.state.today_events.clear()
 
         if self.state.turn <= 5:
-            # 修复：本回合营业结算已执行过（因故障阻塞未推进），直接推进回合
-            if self.state.turn_settled:
-                self.state.decisions_left = 3
-                self.state.turn_settled = False
-            else:
-                self._process_business_turn(result)
-                self._process_dining(result)
-                self._process_entertainment(result)
-                if self.state.turn == 5:
-                    self._process_turn5_day_guest_departures(result)
-                self._handle_breakdowns(result)
+            if not self._require_turn_plan_for_advance(result):
+                result["day"] = self.state.day
+                result["turn"] = self.state.turn
+                result["income"] = dict(self.state.today_income)
+                result["balance"] = self.state.balance
+                result["reputation"] = self.state.reputation_rate
+                result["tents"] = self._get_tents_summary()
+                result["npcs"] = self._get_npcs_summary()
+                return result
 
-                # 修复：营业回合结算中新产生故障，阻塞回合推进
-                broken_tents = self._get_broken_tents()
-                if broken_tents:
-                    self.state.turn_settled = True
-                    # 修复：保证紧急维修不会因决策点不足而死锁
-                    self.state.decisions_left = max(self.state.decisions_left, len(broken_tents))
-                    result["next_actions"] = [f"repair_tent_{t.id}" for t in broken_tents]
-                    result["day"] = self.state.day
-                    result["turn"] = self.state.turn
-                    result["income"] = dict(self.state.today_income)
-                    result["balance"] = self.state.balance
-                    result["reputation"] = self.state.reputation_rate
-                    result["tents"] = self._get_tents_summary()
-                    result["npcs"] = self._get_npcs_summary()
-                    return result
-
-                self.state.decisions_left = 3
+            self._process_business_turn(result)
+            self._process_dining(result)
+            self._process_entertainment(result)
+            if self.state.turn == 5:
+                self._process_turn5_day_guest_departures(result)
+            self._handle_breakdowns(result)
+            self.state.decisions_left = 3
 
             # 推进到下一回合
             if self.state.turn < 6:
@@ -432,21 +560,25 @@ class CampingPlazaEngine:
 
         elif turn == 2:
             self._process_checkout_all(result)
+            self._execute_pending_turn_plan(result)
             self._assign_reserved_tent_for_today()
             self._process_reservations(result)  # 修复 #1：预定客尝试入住
             self._process_checkin(result)
 
         elif turn == 3:
+            self._execute_pending_turn_plan(result)
             # 修复 #1：Turn 3继续尝试预定客入住
             self._process_reservations(result)
             self._process_checkin(result)
 
         elif turn == 4:
+            self._execute_pending_turn_plan(result)
             self._process_day_to_overnight(result)  # 修复 #4：先处理Turn 4开始前已在营地的日间客
             self._process_reservations(result)  # 修复 #1：预定客Turn 4继续重试入住
             self._process_checkin(result)
 
         elif turn == 5:
+            self._execute_pending_turn_plan(result)
             # 修复 #4：展示Turn 4的转过夜缓存
             self._flush_day_to_overnight_cache(result)
 
@@ -956,19 +1088,14 @@ class CampingPlazaEngine:
     # 经营操作
     # -------------------------------------------------------------------------
 
-    def repair_tent(self, tent_id: int) -> dict:
+    def repair_tent(self, tent_id: int, *, consume_decision: bool = True) -> dict:
         """维修帐篷"""
         # 修复：先确认目标帐篷存在且确实为 broken
         tent = self.tents.get(tent_id)
         if not tent or not self._is_tent_unlocked(tent) or tent.status != "broken":
             return {"success": False, "message": "帐篷无需维修"}
 
-        # 修复：旧异常状态中 broken 帐篷决策点不足时补足，避免死锁
-        broken_count = len(self._get_broken_tents())
-        self.state.decisions_left = max(self.state.decisions_left, broken_count)
-
-        # 修复：紧急维修优先级高于阶段限制，只要帐篷 broken 任何 Turn 都允许
-        if self.state.decisions_left <= 0:
+        if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
 
         # 修复：根据住客/预定状态恢复对应状态
@@ -979,7 +1106,8 @@ class CampingPlazaEngine:
         else:
             tent.status = "available"
         self._set_next_breakdown(tent)
-        self.state.decisions_left -= 1
+        if consume_decision:
+            self.state.decisions_left -= 1
         return {"success": True, "message": f"{tent_id}号帐篷已修好"}
 
     def upgrade_tent(self, tent_id: int) -> dict:
@@ -1052,7 +1180,7 @@ class CampingPlazaEngine:
 
         return {"success": True, "message": f"{facility_name}升级到Lv.{facility.level}"}
 
-    def improve_service(self) -> dict:
+    def improve_service(self, *, consume_decision: bool = True) -> dict:
         """提升服务"""
         # 修复：已结算回合不得再次执行经营操作
         if self.state.turn_settled:
@@ -1063,10 +1191,11 @@ class CampingPlazaEngine:
         # 修复：故障优先，存在故障帐篷时必须先把决策点留给维修
         if self._get_broken_tents():
             return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
-        if self.state.decisions_left <= 0:
+        if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
 
-        self.state.decisions_left -= 1
+        if consume_decision:
+            self.state.decisions_left -= 1
         affected = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.3:
@@ -1257,6 +1386,7 @@ class CampingPlazaEngine:
         }
         self.state.today_events = []
         self.state.decisions_left = 3
+        self.state.pending_turn_plan = None
         # 修复：营业回合故障阻塞标记重置
         self.state.turn_settled = False
         # 修复 #4：防御性清空缓存

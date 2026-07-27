@@ -298,6 +298,7 @@ class DayCampsiteCapacityTests(unittest.TestCase):
         engine.tents[1].status = "occupied"
         engine.tents[1].occupied_by = overnight_guest.id
         engine.npc_pool.extend([day_guest, overnight_guest])
+        engine.submit_turn_plan([], [])
 
         with mock.patch("game_engine.random.random", return_value=0.99):
             result = engine.advance_turn()
@@ -306,34 +307,6 @@ class DayCampsiteCapacityTests(unittest.TestCase):
         self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day" and not n.has_left]), 0)
         self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "overnight" and not n.has_left]), 1)
         self.assertGreaterEqual(len(engine.npc_history), 1)
-
-    def test_turn5_departure_not_repeated_when_turn_is_retried_after_breakdown(self):
-        engine = make_engine()
-        engine.state.turn = 5
-        day_guest = NPCGroup(
-            id=engine._next_npc_id(),
-            group_size=1,
-            visit_type="day",
-            location="entertainment",
-            total_satisfaction=60,
-        )
-        engine.npc_pool.append(day_guest)
-        engine.tents[1].status = "available"
-        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
-
-        with mock.patch("game_engine.random.random", return_value=0.99):
-            first = engine.advance_turn()
-
-        self.assertTrue(engine.state.turn_settled)
-        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day" and not n.has_left]), 0)
-        self.assertIn("repair_tent_1", first["next_actions"])
-        history_len = len(engine.npc_history)
-
-        engine.repair_tent(1)
-        second = engine.advance_turn()
-
-        self.assertEqual(len(engine.npc_history), history_len)
-        self.assertEqual(second["turn"], 6)
 
     def test_new_day_resets_day_campsite_counter_once(self):
         engine = make_engine()
@@ -347,128 +320,161 @@ class DayCampsiteCapacityTests(unittest.TestCase):
         self.assertEqual(engine.state.turn, 1)
         self.assertEqual(engine.state.day_campsite_groups_served, 0)
 
-    def test_turn_settled_retry_does_not_duplicate_day_guest_fee_or_counter(self):
+class TurnPlanTests(unittest.TestCase):
+    def _engine_for_plan(self, turn: int = 2) -> CampingPlazaEngine:
         engine = make_engine()
-        engine.state.turn = 2
+        engine.state.day = 1
+        engine.state.turn = turn
+        engine.state.decisions_left = 3
+        engine.state.pending_turn_plan = None
+        for tent in engine.tents.values():
+            tent.next_breakdown_turn = 99999
+        return engine
+
+    def test_submit_turn_plan_windows_and_limits(self):
+        for turn in (2, 3, 4, 5):
+            engine = self._engine_for_plan(turn)
+            result = engine.submit_turn_plan([], [])
+            self.assertTrue(result["success"])
+            self.assertEqual(result["target_turn"], turn)
+
+        for turn in (1, 6):
+            engine = self._engine_for_plan(turn)
+            result = engine.submit_turn_plan([], [])
+            self.assertFalse(result["success"])
+
+        engine = self._engine_for_plan(2)
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        self.assertFalse(engine.submit_turn_plan([], [])["success"])
+
+        engine = self._engine_for_plan(2)
+        actions = [{"action": "improve_service"} for _ in range(3)]
+        self.assertTrue(engine.submit_turn_plan([], actions)["success"])
+
+        engine = self._engine_for_plan(2)
+        actions = [{"action": "improve_service"} for _ in range(4)]
+        self.assertFalse(engine.submit_turn_plan([], actions)["success"])
+
+        engine = self._engine_for_plan(2)
+        result = engine.submit_turn_plan(
+            [{"action": "clean_tents", "tent_ids": [1, 2]}],
+            [{"action": "improve_service"} for _ in range(3)],
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.decisions_left, 0)
+
+    def test_submit_turn_plan_does_not_execute_or_charge(self):
+        engine = self._engine_for_plan(2)
+        engine.tents[1].status = "broken"
+        balance_before = engine.state.balance
+
+        result = engine.submit_turn_plan([], [{"action": "repair_tent", "tent_id": 1}])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.tents[1].status, "broken")
+        self.assertEqual(engine.state.balance, balance_before)
+
+    def test_advance_requires_plan_on_business_turns(self):
+        engine = self._engine_for_plan(2)
+
+        result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 2)
+        self.assertIn("submit turn plan first", result["events"])
+
+    def test_turn_plan_executes_once_and_clears(self):
+        engine = self._engine_for_plan(2)
+        engine.tents[1].status = "broken"
+        engine.state.balance = 1000
+
+        self.assertTrue(
+            engine.submit_turn_plan(
+                [{"action": "clean_tents", "tent_ids": [2]}],
+                [{"action": "repair_tent", "tent_id": 1}],
+            )["success"]
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_process_checkout_all") as checkout_mock:
+            with mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+                with mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                                with mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                                    result = engine.advance_turn()
+
+        self.assertEqual(checkout_mock.call_count, 1)
+        self.assertEqual(result["turn"], 3)
+        self.assertIsNone(engine.state.pending_turn_plan)
+        self.assertEqual(result["plan_execution"]["free_actions"][0]["action"], "clean_tents")
+        self.assertEqual(result["plan_execution"]["actions"][0]["action"], "repair_tent")
+        self.assertEqual(engine.tents[1].status, "available")
+
+        second = engine.advance_turn()
+        self.assertEqual(second["turn"], 3)
+        self.assertIn("submit turn plan first", second["events"])
+
+    def test_invalid_planned_action_skips_without_spending(self):
+        engine = self._engine_for_plan(2)
+        balance_before = engine.state.balance
+
+        self.assertTrue(
+            engine.submit_turn_plan([], [{"action": "repair_tent", "tent_id": 1}])["success"]
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
+            with mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+                with mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                                with mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                                    result = engine.advance_turn()
+
+        self.assertFalse(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertIsNone(engine.state.pending_turn_plan)
+
+    def test_breakdown_no_longer_blocks_progression(self):
+        engine = self._engine_for_plan(2)
         engine.tents[1].status = "available"
         engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        engine.submit_turn_plan([], [])
 
-        day_guest = NPCGroup(
-            id=engine._next_npc_id(),
-            group_size=2,
-            visit_type="day",
-        )
-        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[day_guest]):
-            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
-                with mock.patch("game_engine.random.random", return_value=0.0):
-                    first = engine.advance_turn()
+        with mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+            with mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                        with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                            result = engine.advance_turn()
 
-        self.assertTrue(engine.state.turn_settled)
-        self.assertEqual(engine.state.day_campsite_groups_served, 1)
-        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
-        self.assertIn("repair_tent_1", first["next_actions"])
+        self.assertEqual(result["turn"], 3)
+        self.assertEqual(engine.tents[1].status, "broken")
 
-        engine.repair_tent(1)
-        engine.advance_turn()
-
-        self.assertEqual(engine.state.day_campsite_groups_served, 1)
-        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
-
-
-class BreakdownBlockingTests(unittest.TestCase):
-    """故障帐篷阻塞回合推进"""
-
-    def test_broken_tent_blocks_advance(self):
-        """存在 broken 帐篷时 advance_turn 不推进回合"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        engine.tents[1].next_breakdown_turn = 0
-        engine.state.decisions_left = 0
-        original_turn = engine.state.turn
-
-        result = engine.advance_turn()
-
-        self.assertEqual(engine.state.turn, original_turn)
-        self.assertIn("repair_tent_1", result["next_actions"])
-
-    def test_decisions_replenished_when_broken(self):
-        """决策点不足时补足到 broken 帐篷数量"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        engine.tents[2].is_unlocked = True
-        engine.tents[2].status = "broken"
-        engine.tents[1].next_breakdown_turn = 0
-        engine.tents[2].next_breakdown_turn = 0
-        engine.state.decisions_left = 0
-
-        engine.advance_turn()
-
-        self.assertEqual(engine.state.decisions_left, 2)
-
-    def test_repair_consumes_decision_point(self):
-        """维修每顶帐篷消耗 1 点决策点"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        engine.tents[1].next_breakdown_turn = 0
-        engine.state.decisions_left = 3
-
-        engine.repair_tent(1)
-
-        self.assertEqual(engine.state.decisions_left, 2)
-        self.assertEqual(engine.tents[1].status, "available")
-
-    def test_can_advance_after_all_repairs(self):
-        """全部维修后可继续推进回合"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        engine.tents[2].is_unlocked = True
-        engine.tents[2].status = "broken"
-        engine.tents[1].next_breakdown_turn = 0
-        engine.tents[2].next_breakdown_turn = 0
-        engine.state.decisions_left = 3
-
-        engine.repair_tent(1)
-        engine.repair_tent(2)
-        # 屏蔽后续故障，避免新故障再次阻塞
-        for t in engine.tents.values():
-            t.next_breakdown_turn = 99999
-        result = engine.advance_turn()
-
-        self.assertEqual(engine.tents[1].status, "available")
-        self.assertEqual(engine.tents[2].status, "available")
-        self.assertGreater(engine.state.turn, 1)
-        self.assertNotIn("repair_tent_1", result.get("next_actions", []))
-
-    def test_turn_settled_no_duplicate(self):
-        """turn_settled 不会重复结算收入或生成客人"""
-        engine = make_engine()
-        engine.state.turn = 2
-        # 让某帐篷在营业结算中触发故障
-        engine.tents[1].next_breakdown_turn = 1
+    def test_turn5_breakdown_still_enters_turn6(self):
+        engine = self._engine_for_plan(5)
         engine.tents[1].status = "available"
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        engine.submit_turn_plan([], [])
 
-        with mock.patch("game_engine.random.random", return_value=0.0):
-            result = engine.advance_turn()
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
 
-        self.assertTrue(engine.state.turn_settled)
-        self.assertIn("repair_tent_1", result["next_actions"])
-        income_after_first = dict(engine.state.today_income)
-        balance_after_first = engine.state.balance
-        npc_count_after_first = len(engine.npc_pool)
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(engine.tents[1].status, "broken")
 
-        # 修好故障并屏蔽新故障，再推进回合
-        engine.repair_tent(1)
-        for t in engine.tents.values():
-            t.next_breakdown_turn = 99999
-        second_result = engine.advance_turn()
+    def test_turn5_plan_clears_after_turn6_and_rejects_resubmit(self):
+        engine = self._engine_for_plan(5)
+        engine.submit_turn_plan([], [])
 
-        # 不应重复结算
-        self.assertEqual(dict(engine.state.today_income), income_after_first)
-        self.assertEqual(engine.state.balance, balance_after_first)
-        self.assertEqual(len(engine.npc_pool), npc_count_after_first)
-        # turn_settled 应被清除，回合正常推进
-        self.assertFalse(engine.state.turn_settled)
-        self.assertGreater(second_result["turn"], result["turn"])
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertIsNone(engine.state.pending_turn_plan)
+        self.assertFalse(engine.submit_turn_plan([], [])["success"])
 
 
 class RepairStateRecoveryTests(unittest.TestCase):
@@ -1115,6 +1121,7 @@ class DiningRulesTests(unittest.TestCase):
     def test_turn5_day_guest_departure_still_happens_after_dining(self):
         engine, npc = self._make_dining_npc(group_size=1, total_satisfaction=70)
         engine.state.turn = 5
+        engine.submit_turn_plan([], [])
 
         with mock.patch("game_engine.random.random", return_value=0.0):
             result = engine.advance_turn()
@@ -1126,6 +1133,7 @@ class DiningRulesTests(unittest.TestCase):
     def test_dining_failure_does_not_block_turn_progression(self):
         engine, _npc = self._make_dining_npc()
         engine.state.turn = 3
+        engine.submit_turn_plan([], [])
 
         with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[]):
             with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):

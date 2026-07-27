@@ -96,6 +96,12 @@ class FullSaveRestoreTests(PersistenceTestCase):
         engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
         engine.state.turn_settled = True
         engine.state.day_campsite_groups_served = 7
+        engine.state.pending_turn_plan = {
+            "target_day": 3,
+            "target_turn": 4,
+            "free_actions": [{"action": "clean_tents", "tent_ids": [1]}],
+            "actions": [{"action": "repair_tent", "tent_id": 2}],
+        }
         engine.state.pending_reviews = [{
             "created_day": 2,
             "rating": 4,
@@ -162,6 +168,12 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
         self.assertTrue(s.turn_settled)
         self.assertEqual(s.day_campsite_groups_served, 7)
+        self.assertEqual(s.pending_turn_plan, {
+            "target_day": 3,
+            "target_turn": 4,
+            "free_actions": [{"action": "clean_tents", "tent_ids": [1]}],
+            "actions": [{"action": "repair_tent", "tent_id": 2}],
+        })
         self.assertEqual(s.pending_reviews, [{
             "created_day": 2,
             "rating": 4,
@@ -544,6 +556,93 @@ class PendingReviewPersistenceTests(PersistenceTestCase):
         self.assertEqual(reloaded.state.total_reviews, 1)
         self.assertEqual(reloaded.state.total_rating_sum, 4)
         self.assertEqual(reloaded.state.pending_reviews, [])
+
+
+class TurnPlanPersistenceTests(PersistenceTestCase):
+    def test_missing_pending_turn_plan_defaults_to_none(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        original_rows = self._snapshot_rows()
+        valid_payload = json.loads(original_rows[0][1])
+
+        valid_payload["state"].pop("pending_turn_plan", None)
+        self._write_snapshot_dict(valid_payload)
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertIsNone(restored.state.pending_turn_plan)
+
+    def test_pending_turn_plan_restores_and_executes_once(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.day = 1
+        engine.state.turn = 2
+        engine.tents[1].status = "broken"
+        engine.tents[1].next_breakdown_turn = 99999
+        engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 2,
+            "free_actions": [],
+            "actions": [{"action": "repair_tent", "tent_id": 1}],
+        }
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertIsNotNone(restored.state.pending_turn_plan)
+
+        with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
+            with unittest.mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+                with unittest.mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                    with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                        with unittest.mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                            with unittest.mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                                with unittest.mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                                    result = restored.advance_turn()
+
+        self.assertTrue(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(restored.tents[1].status, "available")
+        self.assertIsNone(restored.state.pending_turn_plan)
+        self.assertTrue(restored.save_state())
+
+        reloaded = CampingPlazaEngine(db_path=self.db_path)
+        second = reloaded.advance_turn()
+        self.assertEqual(second["turn"], 3)
+        self.assertIn("submit turn plan first", second["events"])
+        self.assertIsNone(reloaded.state.pending_turn_plan)
+
+    def test_expired_pending_turn_plan_does_not_execute(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.day = 1
+        engine.state.turn = 2
+        engine.tents[1].status = "broken"
+        engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 3,
+            "free_actions": [],
+            "actions": [{"action": "repair_tent", "tent_id": 1}],
+        }
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        result = restored.advance_turn()
+
+        self.assertEqual(result["turn"], 2)
+        self.assertEqual(restored.tents[1].status, "broken")
+        self.assertIsNone(restored.state.pending_turn_plan)
+
+    def test_new_day_clears_old_pending_turn_plan(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.day = 1
+        engine.state.turn = 6
+        engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 2,
+            "free_actions": [],
+            "actions": [{"action": "repair_tent", "tent_id": 1}],
+        }
+
+        engine._new_day()
+
+        self.assertIsNone(engine.state.pending_turn_plan)
+        self.assertEqual(engine.state.day, 2)
+        self.assertEqual(engine.state.turn, 1)
 
 
 if __name__ == "__main__":
