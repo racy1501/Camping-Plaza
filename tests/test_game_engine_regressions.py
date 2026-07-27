@@ -849,6 +849,207 @@ class IncomeAndSpendingTagTests(unittest.TestCase):
         )
 
 
+class DiningRulesTests(unittest.TestCase):
+    """餐饮每日一次、按人数计费与满意度闭环"""
+
+    def _make_dining_npc(self, **overrides):
+        engine = make_engine()
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="dining",
+            economic_level=1,
+            spending_habit=1,
+        )
+        for key, value in overrides.items():
+            setattr(npc, key, value)
+        engine.npc_pool.append(npc)
+        return engine, npc
+
+    def test_new_npc_has_not_consumed_dining_today(self):
+        engine, npc = self._make_dining_npc()
+
+        self.assertEqual(npc.last_dining_day, 0)
+        self.assertFalse(engine._has_consumed_dining_today(npc))
+
+    def test_successful_dining_marks_day_and_adds_satisfaction(self):
+        engine, npc = self._make_dining_npc(group_size=2, total_satisfaction=60)
+        result = {"events": []}
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining(result)
+
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(engine.state.today_income["dining"], 60)
+        self.assertEqual(npc.total_satisfaction, 65.0)
+        self.assertEqual(len(result["events"]), 1)
+
+    def test_same_day_repeat_does_not_charge_twice_or_repeat_satisfaction(self):
+        engine, npc = self._make_dining_npc(group_size=3, total_satisfaction=70)
+        result1 = {"events": []}
+        result2 = {"events": []}
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining(result1)
+            income_after_first = engine.state.today_income["dining"]
+            satisfaction_after_first = npc.total_satisfaction
+            engine._process_dining(result2)
+
+        self.assertEqual(engine.state.today_income["dining"], income_after_first)
+        self.assertEqual(npc.total_satisfaction, satisfaction_after_first)
+        self.assertEqual(result2["events"], [])
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+
+    def test_failed_dining_attempt_does_not_mark_and_can_retry_later(self):
+        engine, npc = self._make_dining_npc(total_satisfaction=60)
+
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            engine._process_dining({"events": []})
+
+        self.assertEqual(npc.last_dining_day, 0)
+        self.assertEqual(engine.state.today_income["dining"], 0)
+        self.assertEqual(npc.total_satisfaction, 60)
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(engine.state.today_income["dining"], 30)
+        self.assertEqual(npc.total_satisfaction, 65.0)
+
+    def test_next_day_can_consume_again_without_manual_reset(self):
+        engine, npc = self._make_dining_npc()
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        first_day_income = engine.state.today_income["dining"]
+        engine._new_day()
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(engine.state.today_income["dining"], first_day_income)
+
+    def test_dining_revenue_scales_with_group_size(self):
+        for group_size, expected in ((1, 30), (2, 60), (3, 90)):
+            engine, _npc = self._make_dining_npc(group_size=group_size)
+            with self.subTest(group_size=group_size):
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    engine._process_dining({"events": []})
+                self.assertEqual(engine.state.today_income["dining"], expected)
+
+    def test_dining_uses_economic_level_and_multiplier_once_before_group_multiplier(self):
+        engine, npc = self._make_dining_npc(group_size=2, economic_level=2)
+        engine.facilities["dining"].dining_income_multiplier = 2.0
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        self.assertEqual(engine._get_dining_unit_revenue(npc), 72)
+        self.assertEqual(engine.state.today_income["dining"], 144)
+
+    def test_dining_event_mentions_group_size_and_total_income_once(self):
+        engine, _npc = self._make_dining_npc(group_size=2)
+        result = {"events": []}
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining(result)
+
+        self.assertEqual(len(result["events"]), 1)
+        self.assertIn("2人", result["events"][0])
+        self.assertIn("收入+60", result["events"][0])
+
+    def test_day_guest_review_uses_updated_dining_satisfaction(self):
+        engine, npc = self._make_dining_npc(total_satisfaction=70)
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+            engine._leave_day_guest(npc)
+
+        self.assertTrue(npc.has_left)
+        self.assertEqual(npc.review_rating, 4)
+
+    def test_overnight_checkout_does_not_duplicate_dining_satisfaction(self):
+        engine, npc = self._make_dining_npc(
+            visit_type="overnight",
+            total_satisfaction=60,
+            location="dining",
+        )
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        npc.location = "tent_1"
+        engine._checkout_npc(npc, {"events": []})
+
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(npc.total_satisfaction, 68.0)
+
+    def test_checkout_without_dining_does_not_gain_free_dining_satisfaction(self):
+        engine = make_engine()
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(npc)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+
+        engine._checkout_npc(npc, {"events": []})
+
+        self.assertEqual(npc.last_dining_day, 0)
+        self.assertEqual(npc.total_satisfaction, 63.0)
+
+    def test_upgraded_dining_satisfaction_applies_on_success(self):
+        engine, npc = self._make_dining_npc(total_satisfaction=50)
+        engine.facilities["dining"].dining_satisfaction = 9.0
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine._process_dining({"events": []})
+
+        self.assertEqual(npc.total_satisfaction, 59.0)
+
+    def test_temperament_is_not_used_for_dining_amount(self):
+        engine_a, npc_a = self._make_dining_npc(temperament=0)
+        engine_b, npc_b = self._make_dining_npc(temperament=2)
+
+        self.assertEqual(
+            engine_a._get_dining_unit_revenue(npc_a),
+            engine_b._get_dining_unit_revenue(npc_b)
+        )
+
+    def test_turn5_day_guest_departure_still_happens_after_dining(self):
+        engine, npc = self._make_dining_npc(group_size=1, total_satisfaction=70)
+        engine.state.turn = 5
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            result = engine.advance_turn()
+
+        self.assertTrue(npc.has_left)
+        self.assertEqual(npc.last_dining_day, 1)
+        self.assertEqual(result["income"]["dining"], 30)
+
+    def test_dining_failure_does_not_block_turn_progression(self):
+        engine, _npc = self._make_dining_npc()
+        engine.state.turn = 3
+
+        with mock.patch.object(CampingPlazaEngine, "_generate_day_guests", return_value=[]):
+            with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
+                with mock.patch("game_engine.random.random", side_effect=[0.99, 0.99]):
+                    result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 4)
+        self.assertEqual(result["income"]["dining"], 0)
+
+
 class TentCleaningTests(unittest.TestCase):
     """帐篷主动清洁"""
 

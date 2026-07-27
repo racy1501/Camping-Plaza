@@ -120,6 +120,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
             spending_habit=0, temperament=1, visit_count=3,
             last_visit_day=1, is_reserved=True, paid=True
         )
+        npc.last_dining_day = 3
         engine.npc_pool.append(npc)
         engine._npc_id_counter = 42
         engine.npc_history.append({
@@ -189,6 +190,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(n.temperament, 1)
         self.assertEqual(n.visit_count, 3)
         self.assertEqual(n.last_visit_day, 1)
+        self.assertEqual(n.last_dining_day, 3)
         self.assertTrue(n.is_reserved)
         self.assertTrue(n.paid)
 
@@ -398,6 +400,82 @@ class MissingTentUnlockedFieldFallbackTests(PersistenceTestCase):
         self.assertTrue(restored.tents[1].is_unlocked)
         for tent_id in range(2, 7):
             self.assertFalse(restored.tents[tent_id].is_unlocked)
+
+
+class DiningPersistenceTests(PersistenceTestCase):
+    def test_last_dining_day_roundtrip_and_same_day_protection_survives_restore(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            location="dining",
+            economic_level=1,
+            spending_habit=1,
+            last_dining_day=engine.state.day,
+        )
+        engine.npc_pool.append(npc)
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        restored_npc = restored.npc_pool[0]
+
+        self.assertEqual(restored_npc.last_dining_day, restored.state.day)
+        restored._process_dining({"events": []})
+        self.assertEqual(restored.state.today_income["dining"], 0)
+
+    def test_restored_npc_can_consume_again_on_next_day(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="dining",
+            economic_level=1,
+            spending_habit=1,
+            last_dining_day=engine.state.day,
+        )
+        engine.npc_pool.append(npc)
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        restored._new_day()
+
+        with unittest.mock.patch("game_engine.random.random", return_value=0.0):
+            restored._process_dining({"events": []})
+
+        self.assertEqual(restored.state.today_income["dining"], 30)
+        self.assertEqual(restored.npc_pool[0].last_dining_day, restored.state.day)
+
+
+class MissingLastDiningDayFallbackTests(PersistenceTestCase):
+    def test_missing_last_dining_day_defaults_to_zero(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        original_rows = self._snapshot_rows()
+        valid_payload = json.loads(original_rows[0][1])
+
+        valid_payload["npc_pool"] = [{
+            "id": 7,
+            "group_size": 2,
+            "visit_type": "day",
+            "arrival_turn": 1,
+            "location": "dining",
+            "total_satisfaction": 65,
+            "has_left": False,
+            "review_left": False,
+            "review_rating": 0,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+            "visit_count": 1,
+            "last_visit_day": 1,
+            "is_reserved": False,
+            "paid": False
+        }]
+        self._write_snapshot_dict(valid_payload)
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(restored.npc_pool[0].last_dining_day, 0)
 
 
 if __name__ == "__main__":

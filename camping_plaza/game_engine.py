@@ -52,6 +52,7 @@ class NPCGroup:
     # 回访记录
     visit_count: int = 1
     last_visit_day: int = 0
+    last_dining_day: int = 0
 
     # 预定标记
     is_reserved: bool = False  # 是否是预定客
@@ -246,8 +247,11 @@ class CampingPlazaEngine:
                 restored_tents[tent_id] = Tent(**normalized_tdata)
             restored_facilities = {name: Facility(**fdata)
                                    for name, fdata in payload["facilities"].items()}
-            restored_npc_pool = [NPCGroup(**ndata)
-                                 for ndata in payload["npc_pool"]]
+            restored_npc_pool = []
+            for ndata in payload["npc_pool"]:
+                normalized_ndata = dict(ndata)
+                normalized_ndata.setdefault("last_dining_day", 0)
+                restored_npc_pool.append(NPCGroup(**normalized_ndata))
             restored_npc_history = list(payload["npc_history"])
             restored_npc_id_counter = int(payload["npc_id_counter"])
 
@@ -480,10 +484,7 @@ class CampingPlazaEngine:
         npc.location = "leaving"
         npc.has_left = True
 
-        satisfaction_change = (
-            self.facilities["greenery"].greenery_satisfaction
-            + self.facilities["dining"].dining_satisfaction * 0.3
-        )
+        satisfaction_change = self.facilities["greenery"].greenery_satisfaction
         npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_change)
 
         result["events"].append(f"帐篷{tent_id}号客人退房")
@@ -550,17 +551,24 @@ class CampingPlazaEngine:
             if npc.has_left:
                 continue
             if npc.location == "dining":
+                if self._has_consumed_dining_today(npc):
+                    continue
                 probability = self._calc_spend_probability(
                     facility.dining_spend_probability, npc.spending_habit
                 )
                 if random.random() < probability:
-                    spend = self._calc_spend_amount(
-                        self.DINING_BASE_PRICE,
-                        npc.economic_level,
-                        facility.dining_income_multiplier
-                    )
+                    spend = self._get_dining_unit_revenue(npc) * npc.group_size
+                    if spend <= 0:
+                        continue
                     self.state.balance += spend
                     self.state.today_income["dining"] += spend
+                    npc.total_satisfaction = min(
+                        100, npc.total_satisfaction + facility.dining_satisfaction
+                    )
+                    self._mark_dining_consumed(npc)
+                    result["events"].append(
+                        f"一组{npc.group_size}人在餐饮区消费，收入+{spend}"
+                    )
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
@@ -1174,6 +1182,20 @@ class CampingPlazaEngine:
             if npc.id == npc_id:
                 return npc
         return None
+
+    def _has_consumed_dining_today(self, npc: NPCGroup) -> bool:
+        return npc.last_dining_day == self.state.day
+
+    def _mark_dining_consumed(self, npc: NPCGroup):
+        npc.last_dining_day = self.state.day
+
+    def _get_dining_unit_revenue(self, npc: NPCGroup) -> int:
+        facility = self.facilities["dining"]
+        return self._calc_spend_amount(
+            self.DINING_BASE_PRICE,
+            npc.economic_level,
+            facility.dining_income_multiplier
+        )
 
     def _set_next_breakdown(self, tent: Tent):
         if not self._is_tent_unlocked(tent):
