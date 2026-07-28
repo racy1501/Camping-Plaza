@@ -127,6 +127,12 @@ class CampingPlazaEngine:
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
     ENTERTAINMENT_BASE_PRICE = 40
+    FOOD_PACKAGES = {
+        "small": {"name": "小包", "portions": 4, "price": 80},
+        "medium": {"name": "中包", "portions": 8, "price": 150},
+        "large": {"name": "大包", "portions": 14, "price": 250},
+    }
+    OPENING_FOOD_GIFT_PACKAGE = "medium"
 
     TENT_UPGRADE_COST = [0, 500, 1200, 2500]
     FACILITY_UPGRADE_COST = [0, 400, 1000, 2000]
@@ -161,10 +167,20 @@ class CampingPlazaEngine:
         self.facilities: dict[str, Facility] = {}
         self._npc_id_counter = 0
         self._init_game()
-        # 持久化：确保快照表存在，尝试恢复；失败安全回退新游戏并写入有效快照
-        self._ensure_snapshot_table()
-        if not self.load_state():
+        # 持久化：仅在明确新游戏时创建快照表；已有数据库先读后写
+        if not os.path.exists(self.db_path):
+            self._ensure_snapshot_table()
+            self._apply_opening_food_gift()
             self.save_state()
+        else:
+            load_result = self.load_state()
+            if load_result == "no_snapshot":
+                self._apply_opening_food_gift()
+                self.save_state()
+            elif load_result == "load_error":
+                raise RuntimeError(
+                    "存档加载失败，游戏已停止启动，以避免覆盖现有存档。"
+                )
 
     def _current_turn_plan_target(self) -> tuple[int, int]:
         return self.state.day, self.state.turn
@@ -305,6 +321,19 @@ class CampingPlazaEngine:
             )
         self.state.pending_turn_plan = None
 
+    def _apply_opening_food_gift(self):
+        package = self.FOOD_PACKAGES[self.OPENING_FOOD_GIFT_PACKAGE]
+        self.state.food_stock = package["portions"]
+        self.state.today_events.append(self._build_opening_food_gift_event())
+
+    def _build_opening_food_gift_event(self) -> str:
+        package = self.FOOD_PACKAGES[self.OPENING_FOOD_GIFT_PACKAGE]
+        package_label = f'{package["name"]}（{package["portions"]}份）'
+        return (
+            "开业物资已送达：为了帮助你顺利营业，"
+            f"特别赠送食材{package_label}。祝你经营顺利！"
+        )
+
     # -------------------------------------------------------------------------
     # SQLite JSON 快照持久化（单行覆盖，runtime_snapshot 为唯一权威存档）
     # -------------------------------------------------------------------------
@@ -359,7 +388,7 @@ class CampingPlazaEngine:
         except Exception:
             return False
 
-    def load_state(self) -> bool:
+    def load_state(self) -> str:
         """从数据库加载 id=1 快照并原子式恢复完整运行状态。
 
         数据库不存在、表为空、JSON 损坏、版本不匹配或任何嵌套结构无法恢复时
@@ -368,7 +397,7 @@ class CampingPlazaEngine:
         """
         try:
             if not os.path.exists(self.db_path):
-                return False
+                return "no_snapshot"
             conn = sqlite3.connect(self.db_path)
             try:
                 row = conn.execute(
@@ -377,19 +406,19 @@ class CampingPlazaEngine:
             finally:
                 conn.close()
             if not row:
-                return False
+                return "no_snapshot"
 
             payload = json.loads(row[0])
             if not isinstance(payload, dict):
-                return False
+                return "load_error"
 
             required = {"snapshot_version", "state", "tents", "facilities",
                         "npc_pool", "npc_history", "npc_id_counter"}
             if not required.issubset(payload.keys()):
-                return False
+                return "load_error"
 
             if int(payload["snapshot_version"]) != self.SNAPSHOT_VERSION:
-                return False
+                return "load_error"
 
             # 原子恢复：所有对象先在局部构造，全部成功后再一次性赋值给实例字段
             state_fields = {f for f in GameState.__dataclass_fields__}
@@ -422,9 +451,9 @@ class CampingPlazaEngine:
             self.npc_pool = restored_npc_pool
             self.npc_history = restored_npc_history
             self._npc_id_counter = restored_npc_id_counter
-            return True
+            return "loaded"
         except Exception:
-            return False
+            return "load_error"
 
     def _init_game(self):
         """初始化游戏"""

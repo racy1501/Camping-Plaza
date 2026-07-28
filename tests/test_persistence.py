@@ -49,6 +49,16 @@ class PersistenceTestCase(unittest.TestCase):
     def _write_snapshot_dict(self, payload: dict):
         self._write_snapshot_json(json.dumps(payload, ensure_ascii=False))
 
+    def _table_names(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall()
+            return [row[0] for row in rows]
+        finally:
+            conn.close()
+
 
 class FreshDatabaseTests(PersistenceTestCase):
     """新数据库首次启动"""
@@ -59,7 +69,14 @@ class FreshDatabaseTests(PersistenceTestCase):
         self.assertEqual(engine.state.day, 1)
         self.assertEqual(engine.state.turn, 1)
         self.assertEqual(engine.state.balance, 1000)
-        self.assertEqual(engine.state.food_stock, 0)
+        self.assertEqual(
+            engine.state.food_stock,
+            CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
+        self.assertEqual(
+            engine.state.today_events,
+            [engine._build_opening_food_gift_event()],
+        )
         # 快照表存在且仅一行
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
@@ -67,6 +84,23 @@ class FreshDatabaseTests(PersistenceTestCase):
         # 快照 JSON 可解析且含版本号
         payload = json.loads(rows[0][1])
         self.assertEqual(payload["snapshot_version"], 1)
+        self.assertEqual(
+            payload["state"]["food_stock"],
+            CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
+        self.assertEqual(
+            CampingPlazaEngine.FOOD_PACKAGES,
+            {
+                "small": {"name": "小包", "portions": 4, "price": 80},
+                "medium": {"name": "中包", "portions": 8, "price": 150},
+                "large": {"name": "大包", "portions": 14, "price": 250},
+            },
+        )
+        medium_package = CampingPlazaEngine.FOOD_PACKAGES["medium"]
+        self.assertIn(
+            f'{medium_package["name"]}（{medium_package["portions"]}份）',
+            engine.state.today_events[0],
+        )
 
 
 class FullSaveRestoreTests(PersistenceTestCase):
@@ -230,6 +264,17 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(restored.npc_history[0]["id"], 1)
         self.assertEqual(restored.npc_history[0]["last_visit_day"], 2)
 
+    def test_opening_food_gift_persists_without_duplication(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        opening_events = list(engine.state.today_events)
+        opening_stock = engine.state.food_stock
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+
+        self.assertEqual(restored.state.food_stock, opening_stock)
+        self.assertEqual(restored.state.today_events, opening_events)
+        self.assertEqual(len(restored.state.today_events), 1)
+
 
 class OverwriteTests(PersistenceTestCase):
     """多次保存覆盖而非追加"""
@@ -277,6 +322,10 @@ class EmptyDatabaseFallbackTests(PersistenceTestCase):
         engine = CampingPlazaEngine(db_path=self.db_path)
         self.assertEqual(engine.state.day, 1)
         self.assertEqual(engine.state.balance, 1000)
+        self.assertEqual(
+            engine.state.food_stock,
+            CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
         # 回退后自动写入有效快照
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
@@ -284,26 +333,59 @@ class EmptyDatabaseFallbackTests(PersistenceTestCase):
         self.assertEqual(payload["snapshot_version"], 1)
 
 
-class CorruptJsonFallbackTests(PersistenceTestCase):
-    """损坏 JSON 安全回退"""
+class MissingSnapshotTableTests(PersistenceTestCase):
+    def test_existing_database_without_snapshot_table_raises_and_preserves_schema(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "CREATE TABLE other_state (id INTEGER PRIMARY KEY, note TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO other_state (id, note) VALUES (1, 'keep-me')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-    def test_corrupt_snapshot_falls_back_and_gets_replaced(self):
+        self.assertEqual(self._table_names(), ["other_state"])
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "存档加载失败，游戏已停止启动，以避免覆盖现有存档。",
+        ):
+            CampingPlazaEngine(db_path=self.db_path)
+
+        self.assertEqual(self._table_names(), ["other_state"])
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT note FROM other_state WHERE id = 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row[0], "keep-me")
+
+
+class CorruptJsonFallbackTests(PersistenceTestCase):
+    """损坏 JSON 不应被误判为新游戏"""
+
+    def test_corrupt_snapshot_raises_and_preserves_database(self):
         engine = CampingPlazaEngine(db_path=self.db_path)
         self.assertTrue(engine.save_state())
 
         # 手动写入非法 JSON
-        self._write_snapshot_json("{not valid json !!!")
+        broken_snapshot = "{not valid json !!!"
+        self._write_snapshot_json(broken_snapshot)
 
-        # 新建引擎不得抛异常，回退新游戏
-        restored = CampingPlazaEngine(db_path=self.db_path)
-        self.assertEqual(restored.state.day, 1)
-        self.assertEqual(restored.state.balance, 1000)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "存档加载失败，游戏已停止启动，以避免覆盖现有存档。",
+        ):
+            CampingPlazaEngine(db_path=self.db_path)
 
-        # 损坏内容被新的有效快照替换
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
-        payload = json.loads(rows[0][1])
-        self.assertEqual(payload["snapshot_version"], 1)
+        self.assertEqual(rows[0][1], broken_snapshot)
 
 
 class NpcIdContinuityTests(PersistenceTestCase):
@@ -338,9 +420,9 @@ class IsolationTests(PersistenceTestCase):
 
 
 class PartialCorruptFallbackTests(PersistenceTestCase):
-    """合法 JSON 但嵌套结构损坏时安全回退，不污染实例状态"""
+    """合法 JSON 但嵌套结构损坏时不应误发礼包"""
 
-    def test_nested_tent_corruption_falls_back_to_clean_new_game(self):
+    def test_nested_tent_corruption_raises_without_default_game(self):
         # 先生成一份有效快照
         engine = CampingPlazaEngine(db_path=self.db_path)
         original_rows = self._snapshot_rows()
@@ -354,27 +436,24 @@ class PartialCorruptFallbackTests(PersistenceTestCase):
         valid_payload["tents"]["2"] = {"missing_id": True}  # 缺少 id/capacity
         self._write_snapshot_dict(valid_payload)
 
-        # 同一 db_path 新建引擎不得抛异常，应完整回退新游戏
-        restored = CampingPlazaEngine(db_path=self.db_path)
-        self.assertEqual(restored.state.day, 1)
-        self.assertEqual(restored.state.turn, 1)
-        self.assertEqual(restored.state.balance, 1000)
-        self.assertEqual(len(restored.tents), 6)
-        self.assertEqual(len(restored.facilities), 3)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "存档加载失败，游戏已停止启动，以避免覆盖现有存档。",
+        ):
+            CampingPlazaEngine(db_path=self.db_path)
 
-        # 损坏快照已被新的有效快照替换
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
-        new_payload = json.loads(rows[0][1])
-        self.assertEqual(new_payload["snapshot_version"], 1)
-        self.assertEqual(new_payload["state"]["day"], 1)
-        self.assertNotEqual(new_payload["state"]["day"], 99)
+        current_payload = json.loads(rows[0][1])
+        self.assertEqual(current_payload["state"]["day"], 99)
+        self.assertEqual(current_payload["state"]["balance"], 777)
+        self.assertEqual(current_payload["tents"]["2"], {"missing_id": True})
 
 
 class SnapshotVersionMismatchTests(PersistenceTestCase):
     """快照版本号与当前版本不一致时完整回退新游戏"""
 
-    def test_old_snapshot_version_falls_back_cleanly(self):
+    def test_old_snapshot_version_raises_and_preserves_snapshot(self):
         engine = CampingPlazaEngine(db_path=self.db_path)
         original_rows = self._snapshot_rows()
         valid_payload = json.loads(original_rows[0][1])
@@ -384,17 +463,18 @@ class SnapshotVersionMismatchTests(PersistenceTestCase):
         valid_payload["state"]["balance"] = 12345
         self._write_snapshot_dict(valid_payload)
 
-        restored = CampingPlazaEngine(db_path=self.db_path)
-        self.assertEqual(restored.state.day, 1)
-        self.assertEqual(restored.state.turn, 1)
-        self.assertEqual(restored.state.balance, 1000)
-        self.assertEqual(len(restored.tents), 6)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "存档加载失败，游戏已停止启动，以避免覆盖现有存档。",
+        ):
+            CampingPlazaEngine(db_path=self.db_path)
 
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
-        new_payload = json.loads(rows[0][1])
-        self.assertEqual(new_payload["snapshot_version"], CampingPlazaEngine.SNAPSHOT_VERSION)
-        self.assertEqual(new_payload["state"]["day"], 1)
+        current_payload = json.loads(rows[0][1])
+        self.assertEqual(current_payload["snapshot_version"], 999)
+        self.assertEqual(current_payload["state"]["day"], 88)
+        self.assertEqual(current_payload["state"]["balance"], 12345)
 
 
 class MissingDayCampsiteFieldFallbackTests(PersistenceTestCase):

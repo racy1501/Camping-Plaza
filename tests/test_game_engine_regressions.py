@@ -500,6 +500,26 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(result["turn"], 6)
         self.assertEqual(engine.state.food_stock, 0)
 
+    def test_turn5_clears_opening_food_gift_stock(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        engine.state.pending_turn_plan = None
+        for tent in engine.tents.values():
+            tent.next_breakdown_turn = 99999
+
+        self.assertEqual(
+            engine.state.food_stock,
+            CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(engine.state.food_stock, 0)
+
     def test_turn6_food_stock_survives_new_day_transition(self):
         engine = self._engine_for_plan(5)
         engine.state.food_stock = 4
@@ -517,6 +537,28 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(second["day"], 2)
         self.assertEqual(second["turn"], 1)
         self.assertEqual(engine.state.food_stock, 7)
+
+    def test_new_day_does_not_regrant_opening_food_gift(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        engine.state.pending_turn_plan = None
+        for tent in engine.tents.values():
+            tent.next_breakdown_turn = 99999
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                first = engine.advance_turn()
+
+        self.assertIn(engine._build_opening_food_gift_event(), first["events"])
+        self.assertEqual(first["turn"], 6)
+
+        second = engine.advance_turn()
+
+        self.assertEqual(second["day"], 2)
+        self.assertEqual(second["turn"], 1)
+        self.assertEqual(engine.state.food_stock, 0)
+        self.assertNotIn(engine._build_opening_food_gift_event(), second["events"])
 
 
 class RepairStateRecoveryTests(unittest.TestCase):
