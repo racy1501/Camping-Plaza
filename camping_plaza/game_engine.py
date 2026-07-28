@@ -98,6 +98,7 @@ class GameState:
     today_events: list = field(default_factory=list)
     decisions_left: int = 3
     day_campsite_groups_served: int = 0
+    food_stock: int = 0
 
     # 预定
     reservation: Optional[dict] = None  # 待处理的预定请求
@@ -528,6 +529,8 @@ class CampingPlazaEngine:
             if self.state.turn == 5:
                 self._process_turn5_day_guest_departures(result)
             self._handle_breakdowns(result)
+            if self.state.turn == 5:
+                self.state.food_stock = 0
             self.state.decisions_left = 3
 
             # 推进到下一回合
@@ -1507,6 +1510,7 @@ class CampingPlazaEngine:
             "active_npcs": safe_npcs,
             "reservation": safe_reservation,
             "decisions_left": self.state.decisions_left,
+            "food_stock": self.state.food_stock,
             "today_income": self.state.today_income
         }
 

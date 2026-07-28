@@ -302,6 +302,7 @@ def mcp_state():
         "balance": state["balance"],
         "reputation_rate": state["reputation_rate"],
         "decisions_left": state["decisions_left"],
+        "food_stock": state["food_stock"],
         "tents": {
             tid: {
                 "status": t["status"],

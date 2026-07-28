@@ -59,6 +59,7 @@ class FreshDatabaseTests(PersistenceTestCase):
         self.assertEqual(engine.state.day, 1)
         self.assertEqual(engine.state.turn, 1)
         self.assertEqual(engine.state.balance, 1000)
+        self.assertEqual(engine.state.food_stock, 0)
         # 快照表存在且仅一行
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
@@ -86,6 +87,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         }
         engine.state.today_events = ["测试事件A", "测试事件B"]
         engine.state.decisions_left = 1
+        engine.state.food_stock = 17
         engine.state.reservation = {
             "group_size": 3, "economic_level": 2,
             "spending_habit": 0, "temperament": 1, "tent_id": 5
@@ -158,6 +160,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(s.today_income["entertainment"], 80)
         self.assertEqual(s.today_events, ["测试事件A", "测试事件B"])
         self.assertEqual(s.decisions_left, 1)
+        self.assertEqual(s.food_stock, 17)
         self.assertEqual(s.reservation["group_size"], 3)
         self.assertEqual(s.reservation["economic_level"], 2)
         self.assertEqual(s.reservation["spending_habit"], 0)

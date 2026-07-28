@@ -476,6 +476,48 @@ class TurnPlanTests(unittest.TestCase):
         self.assertIsNone(engine.state.pending_turn_plan)
         self.assertFalse(engine.submit_turn_plan([], [])["success"])
 
+    def test_turn4_to_turn5_does_not_clear_food_stock(self):
+        engine = self._engine_for_plan(4)
+        engine.state.food_stock = 11
+        engine.submit_turn_plan([], [])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 5)
+        self.assertEqual(engine.state.food_stock, 11)
+
+    def test_turn5_to_turn6_clears_food_stock_after_business_wrap_up(self):
+        engine = self._engine_for_plan(5)
+        engine.state.food_stock = 13
+        engine.submit_turn_plan([], [])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(engine.state.food_stock, 0)
+
+    def test_turn6_food_stock_survives_new_day_transition(self):
+        engine = self._engine_for_plan(5)
+        engine.state.food_stock = 4
+        engine.submit_turn_plan([], [])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                first = engine.advance_turn()
+
+        self.assertEqual(first["turn"], 6)
+        engine.state.food_stock = 7
+
+        second = engine.advance_turn()
+
+        self.assertEqual(second["day"], 2)
+        self.assertEqual(second["turn"], 1)
+        self.assertEqual(engine.state.food_stock, 7)
+
 
 class RepairStateRecoveryTests(unittest.TestCase):
     """维修后帐篷状态恢复"""

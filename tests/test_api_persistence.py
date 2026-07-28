@@ -478,6 +478,13 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
 
 
 class McpTurnPlanTests(ApiPersistenceTestCase):
+    def test_mcp_state_exposes_food_stock(self):
+        self.engine.state.food_stock = 9
+
+        state = game_api.mcp_state()
+
+        self.assertEqual(state["food_stock"], 9)
+
     def test_mcp_state_exposes_turn_plan_flags_only(self):
         self.engine.state.turn = 2
 
