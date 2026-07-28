@@ -128,6 +128,28 @@ class CampingPlazaEngine:
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
     ENTERTAINMENT_BASE_PRICE = 40
+    DINING_SET_MENUS = {
+        "basic": {
+            "display_name": "基础套餐",
+            "price_per_person": 30,
+            "satisfaction_gain": 2,
+            "required_dining_level": 0,
+        },
+        "standard": {
+            "display_name": "中档套餐",
+            "price_per_person": 45,
+            "satisfaction_gain": 4,
+            "required_dining_level": 1,
+        },
+        "premium": {
+            "display_name": "高档套餐",
+            "price_per_person": 65,
+            "satisfaction_gain": 6,
+            "required_dining_level": 2,
+        },
+    }
+    DINING_SET_MENU_ORDER = ("basic", "standard", "premium")
+    ECONOMIC_LEVEL_TO_DINING_SET_MENU = {0: "basic", 1: "standard", 2: "premium"}
     FOOD_PACKAGES = {
         "small": {"name": "小包", "portions": 4, "price": 80},
         "medium": {"name": "中包", "portions": 8, "price": 150},
@@ -766,6 +788,10 @@ class CampingPlazaEngine:
                     facility.dining_spend_probability, npc.spending_habit
                 )
                 if random.random() < probability:
+                    menu_key = self._get_dining_set_menu_key(
+                        npc.economic_level, facility.level
+                    )
+                    menu = self.DINING_SET_MENUS[menu_key]
                     required_portions = npc.group_size
                     current_stock = self.state.food_stock
                     if current_stock < required_portions:
@@ -773,18 +799,21 @@ class CampingPlazaEngine:
                             f"{npc.group_size}人客人想在餐饮区用餐，但食材不足：需要{required_portions}份，当前只有{current_stock}份"
                         )
                         continue
-                    spend = self._get_dining_unit_revenue(npc) * npc.group_size
+                    spend = menu["price_per_person"] * npc.group_size
                     if spend <= 0:
                         continue
                     self.state.food_stock -= required_portions
                     self.state.balance += spend
                     self.state.today_income["dining"] += spend
                     npc.total_satisfaction = min(
-                        100, npc.total_satisfaction + facility.dining_satisfaction
+                        100, npc.total_satisfaction + menu["satisfaction_gain"]
                     )
                     self._mark_dining_consumed(npc)
                     result["events"].append(
-                        f"一组{npc.group_size}人在餐饮区消费，收入+{spend}"
+                        f"客组{npc.id}购买{menu['display_name']}，"
+                        f"{npc.group_size}人用餐，收入+{spend}，"
+                        f"消耗食材{required_portions}份，"
+                        f"整组满意度+{menu['satisfaction_gain']}"
                     )
 
     def _process_entertainment(self, result: dict):
@@ -1472,6 +1501,16 @@ class CampingPlazaEngine:
             npc.economic_level,
             facility.dining_income_multiplier
         )
+
+    def _get_target_dining_set_menu_key(self, economic_level: int) -> str:
+        return self.ECONOMIC_LEVEL_TO_DINING_SET_MENU.get(economic_level, "standard")
+
+    def _get_dining_set_menu_key(self, economic_level: int, dining_level: int) -> str:
+        target_key = self._get_target_dining_set_menu_key(economic_level)
+        max_available_level = min(dining_level, len(self.DINING_SET_MENU_ORDER) - 1)
+        target_index = self.DINING_SET_MENU_ORDER.index(target_key)
+        final_index = min(target_index, max_available_level)
+        return self.DINING_SET_MENU_ORDER[final_index]
 
     def _set_next_breakdown(self, tent: Tent):
         if not self._is_tent_unlocked(tent):
