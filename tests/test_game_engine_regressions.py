@@ -560,6 +560,160 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(engine.state.food_stock, 0)
         self.assertNotIn(engine._build_opening_food_gift_event(), second["events"])
 
+    def test_buy_food_package_is_turn_plan_decision_action(self):
+        self.assertEqual(
+            CampingPlazaEngine.TURN_PLAN_ACTIONS["buy_food_package"]["kind"],
+            "decision",
+        )
+
+    def test_turn_plan_food_package_actions_execute_in_order(self):
+        engine = self._engine_for_plan(2)
+        engine.state.balance = 230
+        engine.state.food_stock = 1
+
+        self.assertTrue(
+            engine.submit_turn_plan([], [
+                {"action": "buy_food_package", "package_key": "small"},
+                {"action": "buy_food_package", "package_key": "medium"},
+                {"action": "buy_food_package", "package_key": "large"},
+            ])["success"]
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
+            with mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+                with mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                                with mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                                    result = engine.advance_turn()
+
+        self.assertEqual(
+            [item["success"] for item in result["plan_execution"]["actions"]],
+            [True, True, False],
+        )
+        self.assertEqual(
+            engine.state.food_stock,
+            1
+            + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"]
+            + CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
+        self.assertEqual(engine.state.balance, 0)
+        self.assertEqual(engine.state.last_food_preorder_day, 0)
+
+    def test_turn5_planned_food_purchase_still_clears_on_turn6(self):
+        engine = self._engine_for_plan(5)
+        engine.state.balance = 999
+        engine.state.food_stock = 0
+        self.assertTrue(
+            engine.submit_turn_plan([], [
+                {"action": "buy_food_package", "package_key": "medium"}
+            ])["success"]
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(engine.state.food_stock, 0)
+
+
+class FoodPackagePurchaseTests(unittest.TestCase):
+    def test_shared_food_package_helper_uses_config(self):
+        engine = make_engine()
+
+        for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
+            engine.state.balance = 1000
+            engine.state.food_stock = 0
+
+            result = engine._buy_food_package(package_key)
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["package_key"], package_key)
+            self.assertEqual(result["portions"], package["portions"])
+            self.assertEqual(result["price"], package["price"])
+            self.assertEqual(engine.state.balance, 1000 - package["price"])
+            self.assertEqual(engine.state.food_stock, package["portions"])
+            self.assertIn(package["name"], result["message"])
+
+    def test_shared_food_package_helper_rejects_invalid_and_insufficient(self):
+        engine = make_engine()
+        engine.state.balance = 79
+        engine.state.food_stock = 3
+
+        insufficient = engine._buy_food_package("small")
+        self.assertFalse(insufficient["success"])
+        self.assertEqual(engine.state.balance, 79)
+        self.assertEqual(engine.state.food_stock, 3)
+
+        invalid = engine._buy_food_package("mega")
+        self.assertFalse(invalid["success"])
+        self.assertEqual(engine.state.balance, 79)
+        self.assertEqual(engine.state.food_stock, 3)
+
+    def test_turn6_food_preorder_only_succeeds_once_per_day(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 500
+        engine.state.decisions_left = 2
+        original_stock = engine.state.food_stock
+
+        first = engine.buy_food_package("small")
+        second = engine.buy_food_package("medium")
+
+        self.assertTrue(first["success"])
+        self.assertFalse(second["success"])
+        self.assertEqual(engine.state.decisions_left, 2)
+        self.assertEqual(engine.state.last_food_preorder_day, engine.state.day)
+        self.assertEqual(
+            engine.state.food_stock,
+            original_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
+        )
+
+    def test_turn6_failed_preorder_can_retry_with_cheaper_package(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 100
+        opening_stock = engine.state.food_stock
+
+        expensive = engine.buy_food_package("large")
+        self.assertFalse(expensive["success"])
+        self.assertEqual(engine.state.last_food_preorder_day, 0)
+
+        cheaper = engine.buy_food_package("small")
+        self.assertTrue(cheaper["success"])
+        self.assertEqual(engine.state.last_food_preorder_day, engine.state.day)
+        self.assertEqual(
+            engine.state.food_stock,
+            opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
+        )
+
+    def test_turn6_food_preorder_stock_survives_new_day_and_next_day_can_buy_again(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        opening_stock = engine.state.food_stock
+
+        first = engine.buy_food_package("small")
+        self.assertTrue(first["success"])
+        stock_after_first = engine.state.food_stock
+
+        engine._new_day()
+
+        self.assertEqual(engine.state.food_stock, stock_after_first)
+        self.assertEqual(engine.state.day, 2)
+        self.assertEqual(engine.state.turn, 1)
+
+        engine.state.turn = 6
+        second = engine.buy_food_package("small")
+
+        self.assertTrue(second["success"])
+        self.assertEqual(engine.state.last_food_preorder_day, 2)
+        self.assertEqual(
+            engine.state.food_stock,
+            opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"] * 2,
+        )
+
 
 class RepairStateRecoveryTests(unittest.TestCase):
     """维修后帐篷状态恢复"""

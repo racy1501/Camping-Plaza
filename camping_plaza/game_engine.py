@@ -99,6 +99,7 @@ class GameState:
     decisions_left: int = 3
     day_campsite_groups_served: int = 0
     food_stock: int = 0
+    last_food_preorder_day: int = 0
 
     # 预定
     reservation: Optional[dict] = None  # 待处理的预定请求
@@ -151,6 +152,11 @@ class CampingPlazaEngine:
         "improve_service": {
             "kind": "decision",
             "required": (),
+            "optional": (),
+        },
+        "buy_food_package": {
+            "kind": "decision",
+            "required": ("package_key",),
             "optional": (),
         },
     }
@@ -218,6 +224,9 @@ class CampingPlazaEngine:
                     return False, None, "invalid action payload"
         elif action_name == "repair_tent":
             if not isinstance(normalized.get("tent_id"), int):
+                return False, None, "invalid action payload"
+        elif action_name == "buy_food_package":
+            if not isinstance(normalized.get("package_key"), str):
                 return False, None, "invalid action payload"
 
         return True, normalized, ""
@@ -293,6 +302,8 @@ class CampingPlazaEngine:
             result = self.clean_tents(action_data.get("tent_ids"))
         elif action_name == "repair_tent":
             result = self.repair_tent(action_data["tent_id"], consume_decision=False)
+        elif action_name == "buy_food_package":
+            result = self._buy_food_package(action_data["package_key"])
         else:
             result = self.improve_service(consume_decision=False)
         return {
@@ -300,6 +311,40 @@ class CampingPlazaEngine:
             "success": bool(result.get("success")),
             "message": result.get("message", ""),
         }
+
+    def _buy_food_package(self, package_key: str) -> dict:
+        package = self.FOOD_PACKAGES.get(package_key)
+        if package is None:
+            return {"success": False, "message": "invalid food package"}
+
+        price = package["price"]
+        if self.state.balance < price:
+            return {"success": False, "message": f"余额不足，需要{price}金币"}
+
+        portions = package["portions"]
+        name = package["name"]
+        self.state.balance -= price
+        self.state.food_stock += portions
+        return {
+            "success": True,
+            "message": f"已购买{name}（{portions}份），花费{price}金币",
+            "package_key": package_key,
+            "portions": portions,
+            "price": price,
+        }
+
+    def buy_food_package(self, package_key: str) -> dict:
+        if self.state.turn_settled:
+            return {"success": False, "message": "本回合已经结算，请进入下一个回合"}
+        if self.state.turn != 6:
+            return {"success": False, "message": "食材预购只能在日终管理阶段（Turn 6）进行"}
+        if self.state.last_food_preorder_day == self.state.day:
+            return {"success": False, "message": "今天已经完成过食材预购"}
+
+        result = self._buy_food_package(package_key)
+        if result.get("success"):
+            self.state.last_food_preorder_day = self.state.day
+        return result
 
     def _execute_pending_turn_plan(self, result: dict):
         plan = self.state.pending_turn_plan

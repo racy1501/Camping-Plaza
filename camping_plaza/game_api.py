@@ -69,6 +69,34 @@ TURN_PLAN_IMMEDIATE_ACTIONS = {
 }
 
 
+def _food_package_action_entries() -> list[dict]:
+    entries = []
+    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
+        entries.append({
+            "action": "buy_food_package",
+            "params": {"package_key": package_key},
+            "description": (
+                f"购买{package['name']}（{package['portions']}份，{package['price']}金币）"
+            )
+        })
+    return entries
+
+
+def _food_package_plan_description() -> str:
+    package_bits = []
+    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
+        package_bits.append(
+            f"{package_key}={package['name']}({package['portions']}份/{package['price']}金币)"
+        )
+    package_text = "，".join(package_bits)
+    return (
+        "提交下一营业Turn计划（free_actions支持clean_tents，"
+        "actions支持repair_tent、improve_service、buy_food_package，"
+        "buy_food_package使用package_key，"
+        f"可选包：{package_text}，actions最多3项）"
+    )
+
+
 def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
     normalized = []
     for item in actions:
@@ -265,6 +293,12 @@ def do_action(req: ActionRequest):
                 tent_ids = [int(tid) for tid in raw_ids]
         result = eng.clean_tents(tent_ids)
 
+    elif req.action == "buy_food_package":
+        package_key = req.params.get("package_key") if req.params else None
+        if package_key is None:
+            raise HTTPException(400, "缺少package_key参数")
+        result = eng.buy_food_package(str(package_key))
+
     elif req.action == "advance_turn":
         result = eng.advance_turn()
 
@@ -363,7 +397,7 @@ def mcp_available_actions():
             actions.append({
                 "action": "submit_turn_plan",
                 "params": {"free_actions": [], "actions": []},
-                "description": "提交下一营业Turn计划（free_actions支持clean_tents，actions最多3项）"
+                "description": _food_package_plan_description()
             })
         if plan_submitted:
             actions.append({
@@ -429,6 +463,8 @@ def mcp_available_actions():
             "params": {"action": "maintain"},
             "description": "打理绿化"
         })
+        if eng.state.last_food_preorder_day != eng.state.day:
+            actions.extend(_food_package_action_entries())
         actions.append({"action": "new_day", "description": "结束今天，开始新一天"})
 
     return {"available_actions": actions}

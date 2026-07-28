@@ -154,6 +154,12 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             self._action("manage_greenery", {"action": "maintain"})
             save_mock.assert_called_once()
 
+    def test_buy_food_package_saves(self):
+        self.engine.state.turn = 6
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            self._action("buy_food_package", {"package_key": "small"})
+            save_mock.assert_called_once()
+
     def test_advance_turn_action_saves(self):
         with mock.patch.object(self.engine, "save_state") as save_mock:
             self._action("advance_turn")
@@ -305,6 +311,24 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertLess(restored.state.balance, initial_balance)
 
 
+    def test_turn6_food_preorder_recovery_blocks_repeat_same_day(self):
+        self.engine.state.turn = 6
+        opening_stock = self.engine.state.food_stock
+
+        result = self._action("buy_food_package", {"package_key": "medium"})
+        self.assertTrue(result["success"])
+
+        restored = self._new_engine_from_db()
+        self.assertEqual(
+            restored.state.food_stock,
+            opening_stock + CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
+        )
+        self.assertEqual(restored.state.last_food_preorder_day, restored.state.day)
+
+        repeat = restored.buy_food_package("small")
+        self.assertFalse(repeat["success"])
+
+
 class IsolationTests(ApiPersistenceTestCase):
     """测试隔离性"""
 
@@ -443,6 +467,13 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
             "请通过 /api/turn/plan 安排下一营业Turn行动。"
         )
 
+    def test_business_turn_direct_food_purchase_is_rejected(self):
+        self.engine.state.turn = 2
+
+        result = self._action("buy_food_package", {"package_key": "small"})
+
+        self.assertFalse(result["success"])
+
     def test_turn6_immediate_management_actions_still_work(self):
         self.engine.state.turn = 6
         self.engine.tents[1].status = "broken"
@@ -452,6 +483,20 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(self.engine.tents[1].status, "available")
+
+    def test_turn6_buy_food_package_works_once(self):
+        self.engine.state.turn = 6
+        opening_stock = self.engine.state.food_stock
+
+        first = self._action("buy_food_package", {"package_key": "small"})
+        second = self._action("buy_food_package", {"package_key": "medium"})
+
+        self.assertTrue(first["success"])
+        self.assertFalse(second["success"])
+        self.assertEqual(
+            self.engine.state.food_stock,
+            opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
+        )
 
     def test_reservation_actions_still_work(self):
         self.engine.state.turn = 2
@@ -545,6 +590,41 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertNotIn("submit_turn_plan", action_names)
         self.assertIn("repair_tent", action_names)
         self.assertIn("clean_tents", action_names)
+
+    def test_mcp_actions_expose_turn6_food_preorder_packages(self):
+        self.engine.state.turn = 6
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        food_actions = [item for item in actions if item["action"] == "buy_food_package"]
+
+        self.assertEqual(len(food_actions), 3)
+        self.assertEqual(
+            sorted(item["params"]["package_key"] for item in food_actions),
+            sorted(CampingPlazaEngine.FOOD_PACKAGES.keys()),
+        )
+        for item in food_actions:
+            package = CampingPlazaEngine.FOOD_PACKAGES[item["params"]["package_key"]]
+            self.assertIn(package["name"], item["description"])
+            self.assertIn(str(package["portions"]), item["description"])
+            self.assertIn(str(package["price"]), item["description"])
+
+    def test_mcp_actions_hide_turn6_food_preorder_after_success(self):
+        self.engine.state.turn = 6
+        self._action("buy_food_package", {"package_key": "small"})
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        action_names = [item["action"] for item in actions]
+
+        self.assertNotIn("buy_food_package", action_names)
+
+    def test_mcp_plan_description_mentions_food_purchase_action(self):
+        self.engine.state.turn = 2
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(item for item in actions if item["action"] == "submit_turn_plan")
+
+        self.assertIn("buy_food_package", submit_action["description"])
+        self.assertIn("package_key", submit_action["description"])
 
 if __name__ == "__main__":
     unittest.main()
