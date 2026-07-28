@@ -20,7 +20,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
 
 import game_api
-from game_engine import CampingPlazaEngine
+from game_engine import CampingPlazaEngine, NPCGroup
 
 
 class ApiPersistenceTestCase(unittest.TestCase):
@@ -494,6 +494,24 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertFalse(state["planning_available"])
         self.assertTrue(state["plan_submitted"])
         self.assertEqual(state["plan_target_turn"], 2)
+        self.assertEqual(state["next_turn_checkout_tents"], [])
+
+    def test_mcp_state_exposes_next_turn_checkout_tents(self):
+        self.engine.state.turn = 2
+        guest = NPCGroup(
+            id=self.engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            checkout_turn=2,
+        )
+        self.engine.npc_pool.append(guest)
+        self.engine.tents[1].status = "occupied"
+        self.engine.tents[1].occupied_by = guest.id
+
+        state = game_api.mcp_state()
+        self.assertEqual(state["next_turn_checkout_tents"], [1])
+        self.assertNotIn("checkout_turn", json.dumps(state, ensure_ascii=False))
 
     def test_mcp_actions_switch_between_plan_and_turn6_management(self):
         self.engine.state.turn = 2

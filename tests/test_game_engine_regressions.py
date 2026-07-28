@@ -841,6 +841,176 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         self.assertTrue(any("晨间结算了1条昨日评价" in event for event in result["events"]))
 
 
+class CheckoutTurnTests(unittest.TestCase):
+    def test_direct_overnight_checkin_assigns_checkout_turn_once(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+        )
+
+        with mock.patch("game_engine.random.random", return_value=0.2):
+            engine._checkin_npc(guest, 1, {"events": []})
+
+        self.assertEqual(guest.checkout_turn, 1)
+        with mock.patch("game_engine.random.random", return_value=0.8):
+            self.assertEqual(engine._ensure_checkout_turn(guest), 1)
+        self.assertEqual(guest.checkout_turn, 1)
+
+    def test_reserved_guest_checkin_assigns_checkout_turn(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.reservation = {
+            "group_size": 1,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }
+        engine.state.reserved_tent_id = 1
+        engine.state.reserved_tent_day = 2
+        engine.tents[1].status = "reserved"
+
+        with mock.patch("game_engine.random.random", return_value=0.8):
+            engine._process_reservations({"events": []})
+
+        reserved_npcs = [n for n in engine.npc_pool if n.is_reserved]
+        self.assertEqual(len(reserved_npcs), 1)
+        self.assertEqual(reserved_npcs[0].checkout_turn, 2)
+
+    def test_day_to_overnight_assigns_checkout_turn(self):
+        engine = make_engine()
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="dining",
+            total_satisfaction=90,
+        )
+        engine.npc_pool.append(guest)
+
+        with mock.patch("game_engine.random.random", return_value=0.2):
+            engine._process_day_to_overnight({"events": []})
+
+        self.assertEqual(guest.visit_type, "overnight")
+        self.assertEqual(guest.checkout_turn, 1)
+
+    def test_existing_checkout_turn_is_not_overwritten(self):
+        engine = make_engine()
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            checkout_turn=2,
+        )
+        engine.npc_pool.append(npc)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            self.assertEqual(engine._ensure_checkout_turn(npc), 2)
+        self.assertEqual(npc.checkout_turn, 2)
+
+    def test_turn1_only_checks_out_checkout_turn_one(self):
+        engine = make_engine()
+        npc1 = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="overnight", location="tent_1", checkout_turn=1)
+        npc2 = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="overnight", location="tent_2", checkout_turn=2)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc1.id
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "occupied"
+        engine.tents[2].occupied_by = npc2.id
+        engine.npc_pool.extend([npc1, npc2])
+
+        engine._process_checkout_partial({"events": []})
+
+        self.assertTrue(npc1.has_left)
+        self.assertFalse(npc2.has_left)
+        self.assertEqual(engine.tents[1].status, "cleaning")
+        self.assertEqual(engine.tents[2].status, "occupied")
+
+    def test_turn2_only_checks_out_checkout_turn_two(self):
+        engine = make_engine()
+        npc1 = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="overnight", location="tent_1", checkout_turn=1, has_left=True)
+        npc2 = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="overnight", location="tent_2", checkout_turn=2)
+        engine.tents[1].status = "cleaning"
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "occupied"
+        engine.tents[2].occupied_by = npc2.id
+        engine.npc_pool.extend([npc1, npc2])
+
+        engine._process_checkout_all({"events": []})
+
+        self.assertTrue(npc2.has_left)
+        self.assertEqual(engine.tents[2].status, "cleaning")
+
+    def test_turn2_checkout_happens_before_planned_cleaning(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            checkout_turn=2,
+        )
+        engine.npc_pool.append(npc)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+        self.assertTrue(
+            engine.submit_turn_plan(
+                [{"action": "clean_tents", "tent_ids": [1]}],
+                [],
+            )["success"]
+        )
+
+        with mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
+            with mock.patch.object(CampingPlazaEngine, "_process_reservations"):
+                with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                        with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                            with mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                                result = engine.advance_turn()
+
+        self.assertEqual(result["plan_execution"]["free_actions"][0]["action"], "clean_tents")
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertTrue(npc.has_left)
+
+    def test_turn2_overdue_checkout_turn_one_still_checks_out(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        overdue = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            checkout_turn=1,
+        )
+        regular = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_2",
+            checkout_turn=2,
+        )
+        engine.npc_pool.extend([overdue, regular])
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = overdue.id
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "occupied"
+        engine.tents[2].occupied_by = regular.id
+
+        engine._process_checkout_all({"events": []})
+
+        self.assertTrue(overdue.has_left)
+        self.assertTrue(regular.has_left)
+        self.assertEqual(engine.tents[1].status, "cleaning")
+        self.assertEqual(engine.tents[2].status, "cleaning")
+
+
 class IncomeAndSpendingTagTests(unittest.TestCase):
     """隐藏标签对收入的影响范围"""
 
@@ -1482,6 +1652,27 @@ class McpLockingStateTests(unittest.TestCase):
 
         self.assertTrue(state["tents"][1]["unlocked"])
         self.assertFalse(state["tents"][2]["unlocked"])
+
+    def test_mcp_state_exposes_next_turn_checkout_tents_only_for_turn2_window(self):
+        self.engine.state.turn = 2
+        npc = NPCGroup(
+            id=self.engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="tent_1",
+            checkout_turn=2,
+        )
+        self.engine.npc_pool.append(npc)
+        self.engine.tents[1].status = "occupied"
+        self.engine.tents[1].occupied_by = npc.id
+
+        state = game_api.mcp_state()
+        self.assertEqual(state["next_turn_checkout_tents"], [1])
+        self.assertNotIn("active_npcs", state)
+
+        for turn in (3, 4, 5, 6):
+            self.engine.state.turn = turn
+            self.assertEqual(game_api.mcp_state()["next_turn_checkout_tents"], [])
 
     def test_mcp_actions_do_not_offer_locked_tent_upgrade(self):
         self.engine.state.turn = 6

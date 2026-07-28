@@ -53,6 +53,7 @@ class NPCGroup:
     visit_count: int = 1
     last_visit_day: int = 0
     last_dining_day: int = 0
+    checkout_turn: Optional[int] = None
 
     # 预定标记
     is_reserved: bool = False  # 是否是预定客
@@ -587,19 +588,15 @@ class CampingPlazaEngine:
 
     def _process_checkout_partial(self, result: dict):
         """Turn 1: 部分过夜客退房"""
-        overnight_npcs = [n for n in self.npc_pool
-                         if n.visit_type == "overnight" and not n.has_left
-                         and n.location.startswith("tent_")]
+        overnight_npcs = self._get_active_overnight_tent_npcs()
 
         for npc in overnight_npcs:
-            if random.random() < 0.5:
+            if self._ensure_checkout_turn(npc) == 1:
                 self._checkout_npc(npc, result)
 
     def _process_checkout_all(self, result: dict):
         """Turn 2: 剩余过夜客全部退房"""
-        overnight_npcs = [n for n in self.npc_pool
-                         if n.visit_type == "overnight" and not n.has_left
-                         and n.location.startswith("tent_")]
+        overnight_npcs = self._get_active_overnight_tent_npcs()
 
         for npc in overnight_npcs:
             self._checkout_npc(npc, result)
@@ -661,6 +658,7 @@ class CampingPlazaEngine:
         tent.occupied_by = npc.id
         npc.location = f"tent_{tent_id}"
         npc.arrival_turn = self.state.turn
+        self._ensure_checkout_turn(npc)
 
         if charge:
             income = self.TENT_PRICES[tent_id]
@@ -925,6 +923,7 @@ class CampingPlazaEngine:
                     tent.occupied_by = guest.id
                     guest.location = f"tent_{tent_id}"
                     guest.visit_type = "overnight"
+                    self._ensure_checkout_turn(guest)
                     income = self.TENT_PRICES[tent_id]
                     self.state.balance += income
                     self.state.today_income["accommodation"] += income
@@ -1344,6 +1343,36 @@ class CampingPlazaEngine:
             if npc.id == npc_id:
                 return npc
         return None
+
+    def _get_active_overnight_tent_npcs(self) -> list[NPCGroup]:
+        return [
+            npc for npc in self.npc_pool
+            if npc.visit_type == "overnight"
+            and not npc.has_left
+            and npc.location.startswith("tent_")
+        ]
+
+    def _ensure_checkout_turn(self, npc: NPCGroup) -> Optional[int]:
+        if (
+            npc.visit_type != "overnight"
+            or npc.has_left
+            or not npc.location.startswith("tent_")
+        ):
+            return None
+        if npc.checkout_turn in (1, 2):
+            return npc.checkout_turn
+        npc.checkout_turn = 1 if random.random() < 0.5 else 2
+        return npc.checkout_turn
+
+    def get_next_turn_checkout_tents(self) -> list[int]:
+        if self.state.turn != 2:
+            return []
+        tent_ids = {
+            int(npc.location.split("_")[1])
+            for npc in self._get_active_overnight_tent_npcs()
+            if npc.checkout_turn == 2
+        }
+        return sorted(tent_ids)
 
     def _has_consumed_dining_today(self, npc: NPCGroup) -> bool:
         return npc.last_dining_day == self.state.day

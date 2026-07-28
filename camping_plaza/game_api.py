@@ -321,6 +321,7 @@ def mcp_state():
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,
+        "next_turn_checkout_tents": eng.get_next_turn_checkout_tents(),
     }
 
 
