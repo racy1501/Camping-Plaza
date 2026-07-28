@@ -766,9 +766,17 @@ class CampingPlazaEngine:
                     facility.dining_spend_probability, npc.spending_habit
                 )
                 if random.random() < probability:
+                    required_portions = npc.group_size
+                    current_stock = self.state.food_stock
+                    if current_stock < required_portions:
+                        result["events"].append(
+                            f"{npc.group_size}人客人想在餐饮区用餐，但食材不足：需要{required_portions}份，当前只有{current_stock}份"
+                        )
+                        continue
                     spend = self._get_dining_unit_revenue(npc) * npc.group_size
                     if spend <= 0:
                         continue
+                    self.state.food_stock -= required_portions
                     self.state.balance += spend
                     self.state.today_income["dining"] += spend
                     npc.total_satisfaction = min(

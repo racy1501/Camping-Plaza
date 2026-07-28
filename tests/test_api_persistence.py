@@ -310,6 +310,28 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertEqual(restored.facilities["dining"].level, initial_level + 1)
         self.assertLess(restored.state.balance, initial_balance)
 
+    def test_dining_food_stock_recovery(self):
+        guest = NPCGroup(
+            id=self.engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            location="dining",
+            economic_level=1,
+            spending_habit=1,
+            total_satisfaction=60,
+        )
+        self.engine.npc_pool.append(guest)
+        self.engine.state.food_stock = 2
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            self.engine._process_dining({"events": []})
+        self.assertTrue(self.engine.save_state())
+
+        restored = self._new_engine_from_db()
+        self.assertEqual(restored.state.food_stock, 0)
+        self.assertEqual(restored.state.today_income["dining"], 60)
+        self.assertEqual(restored.npc_pool[0].last_dining_day, restored.state.day)
+
 
     def test_turn6_food_preorder_recovery_blocks_repeat_same_day(self):
         self.engine.state.turn = 6
