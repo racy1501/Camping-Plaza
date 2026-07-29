@@ -38,7 +38,7 @@ class NPCGroup:
     group_size: int
     visit_type: str  # "day" | "overnight"
     arrival_turn: int = 0
-    location: str = "gate"  # gate, tent_1-6, dining, entertainment, leaving
+    location: str = "gate"  # gate, campsite, tent_1-6, dining, entertainment, leaving
     total_satisfaction: int = 60
     has_left: bool = False
     review_left: bool = False
@@ -245,6 +245,28 @@ class CampingPlazaEngine:
             "tent_id": tent_id,
         }
 
+    def _build_dining_planned_action(self, entry: dict) -> Optional[dict]:
+        facility = self.facilities["dining"]
+        probability = self._calc_spend_probability(
+            facility.dining_spend_probability,
+            entry["spending_habit"],
+        )
+        if random.random() >= probability:
+            return None
+        return {
+            "action": "dining",
+            "planned_turn": entry["arrival_turn"],
+            "preferred_menu": self._get_target_dining_set_menu_key(
+                entry["economic_level"]
+            ),
+            "status": "pending",
+        }
+
+    def _append_planned_actions(self, entry: dict):
+        dining_action = self._build_dining_planned_action(entry)
+        if dining_action is not None:
+            entry["planned_actions"].append(dining_action)
+
     def _find_arrival_plan_entry(
         self,
         *,
@@ -324,9 +346,9 @@ class CampingPlazaEngine:
         for index, guest in enumerate(natural_guests):
             arrival_turn = arrival_turns[index % len(arrival_turns)]
             source = "natural_day" if guest.visit_type == "day" else "natural_overnight"
-            planned_entries.append(
-                self._build_arrival_plan_entry(guest, arrival_turn, source)
-            )
+            entry = self._build_arrival_plan_entry(guest, arrival_turn, source)
+            self._append_planned_actions(entry)
+            planned_entries.append(entry)
 
         if (
             self.state.reservation is not None
@@ -345,14 +367,14 @@ class CampingPlazaEngine:
             reserved_guest.economic_level = self.state.reservation.get("economic_level", 1)
             reserved_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
             reserved_guest.temperament = self.state.reservation.get("temperament", 1)
-            planned_entries.append(
-                self._build_arrival_plan_entry(
-                    reserved_guest,
-                    2,
-                    "reservation",
-                    tent_id=self.state.reserved_tent_id,
-                )
+            entry = self._build_arrival_plan_entry(
+                reserved_guest,
+                2,
+                "reservation",
+                tent_id=self.state.reserved_tent_id,
             )
+            self._append_planned_actions(entry)
+            planned_entries.append(entry)
 
         self.state.today_arrival_plan = planned_entries
         self.state.today_arrival_plan_day = self.state.day
@@ -896,7 +918,7 @@ class CampingPlazaEngine:
                 guest.economic_level = entry["economic_level"]
                 guest.spending_habit = entry["spending_habit"]
                 guest.temperament = entry["temperament"]
-                guest.location = "dining" if random.random() < 0.5 else "entertainment"
+                guest.location = "campsite"
                 guest.arrival_turn = self.state.turn
                 self.npc_pool.append(guest)
                 self.state.day_campsite_groups_served += 1
@@ -979,43 +1001,77 @@ class CampingPlazaEngine:
     def _process_dining(self, result: dict):
         """处理餐饮消费"""
         facility = self.facilities["dining"]
-        for npc in self.npc_pool:
-            if npc.has_left:
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
                 continue
-            if npc.location == "dining":
-                if self._has_consumed_dining_today(npc):
+            for action in entry.get("planned_actions", []):
+                if action.get("action") != "dining":
                     continue
-                probability = self._calc_spend_probability(
-                    facility.dining_spend_probability, npc.spending_habit
+                if action.get("status") != "pending":
+                    continue
+                if action.get("planned_turn") != self.state.turn:
+                    continue
+                if entry.get("arrival_status") != "arrived":
+                    action["status"] = "skipped"
+                    action["result"] = "not_arrived"
+                    continue
+
+                npc = self._find_npc(entry["npc_id"])
+                if npc is None:
+                    action["status"] = "skipped"
+                    action["result"] = "missing_npc"
+                    continue
+                if npc.has_left:
+                    action["status"] = "skipped"
+                    action["result"] = "npc_left"
+                    continue
+                if self._has_consumed_dining_today(npc):
+                    action["status"] = "skipped"
+                    action["result"] = "already_dined"
+                    continue
+
+                menu_key = self._get_dining_set_menu_key(
+                    entry["economic_level"], facility.level
                 )
-                if random.random() < probability:
-                    menu_key = self._get_dining_set_menu_key(
-                        npc.economic_level, facility.level
-                    )
-                    menu = self.DINING_SET_MENUS[menu_key]
-                    required_portions = npc.group_size
-                    current_stock = self.state.food_stock
-                    if current_stock < required_portions:
-                        result["events"].append(
-                            f"{npc.group_size}人客人想在餐饮区用餐，但食材不足：需要{required_portions}份，当前只有{current_stock}份"
-                        )
-                        continue
-                    spend = menu["price_per_person"] * npc.group_size
-                    if spend <= 0:
-                        continue
-                    self.state.food_stock -= required_portions
-                    self.state.balance += spend
-                    self.state.today_income["dining"] += spend
-                    npc.total_satisfaction = min(
-                        100, npc.total_satisfaction + menu["satisfaction_gain"]
-                    )
-                    self._mark_dining_consumed(npc)
+                menu = self.DINING_SET_MENUS[menu_key]
+                required_portions = npc.group_size
+                current_stock = self.state.food_stock
+                action["actual_menu"] = menu_key
+
+                if current_stock < required_portions:
+                    action["status"] = "failed"
+                    action["result"] = "insufficient_food"
                     result["events"].append(
-                        f"客组{npc.id}购买{menu['display_name']}，"
-                        f"{npc.group_size}人用餐，收入+{spend}，"
-                        f"消耗食材{required_portions}份，"
-                        f"整组满意度+{menu['satisfaction_gain']}"
+                        f"{npc.group_size}人客人想在餐饮区用餐，但食材不足：需要{required_portions}份，当前只有{current_stock}份"
                     )
+                    continue
+
+                spend = menu["price_per_person"] * npc.group_size
+                if spend <= 0:
+                    action["status"] = "skipped"
+                    action["result"] = "invalid_spend"
+                    continue
+
+                npc.location = "dining"
+                self.state.food_stock -= required_portions
+                self.state.balance += spend
+                self.state.today_income["dining"] += spend
+                npc.total_satisfaction = min(
+                    100, npc.total_satisfaction + menu["satisfaction_gain"]
+                )
+                self._mark_dining_consumed(npc)
+                action["status"] = "completed"
+                action["result"] = "success"
+                action["charged_amount"] = spend
+                action["food_portions_used"] = required_portions
+                action["satisfaction_gain"] = menu["satisfaction_gain"]
+                result["events"].append(
+                    f"客组{npc.id}购买{menu['display_name']}，"
+                    f"{npc.group_size}人用餐，收入+{spend}，"
+                    f"消耗食材{required_portions}份，"
+                    f"整组满意度+{menu['satisfaction_gain']}"
+                )
+        return
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
