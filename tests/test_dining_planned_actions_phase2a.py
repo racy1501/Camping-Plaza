@@ -115,15 +115,15 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                         "game_engine.random.random", side_effect=[0.0, 0.99]
                     ) as random_mock:
                         with mock.patch(
-                            "game_engine.random.randint", return_value=5
-                        ) as randint_mock:
+                            "game_engine.random.sample", return_value=[5]
+                        ) as sample_mock:
                             first = engine._ensure_today_arrival_plan()
                             second = engine._ensure_today_arrival_plan()
 
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(random_mock.call_count, 2)
-        self.assertEqual(randint_mock.call_count, 1)
+        self.assertEqual(sample_mock.call_count, 1)
         self.assertEqual(len(engine.state.today_arrival_plan), 2)
 
         first_entry = engine.state.today_arrival_plan[0]
@@ -137,44 +137,79 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         )
         self.assertEqual(first_entry["planned_actions"][0]["planned_turn"], 5)
 
-    def test_dining_action_planned_turn_uses_arrival_to_turn_five_window(self):
+    def test_single_planned_action_can_be_scheduled(self):
         engine = self._new_engine()
-        guest = self._make_guest(engine, 601, visit_type="day", spending_habit=2)
-        entry = self._make_entry(
-            engine,
-            guest,
-            arrival_turn=2,
-            source="natural_day",
-            arrival_status="pending",
+        actions = [{"action": "dining", "status": "pending"}]
+
+        with mock.patch("game_engine.random.shuffle") as shuffle_mock:
+            with mock.patch("game_engine.random.sample", return_value=[5]) as sample_mock:
+                scheduled = engine._schedule_planned_actions(2, actions)
+
+        self.assertIs(scheduled, actions)
+        self.assertEqual(actions[0]["planned_turn"], 5)
+        shuffle_mock.assert_called_once()
+        self.assertEqual(sample_mock.call_args.args, ([2, 3, 4, 5], 1))
+
+    def test_two_planned_actions_receive_distinct_turns(self):
+        engine = self._new_engine()
+        actions = [
+            {"action": "dining", "status": "pending"},
+            {"action": "mock_action", "status": "pending"},
+        ]
+
+        with mock.patch("game_engine.random.shuffle"):
+            with mock.patch("game_engine.random.sample", return_value=[2, 5]):
+                engine._schedule_planned_actions(2, actions)
+
+        self.assertEqual({action["planned_turn"] for action in actions}, {2, 5})
+        self.assertEqual(
+            [action["planned_turn"] for action in actions],
+            sorted(action["planned_turn"] for action in actions),
         )
 
-        with mock.patch("game_engine.random.random", return_value=0.0):
-            with mock.patch("game_engine.random.randint", return_value=5) as randint_mock:
-                action = engine._build_dining_planned_action(entry)
-
-        self.assertIsNotNone(action)
-        self.assertEqual(action["planned_turn"], 5)
-        self.assertNotEqual(action["planned_turn"], entry["arrival_turn"])
-        self.assertEqual(randint_mock.call_args.args, (2, 5))
-
-    def test_dining_action_planned_turn_respects_late_arrival_window(self):
+    def test_two_planned_actions_order_can_be_controlled(self):
         engine = self._new_engine()
-        guest = self._make_guest(engine, 602, visit_type="day", spending_habit=2)
-        entry = self._make_entry(
-            engine,
-            guest,
-            arrival_turn=4,
-            source="natural_day",
-            arrival_status="pending",
-        )
+        first_action = {"action": "dining", "status": "pending"}
+        second_action = {"action": "mock_action", "status": "pending"}
+        actions = [first_action, second_action]
 
-        with mock.patch("game_engine.random.random", return_value=0.0):
-            with mock.patch("game_engine.random.randint", return_value=5) as randint_mock:
-                action = engine._build_dining_planned_action(entry)
+        def reverse_actions(items):
+            items.reverse()
 
-        self.assertIsNotNone(action)
-        self.assertEqual(action["planned_turn"], 5)
-        self.assertEqual(randint_mock.call_args.args, (4, 5))
+        with mock.patch("game_engine.random.shuffle", side_effect=reverse_actions):
+            with mock.patch("game_engine.random.sample", return_value=[4, 2]):
+                engine._schedule_planned_actions(2, actions)
+
+        self.assertEqual(second_action["planned_turn"], 2)
+        self.assertEqual(first_action["planned_turn"], 4)
+        self.assertEqual(actions, [second_action, first_action])
+
+    def test_turn_four_arrival_limits_two_actions_to_turns_four_and_five(self):
+        engine = self._new_engine()
+        actions = [
+            {"action": "dining", "status": "pending"},
+            {"action": "mock_action", "status": "pending"},
+        ]
+
+        with mock.patch("game_engine.random.shuffle"):
+            with mock.patch("game_engine.random.sample", return_value=[5, 4]) as sample_mock:
+                engine._schedule_planned_actions(4, actions)
+
+        self.assertEqual({action["planned_turn"] for action in actions}, {4, 5})
+        self.assertEqual(sample_mock.call_args.args, ([4, 5], 2))
+
+    def test_scheduling_fails_when_actions_exceed_available_turns(self):
+        engine = self._new_engine()
+        actions = [
+            {"action": "a", "status": "pending"},
+            {"action": "b", "status": "pending"},
+            {"action": "c", "status": "pending"},
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError, "planned action count exceeds available turns"
+        ):
+            engine._schedule_planned_actions(4, actions)
 
     def test_day_guest_arrives_to_campsite_not_random_consumption_area(self):
         engine = self._new_engine()
@@ -499,7 +534,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             return_value={"day_guest_count": 0, "overnight_guest_count": 0},
         ):
             with mock.patch("game_engine.random.random", return_value=0.0):
-                with mock.patch("game_engine.random.randint", return_value=2):
+                with mock.patch("game_engine.random.sample", return_value=[2]):
                     self.assertTrue(engine._ensure_today_arrival_plan())
 
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
@@ -572,7 +607,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             return_value={"day_guest_count": 0, "overnight_guest_count": 0},
         ):
             with mock.patch("game_engine.random.random", return_value=0.0):
-                with mock.patch("game_engine.random.randint", return_value=2):
+                with mock.patch("game_engine.random.sample", return_value=[2]):
                     self.assertTrue(engine._ensure_today_arrival_plan())
 
         plan_entry = engine.state.today_arrival_plan[0]

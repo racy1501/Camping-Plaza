@@ -245,10 +245,26 @@ class CampingPlazaEngine:
             "tent_id": tent_id,
         }
 
-    def _schedule_planned_turn(self, arrival_turn: int, latest_turn: int = 5) -> int:
+    def _schedule_planned_actions(
+        self, arrival_turn: int, planned_actions: list[dict], latest_turn: int = 5
+    ) -> list[dict]:
         if arrival_turn > latest_turn:
             raise ValueError("arrival_turn cannot be later than latest_turn")
-        return random.randint(arrival_turn, latest_turn)
+        if not planned_actions:
+            return planned_actions
+        available_turns = list(range(arrival_turn, latest_turn + 1))
+        if len(planned_actions) > len(available_turns):
+            raise ValueError("planned action count exceeds available turns")
+
+        scheduled_actions = list(planned_actions)
+        random.shuffle(scheduled_actions)
+        scheduled_turns = sorted(
+            random.sample(available_turns, len(scheduled_actions))
+        )
+        for action, planned_turn in zip(scheduled_actions, scheduled_turns):
+            action["planned_turn"] = planned_turn
+        planned_actions.sort(key=lambda action: action["planned_turn"])
+        return planned_actions
 
     def _build_dining_planned_action(self, entry: dict) -> Optional[dict]:
         facility = self.facilities["dining"]
@@ -260,7 +276,6 @@ class CampingPlazaEngine:
             return None
         return {
             "action": "dining",
-            "planned_turn": self._schedule_planned_turn(entry["arrival_turn"]),
             "preferred_menu": self._get_target_dining_set_menu_key(
                 entry["economic_level"]
             ),
@@ -271,6 +286,9 @@ class CampingPlazaEngine:
         dining_action = self._build_dining_planned_action(entry)
         if dining_action is not None:
             entry["planned_actions"].append(dining_action)
+        self._schedule_planned_actions(
+            entry["arrival_turn"], entry["planned_actions"]
+        )
 
     def _find_arrival_plan_entry(
         self,
