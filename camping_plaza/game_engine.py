@@ -245,6 +245,11 @@ class CampingPlazaEngine:
             "tent_id": tent_id,
         }
 
+    def _schedule_planned_turn(self, arrival_turn: int, latest_turn: int = 5) -> int:
+        if arrival_turn > latest_turn:
+            raise ValueError("arrival_turn cannot be later than latest_turn")
+        return random.randint(arrival_turn, latest_turn)
+
     def _build_dining_planned_action(self, entry: dict) -> Optional[dict]:
         facility = self.facilities["dining"]
         probability = self._calc_spend_probability(
@@ -255,7 +260,7 @@ class CampingPlazaEngine:
             return None
         return {
             "action": "dining",
-            "planned_turn": entry["arrival_turn"],
+            "planned_turn": self._schedule_planned_turn(entry["arrival_turn"]),
             "preferred_menu": self._get_target_dining_set_menu_key(
                 entry["economic_level"]
             ),
