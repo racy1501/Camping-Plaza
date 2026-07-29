@@ -112,7 +112,8 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                     return_value=guest_b,
                 ):
                     with mock.patch(
-                        "game_engine.random.random", side_effect=[0.0, 0.99]
+                        "game_engine.random.random",
+                        side_effect=[0.0, 0.99, 0.99, 0.99, 0.99, 0.99],
                     ) as random_mock:
                         with mock.patch(
                             "game_engine.random.sample", return_value=[5]
@@ -122,7 +123,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
 
         self.assertTrue(first)
         self.assertFalse(second)
-        self.assertEqual(random_mock.call_count, 2)
+        self.assertEqual(random_mock.call_count, 6)
         self.assertEqual(sample_mock.call_count, 1)
         self.assertEqual(len(engine.state.today_arrival_plan), 2)
 
@@ -533,7 +534,9 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             "_calculate_daily_visitor_demand",
             return_value={"day_guest_count": 0, "overnight_guest_count": 0},
         ):
-            with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch(
+                "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
+            ):
                 with mock.patch("game_engine.random.sample", return_value=[2]):
                     self.assertTrue(engine._ensure_today_arrival_plan())
 
@@ -606,7 +609,9 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             "_calculate_daily_visitor_demand",
             return_value={"day_guest_count": 0, "overnight_guest_count": 0},
         ):
-            with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch(
+                "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
+            ):
                 with mock.patch("game_engine.random.sample", return_value=[2]):
                     self.assertTrue(engine._ensure_today_arrival_plan())
 

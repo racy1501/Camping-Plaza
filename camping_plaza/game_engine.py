@@ -131,6 +131,9 @@ class CampingPlazaEngine:
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
     ENTERTAINMENT_BASE_PRICE = 40
+    DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.55, 1: 0.70, 2: 0.85}
+    PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
+    FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY = 0.50
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -267,10 +270,8 @@ class CampingPlazaEngine:
         return planned_actions
 
     def _build_dining_planned_action(self, entry: dict) -> Optional[dict]:
-        facility = self.facilities["dining"]
-        probability = self._calc_spend_probability(
-            facility.dining_spend_probability,
-            entry["spending_habit"],
+        probability = self.DINING_PLANNED_ACTION_PROBABILITIES.get(
+            entry["spending_habit"], self.DINING_PLANNED_ACTION_PROBABILITIES[1]
         )
         if random.random() >= probability:
             return None
@@ -282,10 +283,44 @@ class CampingPlazaEngine:
             "status": "pending",
         }
 
+    def _build_paid_entertainment_planned_action(self, entry: dict) -> Optional[dict]:
+        probability = self.PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES.get(
+            entry["spending_habit"],
+            self.PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES[1],
+        )
+        if random.random() >= probability:
+            return None
+        return {
+            "action": "paid_entertainment",
+            "status": "pending",
+        }
+
+    def _build_free_entertainment_planned_action(self) -> Optional[dict]:
+        if random.random() >= self.FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY:
+            return None
+        return {
+            "action": "free_entertainment",
+            "status": "pending",
+        }
+
     def _append_planned_actions(self, entry: dict):
+        entry["planned_actions"].clear()
+        charged_actions = []
         dining_action = self._build_dining_planned_action(entry)
         if dining_action is not None:
-            entry["planned_actions"].append(dining_action)
+            charged_actions.append(dining_action)
+        paid_entertainment_action = self._build_paid_entertainment_planned_action(entry)
+        if paid_entertainment_action is not None:
+            charged_actions.append(paid_entertainment_action)
+        free_entertainment_action = self._build_free_entertainment_planned_action()
+
+        entry["planned_actions"].extend(charged_actions)
+        available_turn_count = 5 - entry["arrival_turn"] + 1
+        if (
+            free_entertainment_action is not None
+            and len(entry["planned_actions"]) < available_turn_count
+        ):
+            entry["planned_actions"].append(free_entertainment_action)
         self._schedule_planned_actions(
             entry["arrival_turn"], entry["planned_actions"]
         )
