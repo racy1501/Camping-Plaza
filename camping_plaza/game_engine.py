@@ -164,7 +164,7 @@ class CampingPlazaEngine:
     OPENING_FOOD_GIFT_PACKAGE = "medium"
 
     TENT_UPGRADE_COST = [0, 500, 1200, 2500]
-    FACILITY_UPGRADE_COST = [0, 400, 1000, 2000]
+    FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
     TURN_PLAN_ACTIONS = {
         "clean_tents": {
@@ -1594,8 +1594,8 @@ class CampingPlazaEngine:
         if not facility:
             return {"success": False, "message": "设施不存在"}
 
-        # 修复：绿化最高只能升级到Lv2，餐饮/娱乐维持Lv3
-        max_level = 2 if facility_name == "greenery" else 3
+        # 餐饮/娱乐/绿化统一最高 Lv2
+        max_level = 2
         if facility.level >= max_level:
             return {"success": False, "message": "无法升级"}
 

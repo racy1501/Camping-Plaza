@@ -310,6 +310,18 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertEqual(restored.facilities["dining"].level, initial_level + 1)
         self.assertLess(restored.state.balance, initial_balance)
 
+    def test_entertainment_upgrade_recovery(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 99999
+        initial_level = self.engine.facilities["entertainment"].level
+        initial_balance = self.engine.state.balance
+
+        self._action("upgrade_facility", {"facility_name": "entertainment"})
+
+        restored = self._new_engine_from_db()
+        self.assertEqual(restored.facilities["entertainment"].level, initial_level + 1)
+        self.assertLess(restored.state.balance, initial_balance)
+
     def test_dining_food_stock_recovery(self):
         guest = NPCGroup(
             id=self.engine._next_npc_id(),
@@ -589,6 +601,50 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertEqual(state["next_turn_checkout_tents"], [1])
         self.assertNotIn("checkout_turn", json.dumps(state, ensure_ascii=False))
 
+    def test_dining_upgrade_reaches_lv2_and_then_stops_without_charge(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 99999
+
+        first = self._action("upgrade_facility", {"facility_name": "dining"})
+        second = self._action("upgrade_facility", {"facility_name": "dining"})
+        balance_before_third = self.engine.state.balance
+        third = self._action("upgrade_facility", {"facility_name": "dining"})
+
+        self.assertTrue(first["success"])
+        self.assertTrue(second["success"])
+        self.assertFalse(third["success"])
+        self.assertEqual(self.engine.facilities["dining"].level, 2)
+        self.assertEqual(self.engine.state.balance, 99999 - 400 - 1000)
+        self.assertEqual(self.engine.state.balance, balance_before_third)
+
+    def test_entertainment_upgrade_reaches_lv2_and_then_stops_without_charge(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 99999
+
+        first = self._action("upgrade_facility", {"facility_name": "entertainment"})
+        second = self._action("upgrade_facility", {"facility_name": "entertainment"})
+        balance_before_third = self.engine.state.balance
+        third = self._action("upgrade_facility", {"facility_name": "entertainment"})
+
+        self.assertTrue(first["success"])
+        self.assertTrue(second["success"])
+        self.assertFalse(third["success"])
+        self.assertEqual(self.engine.facilities["entertainment"].level, 2)
+        self.assertEqual(self.engine.state.balance, 99999 - 400 - 1000)
+        self.assertEqual(self.engine.state.balance, balance_before_third)
+
+    def test_greenery_lv2_upgrade_still_fails_without_charge(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 99999
+        self.engine.facilities["greenery"].level = 2
+        balance_before = self.engine.state.balance
+
+        result = self._action("upgrade_facility", {"facility_name": "greenery"})
+
+        self.assertFalse(result["success"])
+        self.assertEqual(self.engine.facilities["greenery"].level, 2)
+        self.assertEqual(self.engine.state.balance, balance_before)
+
     def test_mcp_actions_switch_between_plan_and_turn6_management(self):
         self.engine.state.turn = 2
         actions = game_api.mcp_available_actions()["available_actions"]
@@ -614,6 +670,19 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertNotIn("submit_turn_plan", action_names)
         self.assertIn("repair_tent", action_names)
         self.assertIn("clean_tents", action_names)
+
+    def test_mcp_actions_hide_facility_upgrades_at_lv2(self):
+        self.engine.state.turn = 6
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+        self.engine.facilities["greenery"].level = 2
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        upgrade_facility_actions = [
+            item for item in actions if item["action"] == "upgrade_facility"
+        ]
+
+        self.assertEqual(upgrade_facility_actions, [])
 
     def test_mcp_actions_expose_turn6_food_preorder_packages(self):
         self.engine.state.turn = 6

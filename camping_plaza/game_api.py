@@ -449,8 +449,8 @@ def mcp_available_actions():
                 })
 
         for name, f in state["facilities"].items():
-            # 绿化最高 Lv2，其他设施最高 Lv3
-            max_level = 2 if name == "greenery" else 3
+            # 所有设施统一最高 Lv2
+            max_level = 2
             if f["level"] < max_level:
                 actions.append({
                     "action": "upgrade_facility",
