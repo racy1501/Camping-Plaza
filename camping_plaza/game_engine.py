@@ -131,7 +131,7 @@ class CampingPlazaEngine:
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
     ENTERTAINMENT_BASE_PRICE = 40
-    DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.55, 1: 0.70, 2: 0.85}
+    DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.40, 1: 0.55, 2: 0.70}
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
     FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY = 0.50
     DINING_SET_MENUS = {
@@ -155,7 +155,11 @@ class CampingPlazaEngine:
         },
     }
     DINING_SET_MENU_ORDER = ("basic", "standard", "premium")
-    ECONOMIC_LEVEL_TO_DINING_SET_MENU = {0: "basic", 1: "standard", 2: "premium"}
+    DINING_SET_MENU_WEIGHTS = {
+        0: {"basic": 60, "standard": 30, "premium": 10},
+        1: {"basic": 30, "standard": 50, "premium": 20},
+        2: {"basic": 20, "standard": 30, "premium": 50},
+    }
     FOOD_PACKAGES = {
         "small": {"name": "小包", "portions": 4, "price": 80},
         "medium": {"name": "中包", "portions": 8, "price": 150},
@@ -277,8 +281,11 @@ class CampingPlazaEngine:
             return None
         return {
             "action": "dining",
-            "preferred_menu": self._get_target_dining_set_menu_key(
-                entry["economic_level"]
+            "menu_key": self._choose_weighted_unlocked_tier_key(
+                self.facilities["dining"].level,
+                entry["economic_level"],
+                self.DINING_SET_MENU_ORDER,
+                self.DINING_SET_MENU_WEIGHTS,
             ),
             "status": "pending",
         }
@@ -1092,13 +1099,14 @@ class CampingPlazaEngine:
                     action["result"] = "already_dined"
                     continue
 
-                menu_key = self._get_dining_set_menu_key(
-                    entry["economic_level"], facility.level
-                )
+                menu_key = action.get("menu_key")
+                if menu_key not in self.DINING_SET_MENUS:
+                    action["status"] = "skipped"
+                    action["result"] = "invalid_menu"
+                    continue
                 menu = self.DINING_SET_MENUS[menu_key]
                 required_portions = npc.group_size
                 current_stock = self.state.food_stock
-                action["actual_menu"] = menu_key
 
                 if current_stock < required_portions:
                     action["status"] = "failed"
@@ -1803,15 +1811,20 @@ class CampingPlazaEngine:
             facility.dining_income_multiplier
         )
 
-    def _get_target_dining_set_menu_key(self, economic_level: int) -> str:
-        return self.ECONOMIC_LEVEL_TO_DINING_SET_MENU.get(economic_level, "standard")
-
-    def _get_dining_set_menu_key(self, economic_level: int, dining_level: int) -> str:
-        target_key = self._get_target_dining_set_menu_key(economic_level)
-        max_available_level = min(dining_level, len(self.DINING_SET_MENU_ORDER) - 1)
-        target_index = self.DINING_SET_MENU_ORDER.index(target_key)
-        final_index = min(target_index, max_available_level)
-        return self.DINING_SET_MENU_ORDER[final_index]
+    def _choose_weighted_unlocked_tier_key(
+        self,
+        facility_level: int,
+        economic_level: int,
+        tier_order: tuple[str, ...],
+        tier_weight_table: dict[int, dict[str, int]],
+    ) -> str:
+        max_index = min(max(facility_level, 0), len(tier_order) - 1)
+        unlocked_tier_keys = list(tier_order[: max_index + 1])
+        weight_map = tier_weight_table.get(economic_level, tier_weight_table[1])
+        unlocked_weights = [weight_map.get(tier_key, 0) for tier_key in unlocked_tier_keys]
+        if not unlocked_tier_keys or not any(weight > 0 for weight in unlocked_weights):
+            raise ValueError("no selectable unlocked tiers")
+        return random.choices(unlocked_tier_keys, weights=unlocked_weights, k=1)[0]
 
     def _set_next_breakdown(self, tent: Tent):
         if not self._is_tent_unlocked(tent):

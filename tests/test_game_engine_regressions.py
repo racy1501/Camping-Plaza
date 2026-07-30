@@ -1391,7 +1391,7 @@ class DiningRulesTests(unittest.TestCase):
         npc,
         *,
         planned_turn=None,
-        preferred_menu=None,
+        menu_key=None,
         arrival_status="arrived",
         status="pending",
     ):
@@ -1404,10 +1404,15 @@ class DiningRulesTests(unittest.TestCase):
         action = {
             "action": "dining",
             "planned_turn": planned_turn if planned_turn is not None else engine.state.turn,
-            "preferred_menu": (
-                preferred_menu
-                if preferred_menu is not None
-                else engine._get_target_dining_set_menu_key(npc.economic_level)
+            "menu_key": (
+                menu_key
+                if menu_key is not None
+                else engine.DINING_SET_MENU_ORDER[
+                    min(
+                        max(engine.facilities["dining"].level, 0),
+                        max(0, min(npc.economic_level, len(engine.DINING_SET_MENU_ORDER) - 1)),
+                    )
+                ]
             ),
             "status": status,
         }
@@ -1690,9 +1695,12 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(result["income"]["dining"], 30)
 
     def test_dining_failure_does_not_block_turn_progression(self):
-        engine, _npc = self._make_dining_npc()
+        engine, npc = self._make_dining_npc(group_size=2, location="campsite")
         engine.state.food_stock = 1
         engine.state.turn = 3
+        self._attach_dining_action(
+            engine, npc, planned_turn=3, menu_key="premium"
+        )
         engine.submit_turn_plan([], [])
 
         result = engine.advance_turn()

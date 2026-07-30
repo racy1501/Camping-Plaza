@@ -73,14 +73,14 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         entry: dict,
         *,
         planned_turn: int,
-        preferred_menu: str,
+        menu_key: str,
         status: str = "pending",
     ):
         entry["planned_actions"].append(
             {
                 "action": "dining",
                 "planned_turn": planned_turn,
-                "preferred_menu": preferred_menu,
+                "menu_key": menu_key,
                 "status": status,
             }
         )
@@ -135,9 +135,107 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(len(first_entry["planned_actions"]), 1)
         self.assertEqual(second_entry["planned_actions"], [])
         self.assertEqual(
-            first_entry["planned_actions"][0]["preferred_menu"], "basic"
+            first_entry["planned_actions"][0]["menu_key"], "basic"
         )
         self.assertEqual(first_entry["planned_actions"][0]["planned_turn"], 5)
+
+    def test_dining_probability_uses_40_55_70_table(self):
+        engine = self._new_engine()
+        cases = (
+            (0, 0.39, True),
+            (0, 0.40, False),
+            (1, 0.54, True),
+            (1, 0.55, False),
+            (2, 0.69, True),
+            (2, 0.70, False),
+        )
+
+        for spending_habit, roll, should_exist in cases:
+            with self.subTest(spending_habit=spending_habit, roll=roll):
+                npc = self._make_guest(
+                    engine,
+                    300 + spending_habit,
+                    visit_type="day",
+                    spending_habit=spending_habit,
+                )
+                entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+                with mock.patch("game_engine.random.random", return_value=roll):
+                    action = engine._build_dining_planned_action(entry)
+                self.assertEqual(action is not None, should_exist)
+
+    def test_lv0_dining_pool_only_allows_basic_for_all_economic_levels(self):
+        engine = self._new_engine()
+        engine.facilities["dining"].level = 0
+
+        for economic_level in (0, 1, 2):
+            with self.subTest(economic_level=economic_level):
+                npc = self._make_guest(
+                    engine,
+                    400 + economic_level,
+                    visit_type="day",
+                    economic_level=economic_level,
+                )
+                entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    action = engine._build_dining_planned_action(entry)
+                self.assertIsNotNone(action)
+                self.assertEqual(action["menu_key"], "basic")
+
+    def test_lv1_dining_pool_contains_only_basic_and_standard(self):
+        engine = self._new_engine()
+        engine.facilities["dining"].level = 1
+        npc = self._make_guest(engine, 500, visit_type="day", economic_level=0)
+        entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch("game_engine.random.choices", return_value=["basic"]) as choices_mock:
+                action = engine._build_dining_planned_action(entry)
+
+        self.assertEqual(action["menu_key"], "basic")
+        self.assertEqual(choices_mock.call_args.args[0], ["basic", "standard"])
+        self.assertEqual(choices_mock.call_args.kwargs["weights"], [60, 30])
+
+    def test_lv2_dining_pool_contains_basic_standard_and_premium(self):
+        engine = self._new_engine()
+        engine.facilities["dining"].level = 2
+        npc = self._make_guest(engine, 600, visit_type="day", economic_level=1)
+        entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch(
+                "game_engine.random.choices", return_value=["standard"]
+            ) as choices_mock:
+                action = engine._build_dining_planned_action(entry)
+
+        self.assertEqual(action["menu_key"], "standard")
+        self.assertEqual(
+            choices_mock.call_args.args[0], ["basic", "standard", "premium"]
+        )
+        self.assertEqual(choices_mock.call_args.kwargs["weights"], [30, 50, 20])
+
+    def test_low_economic_level_can_still_draw_premium_at_lv2(self):
+        engine = self._new_engine()
+        engine.facilities["dining"].level = 2
+        npc = self._make_guest(engine, 700, visit_type="day", economic_level=0)
+        entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch("game_engine.random.choices", return_value=["premium"]):
+                action = engine._build_dining_planned_action(entry)
+
+        self.assertEqual(action["menu_key"], "premium")
+
+    def test_high_economic_level_can_still_draw_basic_at_lv2(self):
+        engine = self._new_engine()
+        engine.facilities["dining"].level = 2
+        npc = self._make_guest(engine, 800, visit_type="day", economic_level=2)
+        entry = self._make_entry(engine, npc, arrival_turn=2, source="natural_day")
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            with mock.patch("game_engine.random.choices", return_value=["basic"]):
+                action = engine._build_dining_planned_action(entry)
+
+        self.assertEqual(action["menu_key"], "basic")
 
     def test_single_planned_action_can_be_scheduled(self):
         engine = self._new_engine()
@@ -244,7 +342,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             engine, npc, arrival_turn=2, source="natural_day", arrival_status="arrived"
         )
         action = self._add_dining_action(
-            entry, planned_turn=3, preferred_menu="standard"
+            entry, planned_turn=3, menu_key="standard"
         )
         engine.state.today_arrival_plan_day = engine.state.day
         engine.state.today_arrival_plan = [entry]
@@ -270,11 +368,11 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(npc.total_satisfaction, 64)
         self.assertEqual(len(result["events"]), 1)
 
-    def test_overnight_guest_can_execute_dining_action_with_menu_downgrade(self):
+    def test_overnight_guest_uses_planned_menu_key_without_redraw_or_downgrade(self):
         engine = self._new_engine()
         engine.state.day = 6
         engine.state.turn = 4
-        engine.facilities["dining"].level = 1
+        engine.facilities["dining"].level = 0
         engine.state.food_stock = 2
 
         npc = self._make_guest(
@@ -293,7 +391,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             arrival_status="arrived",
         )
         action = self._add_dining_action(
-            entry, planned_turn=4, preferred_menu="premium"
+            entry, planned_turn=4, menu_key="premium"
         )
         engine.state.today_arrival_plan_day = engine.state.day
         engine.state.today_arrival_plan = [entry]
@@ -301,10 +399,10 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         engine._process_dining({"events": []})
 
         self.assertEqual(action["status"], "completed")
-        self.assertEqual(action["actual_menu"], "standard")
-        self.assertEqual(engine.state.today_income["dining"], 90)
+        self.assertEqual(action["menu_key"], "premium")
+        self.assertEqual(engine.state.today_income["dining"], 130)
         self.assertEqual(npc.location, "dining")
-        self.assertEqual(npc.total_satisfaction, 64)
+        self.assertEqual(npc.total_satisfaction, 66)
 
     def test_insufficient_food_fails_atomically_and_does_not_retry(self):
         engine = self._new_engine()
@@ -325,7 +423,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             engine, npc, arrival_turn=2, source="natural_day", arrival_status="arrived"
         )
         action = self._add_dining_action(
-            entry, planned_turn=2, preferred_menu="premium"
+            entry, planned_turn=2, menu_key="premium"
         )
         engine.state.today_arrival_plan_day = engine.state.day
         engine.state.today_arrival_plan = [entry]
@@ -361,7 +459,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             arrival_status="pending",
         )
         pending_action = self._add_dining_action(
-            pending_entry, planned_turn=2, preferred_menu="standard"
+            pending_entry, planned_turn=2, menu_key="standard"
         )
 
         missing_guest = self._make_guest(engine, 702, visit_type="day")
@@ -373,7 +471,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             arrival_status="arrived",
         )
         missing_action = self._add_dining_action(
-            missing_entry, planned_turn=2, preferred_menu="standard"
+            missing_entry, planned_turn=2, menu_key="standard"
         )
 
         engine.state.today_arrival_plan_day = engine.state.day
@@ -400,10 +498,10 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             engine, npc, arrival_turn=2, source="natural_day", arrival_status="arrived"
         )
         first_action = self._add_dining_action(
-            entry, planned_turn=2, preferred_menu="standard"
+            entry, planned_turn=2, menu_key="standard"
         )
         second_action = self._add_dining_action(
-            entry, planned_turn=4, preferred_menu="standard"
+            entry, planned_turn=4, menu_key="standard"
         )
         engine.state.today_arrival_plan_day = engine.state.day
         engine.state.today_arrival_plan = [entry]
@@ -437,7 +535,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             arrival_status="arrived",
         )
         action = self._add_dining_action(
-            entry, planned_turn=3, preferred_menu="standard"
+            entry, planned_turn=3, menu_key="standard"
         )
         engine.state.today_arrival_plan_day = engine.state.day
         engine.state.today_arrival_plan = [entry]
@@ -487,7 +585,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                 source="natural_day",
                 arrival_status="pending",
             )
-            self._add_dining_action(entry, planned_turn=2, preferred_menu="standard")
+            self._add_dining_action(entry, planned_turn=2, menu_key="standard")
             plan.append(entry)
         engine.state.today_arrival_plan = plan
 
@@ -538,8 +636,9 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             with mock.patch(
                 "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
             ):
-                with mock.patch("game_engine.random.sample", return_value=[2]):
-                    self.assertTrue(engine._ensure_today_arrival_plan())
+                with mock.patch("game_engine.random.choices", return_value=["standard"]):
+                    with mock.patch("game_engine.random.sample", return_value=[2]):
+                        self.assertTrue(engine._ensure_today_arrival_plan())
 
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
         plan_entry = engine.state.today_arrival_plan[0]
@@ -550,6 +649,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(dining_action["action"], "dining")
         self.assertGreaterEqual(dining_action["planned_turn"], plan_entry["arrival_turn"])
         self.assertLessEqual(dining_action["planned_turn"], 5)
+        self.assertEqual(dining_action["menu_key"], "standard")
         self.assertEqual(dining_action["status"], "pending")
         self.assertIsNotNone(plan_entry["npc_id"])
 
@@ -613,8 +713,9 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             with mock.patch(
                 "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
             ):
-                with mock.patch("game_engine.random.sample", return_value=[2]):
-                    self.assertTrue(engine._ensure_today_arrival_plan())
+                with mock.patch("game_engine.random.choices", return_value=["standard"]):
+                    with mock.patch("game_engine.random.sample", return_value=[2]):
+                        self.assertTrue(engine._ensure_today_arrival_plan())
 
         plan_entry = engine.state.today_arrival_plan[0]
         dining_action = plan_entry["planned_actions"][0]
@@ -626,7 +727,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(dining_action["action"], "dining")
         self.assertGreaterEqual(dining_action["planned_turn"], plan_entry["arrival_turn"])
         self.assertLessEqual(dining_action["planned_turn"], 5)
-        self.assertEqual(dining_action["preferred_menu"], "standard")
+        self.assertEqual(dining_action["menu_key"], "standard")
         self.assertEqual(dining_action["status"], "pending")
 
         self.assertTrue(engine.save_state())
@@ -642,7 +743,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(reloaded_entry["arrival_status"], "pending")
         self.assertEqual(reloaded_action["action"], "dining")
         self.assertEqual(reloaded_action["planned_turn"], dining_action["planned_turn"])
-        self.assertEqual(reloaded_action["preferred_menu"], "standard")
+        self.assertEqual(reloaded_action["menu_key"], "standard")
         self.assertEqual(reloaded_action["status"], "pending")
 
         reloaded.state.turn = 2

@@ -68,12 +68,12 @@ class EntertainmentPlannedActionsPhase2BTests(unittest.TestCase):
     def test_dining_probability_uses_direct_table_without_multiplier(self):
         engine = self._new_engine()
         cases = (
-            (0, 0.54, True),
-            (0, 0.55, False),
-            (1, 0.69, True),
-            (1, 0.70, False),
-            (2, 0.84, True),
-            (2, 0.85, False),
+            (0, 0.39, True),
+            (0, 0.40, False),
+            (1, 0.54, True),
+            (1, 0.55, False),
+            (2, 0.69, True),
+            (2, 0.70, False),
         )
 
         for spending_habit, roll, should_exist in cases:
@@ -212,7 +212,7 @@ class EntertainmentPlannedActionsPhase2BTests(unittest.TestCase):
         entry = self._make_entry(engine, npc, arrival_turn=3)
 
         with mock.patch(
-            "game_engine.random.random", side_effect=[0.60, 0.60, 0.40]
+            "game_engine.random.random", side_effect=[0.54, 0.60, 0.40]
         ) as random_mock:
             with mock.patch("game_engine.random.sample", return_value=[3, 5]):
                 engine._append_planned_actions(entry)
