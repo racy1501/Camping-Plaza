@@ -88,6 +88,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
 
     def test_daily_plan_draws_dining_once_and_stores_menu_turn(self):
         engine = self._new_engine()
+        engine.facilities["entertainment"].level = 1
         engine.state.day = 3
         engine.state.turn = 1
 

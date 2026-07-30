@@ -303,15 +303,19 @@ class CampingPlazaEngine:
             "status": "pending",
         }
 
+    def _can_plan_paid_entertainment(self) -> bool:
+        return self.facilities["entertainment"].level >= 1
+
     def _append_planned_actions(self, entry: dict):
         entry["planned_actions"].clear()
         charged_actions = []
         dining_action = self._build_dining_planned_action(entry)
         if dining_action is not None:
             charged_actions.append(dining_action)
-        paid_entertainment_action = self._build_paid_entertainment_planned_action(entry)
-        if paid_entertainment_action is not None:
-            charged_actions.append(paid_entertainment_action)
+        if self._can_plan_paid_entertainment():
+            paid_entertainment_action = self._build_paid_entertainment_planned_action(entry)
+            if paid_entertainment_action is not None:
+                charged_actions.append(paid_entertainment_action)
         free_entertainment_action = self._build_free_entertainment_planned_action()
 
         entry["planned_actions"].extend(charged_actions)
@@ -757,7 +761,7 @@ class CampingPlazaEngine:
             self._set_next_breakdown(self.tents[i])
 
         self.facilities["dining"] = Facility(name="餐饮区")
-        self.facilities["entertainment"] = Facility(name="娱乐区")
+        self.facilities["entertainment"] = Facility(name="娱乐区", level=0)
         self.facilities["greenery"] = Facility(
             name="绿化", level=1, greenery_decay_rate=0.5
         )
