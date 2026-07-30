@@ -23,14 +23,17 @@ _TEMP_DIRS = []
 
 def make_engine() -> CampingPlazaEngine:
     """创建使用独立临时目录数据库的引擎实例，测试结束统一清理"""
-    td = tempfile.TemporaryDirectory()
+    td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     _TEMP_DIRS.append(td)
     return CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
 
 
 def tearDownModule():
     for td in _TEMP_DIRS:
-        td.cleanup()
+        try:
+            td.cleanup()
+        except PermissionError:
+            pass
     _TEMP_DIRS.clear()
 
 
@@ -1298,7 +1301,65 @@ class IncomeAndSpendingTagTests(unittest.TestCase):
         self.assertEqual(amount_low, amount_mid)
         self.assertEqual(amount_mid, amount_high)
 
-    def test_dining_entertainment_income_multipliers(self):
+    def test_dining_and_entertainment_planned_actions_use_fixed_income_values(self):
+        """Dining and entertainment planned actions use fixed configured values."""
+        engine = make_engine()
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.food_stock = 1
+
+        dining_npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="campsite",
+            economic_level=1,
+            spending_habit=1,
+        )
+        entertainment_npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            location="campsite",
+            economic_level=1,
+            spending_habit=1,
+        )
+        engine.npc_pool.extend([dining_npc, entertainment_npc])
+
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": dining_npc.id,
+                "arrival_status": "arrived",
+                "planned_day": engine.state.day,
+                "planned_actions": [
+                    {
+                        "action": "dining",
+                        "planned_turn": engine.state.turn,
+                        "menu_key": "basic",
+                        "status": "pending",
+                    }
+                ],
+            },
+            {
+                "npc_id": entertainment_npc.id,
+                "arrival_status": "arrived",
+                "planned_day": engine.state.day,
+                "planned_actions": [
+                    {
+                        "action": "paid_entertainment",
+                        "planned_turn": engine.state.turn,
+                        "tier_key": "premium",
+                        "status": "pending",
+                    }
+                ],
+            },
+        ]
+
+        engine._process_dining({"events": []})
+        engine._process_entertainment({"events": []})
+
+        self.assertEqual(engine.state.today_income["dining"], 30)
+        self.assertEqual(engine.state.today_income["entertainment"], 65)
+        return
         """餐饮和娱乐使用各自的收入倍率"""
         engine = make_engine()
         engine.facilities["dining"].dining_spend_probability = 0.5

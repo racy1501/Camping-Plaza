@@ -130,7 +130,6 @@ class CampingPlazaEngine:
     TENT_PRICES = {1: 80, 2: 120, 3: 120, 4: 180, 5: 180, 6: 300}
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
-    ENTERTAINMENT_BASE_PRICE = 40
     DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.40, 1: 0.55, 2: 0.70}
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
     FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY = 0.50
@@ -159,6 +158,23 @@ class CampingPlazaEngine:
         0: {"basic": 60, "standard": 30, "premium": 10},
         1: {"basic": 30, "standard": 50, "premium": 20},
         2: {"basic": 20, "standard": 30, "premium": 50},
+    }
+    ENTERTAINMENT_TIER_OPTIONS = {
+        "basic": {
+            "display_name": "基础娱乐",
+            "price_per_group": 30,
+            "satisfaction_gain": 2,
+        },
+        "standard": {
+            "display_name": "中档娱乐",
+            "price_per_group": 45,
+            "satisfaction_gain": 4,
+        },
+        "premium": {
+            "display_name": "高级娱乐",
+            "price_per_group": 65,
+            "satisfaction_gain": 6,
+        },
     }
     FOOD_PACKAGES = {
         "small": {"name": "小包", "portions": 4, "price": 80},
@@ -299,6 +315,12 @@ class CampingPlazaEngine:
             return None
         return {
             "action": "paid_entertainment",
+            "tier_key": self._choose_weighted_unlocked_tier_key(
+                self.facilities["entertainment"].level,
+                entry["economic_level"],
+                self.DINING_SET_MENU_ORDER,
+                self.DINING_SET_MENU_WEIGHTS,
+            ),
             "status": "pending",
         }
 
@@ -310,19 +332,15 @@ class CampingPlazaEngine:
             "status": "pending",
         }
 
-    def _can_plan_paid_entertainment(self) -> bool:
-        return self.facilities["entertainment"].level >= 1
-
     def _append_planned_actions(self, entry: dict):
         entry["planned_actions"].clear()
         charged_actions = []
         dining_action = self._build_dining_planned_action(entry)
         if dining_action is not None:
             charged_actions.append(dining_action)
-        if self._can_plan_paid_entertainment():
-            paid_entertainment_action = self._build_paid_entertainment_planned_action(entry)
-            if paid_entertainment_action is not None:
-                charged_actions.append(paid_entertainment_action)
+        paid_entertainment_action = self._build_paid_entertainment_planned_action(entry)
+        if paid_entertainment_action is not None:
+            charged_actions.append(paid_entertainment_action)
         free_entertainment_action = self._build_free_entertainment_planned_action()
 
         entry["planned_actions"].extend(charged_actions)
@@ -1145,23 +1163,72 @@ class CampingPlazaEngine:
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
-        facility = self.facilities["entertainment"]
-        for npc in self.npc_pool:
-            if npc.has_left:
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
                 continue
-            if npc.location == "entertainment":
-                probability = self._calc_spend_probability(
-                    0.6, npc.spending_habit,
-                    low_multiplier=0.7, high_multiplier=1.3
-                )
-                if random.random() < probability:
-                    spend = self._calc_spend_amount(
-                        self.ENTERTAINMENT_BASE_PRICE,
-                        npc.economic_level,
-                        facility.entertainment_income_multiplier
-                    )
+            for action in entry.get("planned_actions", []):
+                action_name = action.get("action")
+                if action_name not in ("paid_entertainment", "free_entertainment"):
+                    continue
+                if action.get("status") != "pending":
+                    continue
+                if action.get("planned_turn") != self.state.turn:
+                    continue
+                if entry.get("arrival_status") != "arrived":
+                    action["status"] = "skipped"
+                    action["result"] = "not_arrived"
+                    continue
+
+                npc = self._find_npc(entry["npc_id"])
+                if npc is None:
+                    action["status"] = "skipped"
+                    action["result"] = "missing_npc"
+                    continue
+                if npc.has_left:
+                    action["status"] = "skipped"
+                    action["result"] = "npc_left"
+                    continue
+
+                if action_name == "paid_entertainment":
+                    tier_key = action.get("tier_key")
+                    if tier_key not in self.ENTERTAINMENT_TIER_OPTIONS:
+                        action["status"] = "skipped"
+                        action["result"] = "invalid_tier"
+                        continue
+
+                    tier = self.ENTERTAINMENT_TIER_OPTIONS[tier_key]
+                    spend = tier["price_per_group"]
+                    if spend < 0:
+                        action["status"] = "skipped"
+                        action["result"] = "invalid_spend"
+                        continue
+
+                    npc.location = "entertainment"
                     self.state.balance += spend
                     self.state.today_income["entertainment"] += spend
+                    npc.total_satisfaction = min(
+                        100, npc.total_satisfaction + tier["satisfaction_gain"]
+                    )
+                    action["status"] = "completed"
+                    action["result"] = "success"
+                    action["charged_amount"] = spend
+                    action["satisfaction_gain"] = tier["satisfaction_gain"]
+                    result["events"].append(
+                        f"客组{npc.id}参加{tier['display_name']}，"
+                        f"整组收费+{spend}，"
+                        f"整组满意度+{tier['satisfaction_gain']}"
+                    )
+                    continue
+
+                npc.location = "entertainment"
+                npc.total_satisfaction = min(100, npc.total_satisfaction + 1)
+                action["status"] = "completed"
+                action["result"] = "success"
+                action["charged_amount"] = 0
+                action["satisfaction_gain"] = 1
+                result["events"].append(
+                    f"客组{npc.id}参加免费娱乐，收入+0，整组满意度+1"
+                )
 
     def _calc_spend_probability(
         self, base_probability: float, spending_habit: int,
