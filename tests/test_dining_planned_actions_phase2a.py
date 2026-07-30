@@ -40,6 +40,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         visit_type: str,
         economic_level: int = 1,
         spending_habit: int = 1,
+        temperament: int = 0,
         total_satisfaction: int = 60,
         location: str = "campsite",
     ):
@@ -52,7 +53,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         )
         npc.economic_level = economic_level
         npc.spending_habit = spending_habit
-        npc.temperament = 0
+        npc.temperament = temperament
         return npc
 
     def _make_entry(
@@ -438,12 +439,90 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(engine.state.today_income["dining"], 0)
         self.assertEqual(npc.total_satisfaction, 55)
         self.assertEqual(npc.last_dining_day, 0)
-        self.assertEqual(len(result["events"]), 1)
+        self.assertEqual(len(result["events"]), 2)
 
         engine.state.turn = 3
         engine._process_dining({"events": []})
         self.assertEqual(engine.state.today_income["dining"], 0)
         self.assertEqual(action["status"], "failed")
+
+    def test_insufficient_food_appends_temperament_specific_reaction(self):
+        expectations = {
+            0: "客人表示理解，决定下次再来尝尝。",
+            1: "客人有些失望，但还是接受了这个结果。",
+            2: "客人明显不满，抱怨餐饮区准备得不够充分。",
+        }
+        for temperament, expected_text in expectations.items():
+            with self.subTest(temperament=temperament):
+                engine = self._new_engine()
+                engine.state.day = 7
+                engine.state.turn = 2
+                engine.state.food_stock = 1
+                engine.state.balance = 500
+
+                npc = self._make_guest(
+                    engine,
+                    610 + temperament,
+                    visit_type="day",
+                    economic_level=2,
+                    temperament=temperament,
+                    total_satisfaction=55,
+                )
+                engine.npc_pool.append(npc)
+                entry = self._make_entry(
+                    engine,
+                    npc,
+                    arrival_turn=2,
+                    source="natural_day",
+                    arrival_status="arrived",
+                )
+                action = self._add_dining_action(
+                    entry, planned_turn=2, menu_key="premium"
+                )
+                engine.state.today_arrival_plan_day = engine.state.day
+                engine.state.today_arrival_plan = [entry]
+
+                result = {"events": []}
+                engine._process_dining(result)
+
+                self.assertEqual(action["status"], "failed")
+                self.assertEqual(action["result"], "insufficient_food")
+                self.assertEqual(engine.state.food_stock, 1)
+                self.assertEqual(engine.state.balance, 500)
+                self.assertEqual(engine.state.today_income["dining"], 0)
+                self.assertEqual(npc.total_satisfaction, 55)
+                self.assertIn(expected_text, result["events"])
+                self.assertEqual(len(result["events"]), 2)
+
+    def test_invalid_menu_does_not_append_temperament_failure_text(self):
+        engine = self._new_engine()
+        engine.state.day = 7
+        engine.state.turn = 2
+        engine.state.food_stock = 10
+
+        npc = self._make_guest(
+            engine,
+            650,
+            visit_type="day",
+            temperament=2,
+            total_satisfaction=55,
+        )
+        engine.npc_pool.append(npc)
+        entry = self._make_entry(
+            engine, npc, arrival_turn=2, source="natural_day", arrival_status="arrived"
+        )
+        action = self._add_dining_action(
+            entry, planned_turn=2, menu_key="vip"
+        )
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [entry]
+
+        result = {"events": []}
+        engine._process_dining(result)
+
+        self.assertEqual(action["status"], "skipped")
+        self.assertEqual(action["result"], "invalid_menu")
+        self.assertEqual(result["events"], [])
 
     def test_not_arrived_or_missing_guest_actions_are_skipped_without_charge(self):
         engine = self._new_engine()
