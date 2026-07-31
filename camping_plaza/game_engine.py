@@ -451,10 +451,42 @@ class CampingPlazaEngine:
             "reservation_request_available": reservation_request_available,
             "reservation_visit_type": reservation_visit_type,
             "reservation_group_size": reservation_group_size,
+            "reservation_processed": False,
+            "reservation_result": None,
         }
         self.state.daily_demand_profile = profile
         self.state.daily_demand_profile_day = self.state.day
         return profile
+
+    def _create_reservation_record(
+        self,
+        *,
+        group_size: int,
+        visit_type: str,
+        arrival_day: int,
+        paid: bool,
+        status: str,
+    ) -> dict:
+        reservation_guest = NPCGroup(
+            id=self._next_npc_id(),
+            group_size=group_size,
+            visit_type=visit_type,
+            is_reserved=True,
+            paid=paid,
+        )
+        self._assign_hidden_tags(reservation_guest)
+        return {
+            "npc_id": reservation_guest.id,
+            "group_size": reservation_guest.group_size,
+            "visit_type": reservation_guest.visit_type,
+            "arrival_day": arrival_day,
+            "paid": reservation_guest.paid,
+            "status": status,
+            "economic_level": reservation_guest.economic_level,
+            "spending_habit": reservation_guest.spending_habit,
+            "temperament": reservation_guest.temperament,
+            "total_satisfaction": reservation_guest.total_satisfaction,
+        }
 
     def _create_day_guest(self) -> NPCGroup:
         npc = NPCGroup(
@@ -480,6 +512,33 @@ class CampingPlazaEngine:
 
         demand = self._calculate_daily_visitor_demand()
         planned_entries = []
+
+        if (
+            self.state.reservation is not None
+            and self.state.reservation.get("visit_type") == "day"
+            and self.state.reservation.get("status") == "accepted"
+            and self.state.reservation.get("arrival_day") == self.state.day
+        ):
+            reserved_day_guest = NPCGroup(
+                id=self.state.reservation["npc_id"],
+                group_size=self.state.reservation["group_size"],
+                visit_type="day",
+                total_satisfaction=self.state.reservation.get("total_satisfaction", 60),
+                is_reserved=True,
+                paid=self.state.reservation.get("paid", False),
+            )
+            reserved_day_guest.economic_level = self.state.reservation.get("economic_level", 1)
+            reserved_day_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
+            reserved_day_guest.temperament = self.state.reservation.get("temperament", 1)
+            arrival_turn = self._roll_arrival_turn()
+            entry = self._build_arrival_plan_entry(
+                reserved_day_guest,
+                arrival_turn,
+                "reservation",
+            )
+            self._append_planned_actions(entry)
+            planned_entries.append(entry)
+            self.state.reservation = None
 
         natural_guests = [
             self._create_day_guest()
@@ -1948,6 +2007,74 @@ class CampingPlazaEngine:
         }
         return sorted(tent_ids)
 
+    def _process_planned_arrivals(self, result: dict):
+        if self.state.today_arrival_plan_day != self.state.day:
+            self._ensure_today_arrival_plan()
+
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
+                continue
+            if entry.get("arrival_status") != "pending":
+                continue
+            if entry.get("arrival_turn") != self.state.turn:
+                continue
+            if (
+                entry.get("source") == "reservation"
+                and entry.get("visit_type") == "overnight"
+            ):
+                continue
+
+            if entry.get("visit_type") == "day":
+                if self.get_day_campsite_remaining() <= 0:
+                    entry["arrival_status"] = "turned_away_full"
+                    result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
+                    continue
+
+                guest = NPCGroup(
+                    id=entry["npc_id"],
+                    group_size=entry["group_size"],
+                    visit_type="day",
+                    total_satisfaction=entry["total_satisfaction"],
+                    is_reserved=entry.get("is_reserved", False),
+                    paid=entry.get("paid", False),
+                )
+                guest.economic_level = entry["economic_level"]
+                guest.spending_habit = entry["spending_habit"]
+                guest.temperament = entry["temperament"]
+                guest.location = "campsite"
+                guest.arrival_turn = self.state.turn
+                self.npc_pool.append(guest)
+                self.state.day_campsite_groups_served += 1
+                if not entry.get("paid", False):
+                    self.state.balance += self.CAMPSITE_FEE
+                    self.state.today_income["campsite"] += self.CAMPSITE_FEE
+                entry["arrival_status"] = "arrived"
+                if entry.get("source") == "reservation":
+                    result["events"].append(f"一组{guest.group_size}人的日间预约客到达。")
+                else:
+                    result["events"].append(
+                        f"一组{guest.group_size}人日间游客到达（营位费+{self.CAMPSITE_FEE}）"
+                    )
+                continue
+
+            if entry.get("source") == "natural_overnight":
+                guest = NPCGroup(
+                    id=entry["npc_id"],
+                    group_size=entry["group_size"],
+                    visit_type="overnight",
+                    total_satisfaction=entry["total_satisfaction"],
+                )
+                guest.economic_level = entry["economic_level"]
+                guest.spending_habit = entry["spending_habit"]
+                guest.temperament = entry["temperament"]
+                tent_id = self._find_available_tent(guest.group_size)
+                if tent_id is not None:
+                    self._checkin_npc(guest, tent_id, result, charge=True)
+                    entry["arrival_status"] = "arrived"
+                else:
+                    entry["arrival_status"] = "turned_away_full"
+                    result["events"].append("过夜客到达时帐篷已经客满，只能遗憾离开。")
+
     def _has_consumed_dining_today(self, npc: NPCGroup) -> bool:
         return npc.last_dining_day == self.state.day
 
@@ -2045,6 +2172,42 @@ class CampingPlazaEngine:
     # -------------------------------------------------------------------------
     # 状态查询
     # -------------------------------------------------------------------------
+
+    def _generate_daily_reservation(self):
+        profile = self._ensure_daily_demand_profile()
+        if profile.get("reservation_processed"):
+            return
+
+        if self.state.reservation is not None:
+            profile["reservation_processed"] = True
+            profile["reservation_result"] = "skipped_existing_reservation"
+            return
+
+        if not profile.get("reservation_request_available"):
+            profile["reservation_processed"] = True
+            profile["reservation_result"] = "not_triggered"
+            return
+
+        if profile.get("reservation_visit_type") != "day":
+            profile["reservation_processed"] = True
+            profile["reservation_result"] = "ignored_overnight"
+            return
+
+        group_size = profile["reservation_group_size"]
+        self.state.reservation = self._create_reservation_record(
+            group_size=group_size,
+            visit_type="day",
+            arrival_day=self.state.day + 1,
+            paid=True,
+            status="accepted",
+        )
+        self.state.balance += self.CAMPSITE_FEE
+        self.state.today_income["campsite"] += self.CAMPSITE_FEE
+        self.state.today_events.append(
+            f"接到一组{group_size}人的日间营位预约，客人将在明天到达。"
+        )
+        profile["reservation_processed"] = True
+        profile["reservation_result"] = "accepted_day"
 
     def get_full_state(self) -> dict:
         # 修复：对外隐藏NPC隐藏标签，引擎内部数据不变
