@@ -488,6 +488,21 @@ class CampingPlazaEngine:
             "total_satisfaction": reservation_guest.total_satisfaction,
         }
 
+    def _find_reservable_overnight_tent(self, group_size: int) -> Optional[Tent]:
+        suitable_tents = [
+            tent for tent in self._get_unlocked_tents()
+            if tent.capacity >= group_size
+        ]
+        if not suitable_tents:
+            return None
+        return min(suitable_tents, key=lambda tent: (tent.capacity, tent.id))
+
+    def _get_max_unlocked_tent_capacity(self) -> int:
+        unlocked_tents = self._get_unlocked_tents()
+        if not unlocked_tents:
+            return 0
+        return max(tent.capacity for tent in unlocked_tents)
+
     def _create_day_guest(self) -> NPCGroup:
         npc = NPCGroup(
             id=self._next_npc_id(),
@@ -2188,26 +2203,57 @@ class CampingPlazaEngine:
             profile["reservation_result"] = "not_triggered"
             return
 
-        if profile.get("reservation_visit_type") != "day":
+        group_size = profile["reservation_group_size"]
+        if profile.get("reservation_visit_type") == "day":
+            self.state.reservation = self._create_reservation_record(
+                group_size=group_size,
+                visit_type="day",
+                arrival_day=self.state.day + 1,
+                paid=True,
+                status="accepted",
+            )
+            self.state.balance += self.CAMPSITE_FEE
+            self.state.today_income["campsite"] += self.CAMPSITE_FEE
+            self.state.today_events.append(
+                f"接到一组{group_size}人的日间营位预约，客人将在明天到达。"
+            )
             profile["reservation_processed"] = True
-            profile["reservation_result"] = "ignored_overnight"
+            profile["reservation_result"] = "accepted_day"
             return
 
-        group_size = profile["reservation_group_size"]
+        if profile.get("reservation_visit_type") != "overnight":
+            profile["reservation_processed"] = True
+            profile["reservation_result"] = "ignored_unknown_visit_type"
+            return
+
+        tent = self._find_reservable_overnight_tent(group_size)
+        if tent is None:
+            max_capacity = self._get_max_unlocked_tent_capacity()
+            self.state.today_events.append(
+                f"接到一组{group_size}人的过夜预约，但当前已开放的帐篷最大只能容纳{max_capacity}人，本次未能接下。"
+            )
+            profile["reservation_processed"] = True
+            profile["reservation_result"] = "rejected_overnight_capacity"
+            return
+
         self.state.reservation = self._create_reservation_record(
             group_size=group_size,
-            visit_type="day",
+            visit_type="overnight",
             arrival_day=self.state.day + 1,
             paid=True,
             status="accepted",
         )
-        self.state.balance += self.CAMPSITE_FEE
-        self.state.today_income["campsite"] += self.CAMPSITE_FEE
+        self.state.reservation["tent_id"] = tent.id
+        self.state.reserved_tent_id = tent.id
+        self.state.reserved_tent_day = self.state.day + 1
+        payment = self.TENT_PRICES[tent.id]
+        self.state.balance += payment
+        self.state.today_income["accommodation"] += payment
         self.state.today_events.append(
-            f"接到一组{group_size}人的日间营位预约，客人将在明天到达。"
+            f"接到一组{group_size}人的过夜预约，已为明天预留{tent.id}号帐篷。"
         )
         profile["reservation_processed"] = True
-        profile["reservation_result"] = "accepted_day"
+        profile["reservation_result"] = "accepted_overnight"
 
     def get_full_state(self) -> dict:
         # 修复：对外隐藏NPC隐藏标签，引擎内部数据不变

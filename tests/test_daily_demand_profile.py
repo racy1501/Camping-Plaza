@@ -431,9 +431,176 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertTrue(engine.state.daily_demand_profile["reservation_processed"])
         self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "not_triggered")
 
-    def test_overnight_reservation_profile_is_not_processed_as_day_reservation(self):
+    def test_overnight_reservation_auto_selects_smallest_suitable_tent(self):
         engine = make_engine()
         engine.state.today_events = []
+        engine.tents[1].is_unlocked = True
+        engine.tents[2].is_unlocked = True
+        engine.tents[3].is_unlocked = True
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 2,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+
+        self.assertIsNotNone(engine.state.reservation)
+        self.assertEqual(engine.state.reservation["visit_type"], "overnight")
+        self.assertEqual(engine.state.reservation["tent_id"], 1)
+        self.assertEqual(engine.state.reserved_tent_id, 1)
+        self.assertEqual(engine.state.reserved_tent_day, engine.state.day + 1)
+        self.assertEqual(engine.state.balance, 1000 + engine.TENT_PRICES[1])
+        self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[1])
+        self.assertIn("接到一组2人的过夜预约，已为明天预留1号帐篷。", engine.state.today_events)
+        self.assertTrue(engine.state.daily_demand_profile["reservation_processed"])
+        self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "accepted_overnight")
+
+    def test_overnight_reservation_selects_smallest_id_when_capacities_tie(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        for tent in engine.tents.values():
+            tent.is_unlocked = False
+        engine.tents[4].is_unlocked = True
+        engine.tents[5].is_unlocked = True
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 4,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.state.reservation["tent_id"], 4)
+        self.assertEqual(engine.state.reserved_tent_id, 4)
+
+    def test_overnight_reservation_ignores_current_tent_status_when_selecting(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        for tent in engine.tents.values():
+            tent.is_unlocked = True
+        engine.tents[1].status = "broken"
+        engine.tents[2].status = "occupied"
+        engine.tents[3].status = "cleaning"
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 2,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.state.reservation["tent_id"], 1)
+
+    def test_overnight_reservation_does_not_overwrite_current_tent_status_or_occupied_by(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        for tent in engine.tents.values():
+            tent.is_unlocked = False
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "occupied"
+        engine.tents[2].occupied_by = 777
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 2,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.tents[2].status, "occupied")
+        self.assertEqual(engine.tents[2].occupied_by, 777)
+        self.assertEqual(engine.state.reserved_tent_id, 2)
+
+    def test_overnight_reservation_same_day_repeat_processing_does_not_duplicate_charge_or_lock(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        engine.tents[1].is_unlocked = True
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 2,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+            first_reservation = dict(engine.state.reservation)
+            first_reserved_tent_id = engine.state.reserved_tent_id
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.state.balance, 1000 + engine.TENT_PRICES[1])
+        self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[1])
+        self.assertEqual(len(engine.state.today_events), 1)
+        self.assertEqual(engine.state.reservation, first_reservation)
+        self.assertEqual(engine.state.reserved_tent_id, first_reserved_tent_id)
+
+    def test_overnight_reservation_insufficient_capacity_does_not_charge_or_create_reservation(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        engine.state.reputation_rate = 75.0
+        for tent in engine.tents.values():
+            tent.is_unlocked = False
+        engine.tents[1].is_unlocked = True
+        engine.tents[2].is_unlocked = True
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 5,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_record_reservation_rejection_event", side_effect=AssertionError("old rejection logic called")):
+            engine._generate_daily_reservation()
+
+        self.assertIsNone(engine.state.reservation)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
+        self.assertEqual(engine.state.balance, 1000)
+        self.assertEqual(engine.state.today_income["accommodation"], 0)
+        self.assertEqual(engine.state.reputation_rate, 75.0)
+        self.assertTrue(engine.state.daily_demand_profile["reservation_processed"])
+        self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "rejected_overnight_capacity")
+
+    def test_overnight_reservation_insufficient_capacity_event_reports_correct_max_capacity(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        for tent in engine.tents.values():
+            tent.is_unlocked = False
+        engine.tents[1].is_unlocked = True
+        engine.tents[4].is_unlocked = True
         engine.state.daily_demand_profile = {
             "natural_day_group_demand": 2,
             "natural_overnight_group_demand": 1,
@@ -447,12 +614,33 @@ class DailyDemandHelperTests(unittest.TestCase):
 
         engine._generate_daily_reservation()
 
-        self.assertIsNone(engine.state.reservation)
-        self.assertEqual(engine.state.balance, 1000)
-        self.assertEqual(engine.state.today_income["campsite"], 0)
-        self.assertEqual(engine.state.today_events, [])
-        self.assertTrue(engine.state.daily_demand_profile["reservation_processed"])
-        self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "ignored_overnight")
+        self.assertEqual(
+            engine.state.today_events,
+            ["接到一组5人的过夜预约，但当前已开放的帐篷最大只能容纳4人，本次未能接下。"],
+        )
+
+    def test_day_reservation_logic_still_charges_campsite_fee_normally(self):
+        engine = make_engine()
+        engine.state.today_events = []
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 2,
+            "natural_overnight_group_demand": 1,
+            "reservation_request_available": True,
+            "reservation_visit_type": "day",
+            "reservation_group_size": 4,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_assign_hidden_tags"):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.state.reservation["visit_type"], "day")
+        self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
+        self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "accepted_day")
 
     def test_day_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
         engine = make_engine()
