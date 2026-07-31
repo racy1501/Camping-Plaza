@@ -28,7 +28,7 @@ class Tent:
     next_breakdown_turn: int = 0
     satisfaction_bonus: float = 0.0
 
-    CAPACITY_MAP = {1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5}
+    CAPACITY_MAP = {1: 2, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 
 
 @dataclass
@@ -412,17 +412,16 @@ class CampingPlazaEngine:
     def _create_day_guest(self) -> NPCGroup:
         npc = NPCGroup(
             id=self._next_npc_id(),
-            group_size=random.randint(1, 3),
+            group_size=random.randint(1, 6),
             visit_type="day",
         )
         self._assign_hidden_tags(npc)
         return npc
 
     def _create_overnight_guest(self) -> NPCGroup:
-        max_capacity = max((tent.capacity for tent in self._get_unlocked_tents()), default=1)
         npc = NPCGroup(
             id=self._next_npc_id(),
-            group_size=random.randint(1, max_capacity),
+            group_size=random.randint(1, 6),
             visit_type="overnight",
         )
         self._assign_hidden_tags(npc)

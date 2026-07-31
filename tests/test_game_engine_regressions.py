@@ -155,7 +155,7 @@ class DayCampsiteCapacityTests(unittest.TestCase):
         self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
         self.assertEqual(len(engine.npc_pool), 1)
 
-    def test_counter_accumulates_across_business_turns_up_to_ten(self):
+    def test_day_guest_generation_does_not_shrink_when_slots_run_low(self):
         engine = make_engine()
         engine.state.day_campsite_groups_served = 0
 
@@ -168,23 +168,63 @@ class DayCampsiteCapacityTests(unittest.TestCase):
 
         self.assertEqual(len(guests_turn2), 4)
         self.assertEqual(len(guests_turn3), 4)
-        self.assertEqual(len(guests_turn4), 2)
-        self.assertEqual(engine.state.day_campsite_groups_served + len(guests_turn4), 10)
+        self.assertEqual(len(guests_turn4), 4)
+        self.assertEqual(engine.state.day_campsite_groups_served, 8)
 
     def test_remaining_two_slots_caps_generation_and_revenue(self):
         engine = make_engine()
         engine.state.turn = 3
         engine.state.day_campsite_groups_served = 8
 
-        with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", return_value=[]):
-            with mock.patch("game_engine.random.randint", side_effect=[5, 2, 3]):
-                with mock.patch("game_engine.random.choices", side_effect=[[1], [1], [1], [1], [1], [1]]):
-                    with mock.patch("game_engine.random.random", return_value=0.0):
-                        result = {"events": []}
-                        engine._process_checkin(result)
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": engine._next_npc_id(),
+                "group_size": 1,
+                "visit_type": "day",
+                "arrival_turn": 3,
+                "arrival_status": "pending",
+                "planned_day": engine.state.day,
+                "source": "natural_day",
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 1,
+            },
+            {
+                "npc_id": engine._next_npc_id(),
+                "group_size": 2,
+                "visit_type": "day",
+                "arrival_turn": 3,
+                "arrival_status": "pending",
+                "planned_day": engine.state.day,
+                "source": "natural_day",
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 1,
+            },
+            {
+                "npc_id": engine._next_npc_id(),
+                "group_size": 3,
+                "visit_type": "day",
+                "arrival_turn": 3,
+                "arrival_status": "pending",
+                "planned_day": engine.state.day,
+                "source": "natural_day",
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 1,
+            },
+        ]
 
-        day_guests = [n for n in engine.npc_pool if n.visit_type == "day"]
-        self.assertEqual(len(day_guests), 2)
+        result = {"events": []}
+        engine._process_planned_arrivals(result)
+
+        day_entries = [entry for entry in engine.state.today_arrival_plan if entry["source"] == "natural_day"]
+        self.assertEqual([entry["arrival_status"] for entry in day_entries], ["arrived", "arrived", "turned_away_full"])
+        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day"]), 2)
         self.assertEqual(engine.state.day_campsite_groups_served, 10)
         self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE * 2)
         self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE * 2)
@@ -2068,8 +2108,28 @@ class TentLockingAndCapacityTests(unittest.TestCase):
     def test_tent_capacity_map_updated(self):
         engine = make_engine()
         capacities = [engine.tents[i].capacity for i in range(1, 7)]
-        self.assertEqual(capacities, [2, 2, 3, 3, 4, 5])
+        self.assertEqual(capacities, [2, 2, 3, 4, 5, 6])
         self.assertNotEqual(capacities, [1, 2, 2, 3, 3, 5])
+
+    def test_natural_day_guest_group_size_uses_one_to_six(self):
+        engine = make_engine()
+        with mock.patch("game_engine.random.randint", return_value=6) as randint_mock:
+            guest = engine._create_day_guest()
+
+        self.assertEqual(guest.visit_type, "day")
+        self.assertEqual(guest.group_size, 6)
+        randint_mock.assert_called_once_with(1, 6)
+
+    def test_natural_overnight_guest_group_size_uses_one_to_six_without_unlocked_capacity_cap(self):
+        engine = make_engine()
+        self.assertEqual(max(tent.capacity for tent in engine._get_unlocked_tents()), 2)
+
+        with mock.patch("game_engine.random.randint", return_value=6) as randint_mock:
+            guest = engine._create_overnight_guest()
+
+        self.assertEqual(guest.visit_type, "overnight")
+        self.assertEqual(guest.group_size, 6)
+        randint_mock.assert_called_once_with(1, 6)
 
     def test_new_game_only_tent_one_unlocked(self):
         engine = make_engine()
@@ -2085,12 +2145,13 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         self.assertEqual(engine._find_available_tent(2), 1)
         self.assertIsNone(engine._find_available_tent(3))
 
-    def test_locked_tent_not_used_for_direct_overnight_guests(self):
+    def test_occupied_tent_does_not_block_natural_overnight_guest_generation(self):
         engine = make_engine()
         engine.tents[1].status = "occupied"
         with mock.patch("game_engine.random.random", return_value=0.0):
             guests = engine._generate_overnight_guests()
-        self.assertEqual(guests, [])
+        self.assertEqual(len(guests), 1)
+        self.assertEqual(guests[0].visit_type, "overnight")
 
     def test_accept_reservation_fails_when_only_locked_tent_has_capacity(self):
         engine = make_engine()
