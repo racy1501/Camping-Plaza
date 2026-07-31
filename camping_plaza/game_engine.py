@@ -5,6 +5,7 @@
 """
 
 import os
+import math
 import random
 import json
 import sqlite3
@@ -395,6 +396,26 @@ class CampingPlazaEngine:
         elif self.state.reputation_rate < 50:
             count = max(1, count - 1)
         return max(1, count)
+
+    def _calculate_management_quality(self) -> float:
+        greenery = self.facilities["greenery"]
+        return (
+            self.state.reputation_rate / 100
+            + (self.facilities["dining"].level + 1) / 3
+            + (self.facilities["entertainment"].level + 1) / 3
+            + greenery.greenery_satisfaction / 10
+        ) / 4
+
+    def _calculate_development_degree(self) -> float:
+        unlocked_tent_count = sum(1 for tent in self.tents.values() if tent.is_unlocked)
+        return (1 + unlocked_tent_count / 6) / 2
+
+    def _probabilistic_round(self, value: float) -> int:
+        base = math.floor(value)
+        fraction = round(value - base, 10)
+        if math.isclose(fraction, 0.0):
+            return base
+        return base + 1 if random.random() < fraction else base
 
     def _calculate_overnight_guest_demand(self) -> int:
         count = 0
