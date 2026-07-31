@@ -2327,6 +2327,14 @@ class CampingPlazaEngine:
         profile["reservation_processed"] = True
         profile["reservation_result"] = "accepted_overnight"
 
+    def accept_reservation(self, group_size: int) -> dict:
+        """兼容旧手动预约入口，当前仅返回自动结算提示。"""
+        return {"success": True, "message": "预约已改为自动结算，无需手动处理"}
+
+    def reject_reservation(self) -> dict:
+        """兼容旧手动预约入口，当前仅返回自动结算提示。"""
+        return {"success": True, "message": "预约已改为自动结算，无需手动处理"}
+
     def get_full_state(self) -> dict:
         # 修复：对外隐藏NPC隐藏标签，引擎内部数据不变
         safe_npcs = []

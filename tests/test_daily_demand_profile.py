@@ -27,6 +27,20 @@ def tearDownModule():
     _TEMP_DIRS.clear()
 
 
+def snapshot_manual_reservation_state(engine: CampingPlazaEngine) -> dict:
+    reservation = engine.state.reservation
+    return {
+        "balance": engine.state.balance,
+        "today_income": dict(engine.state.today_income),
+        "reservation": None if reservation is None else dict(reservation),
+        "reserved_tent_id": engine.state.reserved_tent_id,
+        "reserved_tent_day": engine.state.reserved_tent_day,
+        "reputation_rate": engine.state.reputation_rate,
+        "decisions_left": engine.state.decisions_left,
+        "today_events": list(engine.state.today_events),
+    }
+
+
 class DailyDemandHelperTests(unittest.TestCase):
     def test_first_daily_demand_profile_call_generates_day_and_overnight_demand(self):
         engine = make_engine()
@@ -889,6 +903,63 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
         self.assertIsNone(engine.state.reserved_tent_id)
         self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "accepted_day")
+
+    def test_accept_reservation_is_now_a_noop_compatibility_interface(self):
+        engine = make_engine()
+        engine.state.balance = 1350
+        engine.state.today_income["accommodation"] = 180
+        engine.state.today_income["campsite"] = 20
+        engine.state.reputation_rate = 72.5
+        engine.state.decisions_left = 2
+        engine.state.today_events.append("existing event")
+        engine.state.reservation = {
+            "visit_type": "overnight",
+            "group_size": 4,
+            "arrival_day": engine.state.day + 1,
+            "tent_id": 4,
+            "paid": True,
+            "status": "accepted",
+            "npc_id": 101,
+            "economic_level": 1,
+            "spending_habit": 2,
+            "temperament": 0,
+        }
+        engine.state.reserved_tent_id = 4
+        engine.state.reserved_tent_day = engine.state.day + 1
+        before = snapshot_manual_reservation_state(engine)
+
+        result = engine.accept_reservation(group_size=6)
+
+        self.assertEqual(result, {"success": True, "message": "预约已改为自动结算，无需手动处理"})
+        self.assertEqual(snapshot_manual_reservation_state(engine), before)
+
+    def test_reject_reservation_is_now_a_noop_compatibility_interface(self):
+        engine = make_engine()
+        engine.state.balance = 1350
+        engine.state.today_income["accommodation"] = 180
+        engine.state.today_income["campsite"] = 20
+        engine.state.reputation_rate = 72.5
+        engine.state.decisions_left = 2
+        engine.state.today_events.append("existing event")
+        engine.state.reservation = {
+            "visit_type": "day",
+            "group_size": 3,
+            "arrival_day": engine.state.day + 1,
+            "paid": True,
+            "status": "accepted",
+            "npc_id": 102,
+            "economic_level": 2,
+            "spending_habit": 1,
+            "temperament": 0,
+        }
+        engine.state.reserved_tent_id = 4
+        engine.state.reserved_tent_day = engine.state.day + 1
+        before = snapshot_manual_reservation_state(engine)
+
+        result = engine.reject_reservation()
+
+        self.assertEqual(result, {"success": True, "message": "预约已改为自动结算，无需手动处理"})
+        self.assertEqual(snapshot_manual_reservation_state(engine), before)
 
     def test_day_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
         engine = make_engine()
