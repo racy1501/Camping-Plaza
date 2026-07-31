@@ -555,6 +555,34 @@ class CampingPlazaEngine:
             planned_entries.append(entry)
             self.state.reservation = None
 
+        if (
+            self.state.reservation is not None
+            and self.state.reservation.get("visit_type") == "overnight"
+            and self.state.reservation.get("status") == "accepted"
+            and self.state.reservation.get("arrival_day") == self.state.day
+        ):
+            reserved_guest = NPCGroup(
+                id=self.state.reservation["npc_id"],
+                group_size=self.state.reservation["group_size"],
+                visit_type="overnight",
+                total_satisfaction=self.state.reservation.get("total_satisfaction", 60),
+                is_reserved=True,
+                paid=self.state.reservation.get("paid", False),
+            )
+            reserved_guest.economic_level = self.state.reservation.get("economic_level", 1)
+            reserved_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
+            reserved_guest.temperament = self.state.reservation.get("temperament", 1)
+            arrival_turn = self._roll_arrival_turn()
+            entry = self._build_arrival_plan_entry(
+                reserved_guest,
+                arrival_turn,
+                "reservation",
+                tent_id=self.state.reservation.get("tent_id"),
+            )
+            self._append_planned_actions(entry)
+            planned_entries.append(entry)
+            self.state.reservation = None
+
         natural_guests = [
             self._create_day_guest()
             for _ in range(demand["day_guest_count"])
