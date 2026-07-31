@@ -28,6 +28,66 @@ def tearDownModule():
 
 
 class DailyDemandHelperTests(unittest.TestCase):
+    def test_day_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
+        engine = make_engine()
+
+        with mock.patch.object(engine, "_calculate_management_quality", return_value=0.8) as quality_mock:
+            with mock.patch.object(engine, "_calculate_development_degree", return_value=0.9) as development_mock:
+                with mock.patch.object(engine, "_probabilistic_round", return_value=7) as round_mock:
+                    result = engine._calculate_day_guest_demand()
+
+        self.assertEqual(result, 7)
+        quality_mock.assert_called_once_with()
+        development_mock.assert_called_once_with()
+        round_mock.assert_called_once_with(mock.ANY)
+        self.assertAlmostEqual(round_mock.call_args.args[0], 7.2)
+
+    def test_day_guest_demand_ignores_current_remaining_capacity(self):
+        engine_a = make_engine()
+        engine_b = make_engine()
+        engine_a.state.day_campsite_groups_served = 0
+        engine_b.state.day_campsite_groups_served = 9
+
+        for engine in (engine_a, engine_b):
+            engine.state.reputation_rate = 80.0
+            engine.facilities["dining"].level = 2
+            engine.facilities["entertainment"].level = 2
+            engine.facilities["greenery"].greenery_satisfaction = 10.0
+            for tent in engine.tents.values():
+                tent.is_unlocked = True
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            demand_a = engine_a._calculate_day_guest_demand()
+            demand_b = engine_b._calculate_day_guest_demand()
+
+        self.assertEqual(engine_a.get_day_campsite_remaining(), 10)
+        self.assertEqual(engine_b.get_day_campsite_remaining(), 1)
+        self.assertEqual(demand_a, demand_b)
+
+    def test_day_guest_demand_can_exceed_current_remaining_capacity(self):
+        engine = make_engine()
+        engine.state.day_campsite_groups_served = 9
+
+        with mock.patch.object(engine, "_calculate_management_quality", return_value=0.8):
+            with mock.patch.object(engine, "_calculate_development_degree", return_value=0.9):
+                with mock.patch.object(engine, "_probabilistic_round", return_value=7):
+                    result = engine._calculate_day_guest_demand()
+
+        self.assertEqual(engine.get_day_campsite_remaining(), 1)
+        self.assertEqual(result, 7)
+        self.assertGreater(result, engine.get_day_campsite_remaining())
+
+    def test_day_guest_demand_does_not_call_old_random_range_logic(self):
+        engine = make_engine()
+
+        with mock.patch("game_engine.random.randint", side_effect=AssertionError("old random range called")):
+            with mock.patch.object(engine, "_calculate_management_quality", return_value=0.6):
+                with mock.patch.object(engine, "_calculate_development_degree", return_value=0.5):
+                    with mock.patch.object(engine, "_probabilistic_round", return_value=3):
+                        result = engine._calculate_day_guest_demand()
+
+        self.assertEqual(result, 3)
+
     def test_management_quality_uses_equal_weighted_four_terms(self):
         engine = make_engine()
         engine.state.reputation_rate = 80.0

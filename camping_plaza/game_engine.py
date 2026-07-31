@@ -390,12 +390,10 @@ class CampingPlazaEngine:
         return None
 
     def _calculate_day_guest_demand(self) -> int:
-        count = random.randint(2, 5)
-        if self.state.reputation_rate > 70:
-            count += 1
-        elif self.state.reputation_rate < 50:
-            count = max(1, count - 1)
-        return max(1, count)
+        management_quality = self._calculate_management_quality()
+        development_degree = self._calculate_development_degree()
+        raw_demand = management_quality * development_degree * 10
+        return self._probabilistic_round(raw_demand)
 
     def _calculate_management_quality(self) -> float:
         greenery = self.facilities["greenery"]
