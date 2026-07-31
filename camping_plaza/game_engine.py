@@ -416,11 +416,10 @@ class CampingPlazaEngine:
         return base + 1 if random.random() < fraction else base
 
     def _calculate_overnight_guest_demand(self) -> int:
-        count = 0
-        for _tent in self._get_unlocked_tents():
-            if random.random() < 0.6:
-                count += 1
-        return count
+        management_quality = self._calculate_management_quality()
+        development_degree = self._calculate_development_degree()
+        raw_demand = management_quality * development_degree * 6
+        return self._probabilistic_round(raw_demand)
 
     def _calculate_daily_visitor_demand(self) -> dict:
         return {

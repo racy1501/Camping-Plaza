@@ -88,6 +88,82 @@ class DailyDemandHelperTests(unittest.TestCase):
 
         self.assertEqual(result, 3)
 
+    def test_overnight_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
+        engine = make_engine()
+
+        with mock.patch.object(engine, "_calculate_management_quality", return_value=0.8) as quality_mock:
+            with mock.patch.object(engine, "_calculate_development_degree", return_value=0.9) as development_mock:
+                with mock.patch.object(engine, "_probabilistic_round", return_value=4) as round_mock:
+                    result = engine._calculate_overnight_guest_demand()
+
+        self.assertEqual(result, 4)
+        quality_mock.assert_called_once_with()
+        development_mock.assert_called_once_with()
+        round_mock.assert_called_once_with(mock.ANY)
+        self.assertAlmostEqual(round_mock.call_args.args[0], 4.32)
+
+    def test_overnight_guest_demand_ignores_tent_status(self):
+        engine_a = make_engine()
+        engine_b = make_engine()
+        status_map = {
+            1: "available",
+            2: "occupied",
+            3: "cleaning",
+            4: "broken",
+            5: "reserved",
+            6: "occupied",
+        }
+
+        for engine in (engine_a, engine_b):
+            engine.state.reputation_rate = 80.0
+            engine.facilities["dining"].level = 2
+            engine.facilities["entertainment"].level = 2
+            engine.facilities["greenery"].greenery_satisfaction = 10.0
+            for tent in engine.tents.values():
+                tent.is_unlocked = True
+
+        for tent_id, tent in engine_a.tents.items():
+            tent.status = status_map[tent_id]
+        for tent in engine_b.tents.values():
+            tent.status = "available"
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            demand_a = engine_a._calculate_overnight_guest_demand()
+            demand_b = engine_b._calculate_overnight_guest_demand()
+
+        self.assertEqual(demand_a, demand_b)
+
+    def test_overnight_guest_demand_can_exceed_current_receivable_tent_count(self):
+        engine = make_engine()
+        for tent in engine.tents.values():
+            tent.is_unlocked = True
+            tent.status = "occupied"
+        engine.tents[1].status = "available"
+
+        with mock.patch.object(engine, "_calculate_management_quality", return_value=0.8):
+            with mock.patch.object(engine, "_calculate_development_degree", return_value=0.9):
+                with mock.patch.object(engine, "_probabilistic_round", return_value=4):
+                    result = engine._calculate_overnight_guest_demand()
+
+        receivable_tent_count = sum(
+            1 for tent in engine.tents.values() if tent.is_unlocked and tent.status == "available"
+        )
+        self.assertEqual(receivable_tent_count, 1)
+        self.assertEqual(result, 4)
+        self.assertGreater(result, receivable_tent_count)
+
+    def test_overnight_guest_demand_does_not_call_old_per_tent_random_logic(self):
+        engine = make_engine()
+
+        with mock.patch("game_engine.random.random", side_effect=AssertionError("old per-tent random called")):
+            with mock.patch.object(engine, "_get_unlocked_tents", side_effect=AssertionError("old unlocked tent scan called")):
+                with mock.patch.object(engine, "_calculate_management_quality", return_value=0.6):
+                    with mock.patch.object(engine, "_calculate_development_degree", return_value=0.5):
+                        with mock.patch.object(engine, "_probabilistic_round", return_value=2):
+                            result = engine._calculate_overnight_guest_demand()
+
+        self.assertEqual(result, 2)
+
     def test_management_quality_uses_equal_weighted_four_terms(self):
         engine = make_engine()
         engine.state.reputation_rate = 80.0
