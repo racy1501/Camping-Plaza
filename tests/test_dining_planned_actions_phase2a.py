@@ -117,11 +117,16 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                         "game_engine.random.random",
                         side_effect=[0.0, 0.99, 0.99, 0.99, 0.99, 0.99],
                     ) as random_mock:
-                        with mock.patch(
-                            "game_engine.random.sample", return_value=[5]
-                        ) as sample_mock:
-                            first = engine._ensure_today_arrival_plan()
-                            second = engine._ensure_today_arrival_plan()
+                        with mock.patch.object(
+                            CampingPlazaEngine,
+                            "_roll_arrival_turn",
+                            side_effect=[2, 3],
+                        ):
+                            with mock.patch(
+                                "game_engine.random.sample", return_value=[5]
+                            ) as sample_mock:
+                                first = engine._ensure_today_arrival_plan()
+                                second = engine._ensure_today_arrival_plan()
 
         self.assertTrue(first)
         self.assertFalse(second)
@@ -311,6 +316,103 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             ValueError, "planned action count exceeds available turns"
         ):
             engine._schedule_planned_actions(4, actions)
+
+    def test_append_planned_actions_rolls_all_three_actions_before_turn_cap(self):
+        engine = self._new_engine()
+        npc = self._make_guest(engine, 820, visit_type="day")
+        entry = self._make_entry(engine, npc, arrival_turn=4, source="natural_day")
+
+        with mock.patch.object(
+            engine,
+            "_build_dining_planned_action",
+            return_value={"action": "dining", "status": "pending"},
+        ) as dining_mock, mock.patch.object(
+            engine,
+            "_build_paid_entertainment_planned_action",
+            return_value={"action": "paid_entertainment", "status": "pending"},
+        ) as paid_mock, mock.patch.object(
+            engine,
+            "_build_free_entertainment_planned_action",
+            return_value={"action": "free_entertainment", "status": "pending"},
+        ) as free_mock, mock.patch(
+            "game_engine.random.shuffle"
+        ) as shuffle_mock, mock.patch(
+            "game_engine.random.sample", return_value=[4, 5]
+        ):
+            engine._append_planned_actions(entry)
+
+        dining_mock.assert_called_once_with(entry)
+        paid_mock.assert_called_once_with(entry)
+        free_mock.assert_called_once_with()
+        self.assertEqual(shuffle_mock.call_count, 1)
+        self.assertEqual(len(entry["planned_actions"]), 2)
+
+    def test_append_planned_actions_uses_single_optional_pool_without_priority(self):
+        engine = self._new_engine()
+        npc = self._make_guest(engine, 821, visit_type="day")
+        entry = self._make_entry(engine, npc, arrival_turn=4, source="natural_day")
+
+        def reverse_actions(actions):
+            actions.reverse()
+
+        with mock.patch.object(
+            engine,
+            "_build_dining_planned_action",
+            return_value={"action": "dining", "status": "pending"},
+        ), mock.patch.object(
+            engine,
+            "_build_paid_entertainment_planned_action",
+            return_value={"action": "paid_entertainment", "status": "pending"},
+        ), mock.patch.object(
+            engine,
+            "_build_free_entertainment_planned_action",
+            return_value={"action": "free_entertainment", "status": "pending"},
+        ), mock.patch(
+            "game_engine.random.shuffle", side_effect=reverse_actions
+        ), mock.patch(
+            "game_engine.random.sample", return_value=[4, 5]
+        ):
+            engine._append_planned_actions(entry)
+
+        self.assertEqual(
+            {action["action"] for action in entry["planned_actions"]},
+            {"free_entertainment", "paid_entertainment"},
+        )
+
+    def test_append_planned_actions_keeps_required_actions_before_optional_truncation(self):
+        engine = self._new_engine()
+        npc = self._make_guest(engine, 822, visit_type="day")
+        entry = self._make_entry(engine, npc, arrival_turn=4, source="reservation")
+        required_action = {"action": "reserved_hot_spring", "status": "pending"}
+
+        def reverse_actions(actions):
+            actions.reverse()
+
+        with mock.patch.object(
+            engine,
+            "_build_dining_planned_action",
+            return_value={"action": "dining", "status": "pending"},
+        ), mock.patch.object(
+            engine,
+            "_build_paid_entertainment_planned_action",
+            return_value={"action": "paid_entertainment", "status": "pending"},
+        ), mock.patch.object(
+            engine,
+            "_build_free_entertainment_planned_action",
+            return_value={"action": "free_entertainment", "status": "pending"},
+        ), mock.patch(
+            "game_engine.random.shuffle", side_effect=reverse_actions
+        ), mock.patch(
+            "game_engine.random.sample", return_value=[4, 5]
+        ):
+            engine._append_planned_actions(entry, required_actions=[required_action])
+
+        self.assertEqual(len(entry["planned_actions"]), 2)
+        self.assertIn(required_action, entry["planned_actions"])
+        self.assertEqual(
+            {action["action"] for action in entry["planned_actions"]},
+            {"reserved_hot_spring", "free_entertainment"},
+        )
 
     def test_day_guest_arrives_to_campsite_not_random_consumption_area(self):
         engine = self._new_engine()
@@ -715,9 +817,16 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             with mock.patch(
                 "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
             ):
-                with mock.patch("game_engine.random.choices", return_value=["standard"]):
-                    with mock.patch("game_engine.random.sample", return_value=[2]):
-                        self.assertTrue(engine._ensure_today_arrival_plan())
+                with mock.patch.object(
+                    CampingPlazaEngine, "_roll_arrival_turn", return_value=2
+                ):
+                    with mock.patch("game_engine.random.choices", return_value=["standard"]):
+                        with mock.patch("game_engine.random.sample", return_value=[2]):
+                            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        self.assertIsNone(engine.state.reservation)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
 
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
         plan_entry = engine.state.today_arrival_plan[0]
@@ -792,9 +901,12 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             with mock.patch(
                 "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
             ):
-                with mock.patch("game_engine.random.choices", return_value=["standard"]):
-                    with mock.patch("game_engine.random.sample", return_value=[2]):
-                        self.assertTrue(engine._ensure_today_arrival_plan())
+                with mock.patch.object(
+                    CampingPlazaEngine, "_roll_arrival_turn", return_value=2
+                ):
+                    with mock.patch("game_engine.random.choices", return_value=["standard"]):
+                        with mock.patch("game_engine.random.sample", return_value=[2]):
+                            self.assertTrue(engine._ensure_today_arrival_plan())
 
         plan_entry = engine.state.today_arrival_plan[0]
         dining_action = plan_entry["planned_actions"][0]
@@ -808,6 +920,9 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertLessEqual(dining_action["planned_turn"], 5)
         self.assertEqual(dining_action["menu_key"], "standard")
         self.assertEqual(dining_action["status"], "pending")
+        self.assertIsNone(engine.state.reservation)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
 
         self.assertTrue(engine.save_state())
 

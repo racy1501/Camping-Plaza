@@ -52,7 +52,11 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
             CampingPlazaEngine,
             "_calculate_daily_visitor_demand",
             return_value=demand,
-        ) as demand_mock:
+        ) as demand_mock, mock.patch.object(
+            CampingPlazaEngine,
+            "_roll_arrival_turn",
+            side_effect=[2, 3, 4] * 4,
+        ):
             self.assertTrue(engine._ensure_today_arrival_plan())
             first_plan = [dict(entry) for entry in engine.state.today_arrival_plan]
             self.assertFalse(engine._ensure_today_arrival_plan())
@@ -94,6 +98,10 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
             CampingPlazaEngine,
             "_calculate_daily_visitor_demand",
             return_value={"day_guest_count": 12, "overnight_guest_count": 0},
+        ), mock.patch.object(
+            CampingPlazaEngine,
+            "_roll_arrival_turn",
+            side_effect=[2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4],
         ):
             self.assertTrue(engine._ensure_today_arrival_plan())
 
@@ -197,18 +205,32 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
             CampingPlazaEngine,
             "_calculate_daily_visitor_demand",
             return_value={"day_guest_count": 0, "overnight_guest_count": 0},
+        ), mock.patch.object(CampingPlazaEngine, "_roll_arrival_turn", return_value=4), mock.patch(
+            "game_engine.random.random", side_effect=[0.99, 0.99, 0.99]
         ):
             self.assertTrue(engine._ensure_today_arrival_plan())
 
         plan_entry = engine._find_arrival_plan_entry(source="reservation", tent_id=reserved_tent_id)
         self.assertIsNotNone(plan_entry)
         reserved_npc_id = plan_entry["npc_id"]
-        self.assertEqual(engine.state.reservation["npc_id"], reserved_npc_id)
+        self.assertIsNone(engine.state.reservation)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
+        self.assertEqual(plan_entry["arrival_turn"], 4)
         self.assertEqual(plan_entry["arrival_status"], "pending")
         self.assertEqual(plan_entry["economic_level"], reservation_tags["economic_level"])
         self.assertEqual(plan_entry["spending_habit"], reservation_tags["spending_habit"])
         self.assertEqual(plan_entry["temperament"], reservation_tags["temperament"])
+        self.assertTrue(engine._is_today_reserved_tent(reserved_tent_id))
+        self.assertEqual(engine.tents[reserved_tent_id].status, "reserved")
+        self.assertIsNone(engine._find_available_tent(1))
 
+        engine.state.turn = 1
+        engine._process_reservations({"events": []})
+        self.assertEqual(plan_entry["arrival_status"], "pending")
+        self.assertEqual(len(engine.npc_pool), 0)
+
+        engine.state.turn = 4
         engine._process_reservations({"events": []})
         self.assertEqual(engine.state.balance, balance_after_accept)
         self.assertEqual(plan_entry["arrival_status"], "arrived")
@@ -224,3 +246,111 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         self.assertEqual(engine.state.balance, balance_after_accept)
         self.assertEqual(len([npc for npc in engine.npc_pool if npc.is_reserved]), 1)
 
+    def test_transferred_reservation_allows_new_request_for_third_day(self):
+        engine = self._new_engine()
+        engine.state.reservation = {
+            "group_size": 2,
+            "economic_level": 1,
+            "spending_habit": 2,
+            "temperament": 0,
+        }
+
+        self.assertTrue(engine.accept_reservation(2)["success"])
+        reserved_tent_id = engine.state.reserved_tent_id
+        engine.state.day = 2
+        engine.state.turn = 1
+        engine.tents[reserved_tent_id].status = "reserved"
+
+        with mock.patch.object(
+            CampingPlazaEngine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 0, "overnight_guest_count": 0},
+        ), mock.patch.object(CampingPlazaEngine, "_roll_arrival_turn", return_value=4), mock.patch(
+            "game_engine.random.random", side_effect=[0.99, 0.99, 0.99]
+        ):
+            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        self.assertEqual(len(engine.state.today_arrival_plan), 1)
+        self.assertIsNone(engine.state.reservation)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
+
+        with mock.patch("game_engine.random.random", return_value=0.0), mock.patch(
+            "game_engine.random.randint", side_effect=[3, 2, 1, 0]
+        ):
+            engine._generate_daily_reservation()
+
+        self.assertIsNotNone(engine.state.reservation)
+        self.assertEqual(engine.state.reservation["group_size"], 3)
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
+        self.assertEqual(len(engine.state.today_arrival_plan), 1)
+
+    def test_reservation_entry_uses_shared_arrival_turn_helper(self):
+        engine = self._new_engine()
+        engine.state.reservation = {
+            "group_size": 2,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 0,
+        }
+        self.assertTrue(engine.accept_reservation(2)["success"])
+        reserved_tent_id = engine.state.reserved_tent_id
+        engine.state.day = engine.state.reserved_tent_day
+        engine.state.turn = 1
+        engine.tents[reserved_tent_id].status = "reserved"
+
+        guest = self._make_guest(901, "day")
+        with mock.patch.object(
+            CampingPlazaEngine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 1, "overnight_guest_count": 0},
+        ), mock.patch.object(
+            CampingPlazaEngine, "_create_day_guest", return_value=guest
+        ), mock.patch.object(
+            engine, "_append_planned_actions", wraps=engine._append_planned_actions
+        ) as append_actions_mock, mock.patch.object(
+            CampingPlazaEngine,
+            "_roll_arrival_turn",
+            side_effect=[3, 4],
+        ) as arrival_turn_mock, mock.patch(
+            "game_engine.random.random",
+            side_effect=[0.99, 0.99, 0.99, 0.99, 0.99, 0.99],
+        ):
+            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        self.assertEqual(arrival_turn_mock.call_count, 2)
+        self.assertEqual(append_actions_mock.call_count, 2)
+        self.assertEqual(
+            [(entry["source"], entry["arrival_turn"]) for entry in engine.state.today_arrival_plan],
+            [("natural_day", 3), ("reservation", 4)],
+        )
+
+    def test_reservation_arrival_turn_can_use_turns_two_three_and_four(self):
+        for arrival_turn in (2, 3, 4):
+            with self.subTest(arrival_turn=arrival_turn):
+                engine = self._new_engine()
+                engine.state.reservation = {
+                    "group_size": 2,
+                    "economic_level": 1,
+                    "spending_habit": 1,
+                    "temperament": 0,
+                }
+                self.assertTrue(engine.accept_reservation(2)["success"])
+                reserved_tent_id = engine.state.reserved_tent_id
+                engine.state.day = engine.state.reserved_tent_day
+                engine.state.turn = 1
+                engine.tents[reserved_tent_id].status = "reserved"
+
+                with mock.patch.object(
+                    CampingPlazaEngine,
+                    "_calculate_daily_visitor_demand",
+                    return_value={"day_guest_count": 0, "overnight_guest_count": 0},
+                ), mock.patch.object(
+                    CampingPlazaEngine, "_roll_arrival_turn", return_value=arrival_turn
+                ), mock.patch(
+                    "game_engine.random.random", side_effect=[0.99, 0.99, 0.99]
+                ):
+                    self.assertTrue(engine._ensure_today_arrival_plan())
+
+                self.assertEqual(engine.state.today_arrival_plan[0]["arrival_turn"], arrival_turn)
