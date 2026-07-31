@@ -524,11 +524,137 @@ class DailyDemandHelperTests(unittest.TestCase):
                 engine._ensure_today_arrival_plan()
 
         engine._process_reservations(result)
+        engine._process_planned_arrivals(result)
         engine._process_reservations(result)
 
         self.assertEqual(len(engine.npc_pool), 1)
         self.assertEqual(engine.npc_pool[0].id, 66)
         self.assertEqual(engine.state.today_arrival_plan[0]["arrival_status"], "arrived")
+
+    def test_overnight_reservation_arrival_uses_locked_tent_without_recharging(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.balance = 1500
+        engine.state.today_income["accommodation"] = engine.TENT_PRICES[4]
+        engine.state.reserved_tent_id = 4
+        engine.state.reserved_tent_day = 2
+        engine.tents[4].is_unlocked = True
+        engine.tents[4].status = "reserved"
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": 101,
+                "group_size": 4,
+                "visit_type": "overnight",
+                "economic_level": 1,
+                "spending_habit": 2,
+                "temperament": 0,
+                "total_satisfaction": 60,
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "source": "reservation",
+                "arrival_status": "pending",
+                "planned_actions": [],
+                "is_reserved": True,
+                "paid": True,
+                "tent_id": 4,
+            }
+        ]
+        result = {"events": []}
+
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(engine.npc_pool[0].location, "tent_4")
+        self.assertEqual(engine.npc_pool[0].visit_type, "overnight")
+        self.assertEqual(engine.tents[4].status, "occupied")
+        self.assertEqual(engine.tents[4].occupied_by, 101)
+        self.assertEqual(engine.state.today_arrival_plan[0]["arrival_status"], "arrived")
+        self.assertEqual(engine.state.balance, 1500)
+        self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[4])
+        self.assertIsNone(engine.state.reserved_tent_id)
+        self.assertIsNone(engine.state.reserved_tent_day)
+
+    def test_overnight_reservation_arrival_waits_when_locked_tent_is_temporarily_unavailable(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.balance = 1500
+        engine.state.today_income["accommodation"] = engine.TENT_PRICES[2]
+        engine.state.reserved_tent_id = 2
+        engine.state.reserved_tent_day = 2
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "cleaning"
+        engine.tents[2].occupied_by = 555
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": 202,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 1,
+                "total_satisfaction": 60,
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "source": "reservation",
+                "arrival_status": "pending",
+                "planned_actions": [],
+                "is_reserved": True,
+                "paid": True,
+                "tent_id": 2,
+            }
+        ]
+        result = {"events": []}
+
+        engine._process_planned_arrivals(result)
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(engine.state.today_arrival_plan[0]["arrival_status"], "pending")
+        self.assertEqual(engine.state.balance, 1500)
+        self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[2])
+        self.assertEqual(engine.state.reserved_tent_id, 2)
+        self.assertEqual(engine.state.reserved_tent_day, 2)
+        self.assertEqual(engine.tents[2].status, "cleaning")
+        self.assertEqual(engine.tents[2].occupied_by, 555)
+        self.assertEqual(len(engine.npc_pool), 0)
+
+    def test_natural_overnight_arrival_logic_still_checks_in_normally(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.tents[1].is_unlocked = True
+        engine.tents[1].status = "available"
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": 303,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 1,
+                "total_satisfaction": 60,
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "source": "natural_overnight",
+                "arrival_status": "pending",
+                "planned_actions": [],
+                "is_reserved": False,
+                "paid": False,
+                "tent_id": None,
+            }
+        ]
+        result = {"events": []}
+
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(engine.state.today_arrival_plan[0]["arrival_status"], "arrived")
+        self.assertEqual(engine.npc_pool[0].location, "tent_1")
+        self.assertEqual(engine.tents[1].status, "occupied")
+        self.assertEqual(engine.tents[1].occupied_by, 303)
+        self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[1])
 
     def test_reservation_not_triggered_creates_no_charge_or_record(self):
         engine = make_engine()

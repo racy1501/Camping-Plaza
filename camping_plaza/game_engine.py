@@ -1474,6 +1474,8 @@ class CampingPlazaEngine:
                 continue
             if plan_entry.get("source") != "reservation":
                 continue
+            if plan_entry.get("visit_type") == "overnight":
+                continue
             if plan_entry.get("arrival_status") != "pending":
                 continue
             if plan_entry.get("arrival_turn", 0) > self.state.turn:
@@ -2065,6 +2067,48 @@ class CampingPlazaEngine:
                 entry.get("source") == "reservation"
                 and entry.get("visit_type") == "overnight"
             ):
+                tent_id = entry.get("tent_id")
+                if tent_id is None or tent_id not in self.tents:
+                    continue
+                tent = self.tents[tent_id]
+                if not self._is_tent_unlocked(tent):
+                    continue
+
+                existing_reserved_npc = None
+                for npc in self.npc_pool:
+                    if (
+                        npc.id == entry["npc_id"]
+                        and npc.is_reserved
+                        and not npc.has_left
+                        and npc.location == f"tent_{tent_id}"
+                    ):
+                        existing_reserved_npc = npc
+                        break
+
+                if existing_reserved_npc is not None:
+                    entry["arrival_status"] = "arrived"
+                    self.state.reserved_tent_id = None
+                    self.state.reserved_tent_day = None
+                    continue
+
+                if tent.status not in ["available", "reserved"]:
+                    continue
+
+                guest = NPCGroup(
+                    id=entry["npc_id"],
+                    group_size=entry["group_size"],
+                    visit_type="overnight",
+                    total_satisfaction=entry["total_satisfaction"],
+                    is_reserved=True,
+                    paid=entry.get("paid", False),
+                )
+                guest.economic_level = entry["economic_level"]
+                guest.spending_habit = entry["spending_habit"]
+                guest.temperament = entry["temperament"]
+                self._checkin_npc(guest, tent_id, result, charge=False)
+                entry["arrival_status"] = "arrived"
+                self.state.reserved_tent_id = None
+                self.state.reserved_tent_day = None
                 continue
 
             if entry.get("visit_type") == "day":
