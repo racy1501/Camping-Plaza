@@ -87,6 +87,95 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         )
         return entry["planned_actions"][-1]
 
+    def _prepare_auto_reserved_overnight_dining_plan(self, engine):
+        engine.state.day = 1
+        engine.state.turn = 1
+        engine.state.daily_demand_profile_day = engine.state.day
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 0,
+            "natural_overnight_group_demand": 0,
+            "reservation_request_available": True,
+            "reservation_visit_type": "overnight",
+            "reservation_group_size": 2,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+
+        with mock.patch(
+            "game_engine.random.choices",
+            side_effect=[[1], [2], [2]],
+        ):
+            engine._generate_daily_reservation()
+
+        self.assertIsNotNone(engine.state.reservation)
+        self.assertEqual(engine.state.reservation["paid"], True)
+        self.assertEqual(engine.state.reservation["status"], "accepted")
+        self.assertEqual(engine.state.reservation["arrival_day"], 2)
+        self.assertIsNotNone(engine.state.reservation["npc_id"])
+        self.assertIsNotNone(engine.state.reservation["tent_id"])
+
+        balance_after_reservation = engine.state.balance
+        accommodation_income_after_reservation = engine.state.today_income["accommodation"]
+        reserved_npc_id = engine.state.reservation["npc_id"]
+        reserved_tent_id = engine.state.reservation["tent_id"]
+
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.daily_demand_profile_day = engine.state.day
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 0,
+            "natural_overnight_group_demand": 0,
+            "reservation_request_available": False,
+            "reservation_visit_type": None,
+            "reservation_group_size": None,
+            "reservation_processed": False,
+            "reservation_result": None,
+        }
+        engine.facilities["dining"].level = 1
+        engine.state.food_stock = 2
+
+        with mock.patch.object(
+            CampingPlazaEngine, "_roll_arrival_turn", return_value=2
+        ):
+            with mock.patch(
+                "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
+            ):
+                with mock.patch(
+                    "game_engine.random.choices", return_value=["standard"]
+                ):
+                    with mock.patch(
+                        "game_engine.random.sample", return_value=[2]
+                    ):
+                        self.assertTrue(engine._ensure_today_arrival_plan())
+
+        self.assertIsNone(engine.state.reservation)
+        self.assertEqual(engine.state.reserved_tent_id, reserved_tent_id)
+        self.assertEqual(engine.state.reserved_tent_day, 2)
+        self.assertEqual(len(engine.state.today_arrival_plan), 1)
+
+        plan_entry = engine.state.today_arrival_plan[0]
+        dining_action = plan_entry["planned_actions"][0]
+
+        self.assertEqual(plan_entry["source"], "reservation")
+        self.assertEqual(plan_entry["npc_id"], reserved_npc_id)
+        self.assertEqual(plan_entry["paid"], True)
+        self.assertEqual(plan_entry["tent_id"], reserved_tent_id)
+        self.assertEqual(plan_entry["arrival_turn"], 2)
+        self.assertEqual(plan_entry["arrival_status"], "pending")
+        self.assertEqual(dining_action["action"], "dining")
+        self.assertEqual(dining_action["menu_key"], "standard")
+        self.assertEqual(dining_action["status"], "pending")
+        self.assertEqual(dining_action["planned_turn"], 2)
+
+        return {
+            "balance_after_reservation": balance_after_reservation,
+            "accommodation_income_after_reservation": accommodation_income_after_reservation,
+            "reserved_npc_id": reserved_npc_id,
+            "reserved_tent_id": reserved_tent_id,
+            "plan_entry": plan_entry,
+            "dining_action": dining_action,
+        }
+
     def test_daily_plan_draws_dining_once_and_stores_menu_turn(self):
         engine = self._new_engine()
         engine.facilities["entertainment"].level = 1
@@ -471,6 +560,42 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(npc.total_satisfaction, 64)
         self.assertEqual(len(result["events"]), 1)
 
+    def test_process_dining_ignores_non_dining_planned_actions(self):
+        engine = self._new_engine()
+        engine.state.day = 5
+        engine.state.turn = 1
+        npc = self._make_guest(engine, 450, visit_type="day", location="campsite")
+        engine.npc_pool.append(npc)
+        entry = self._make_entry(
+            engine, npc, arrival_turn=2, source="natural_day", arrival_status="arrived"
+        )
+        free_action = {
+            "action": "free_entertainment",
+            "status": "pending",
+            "planned_turn": 4,
+        }
+        paid_action = {
+            "action": "paid_entertainment",
+            "tier_key": "basic",
+            "status": "pending",
+            "planned_turn": 4,
+        }
+        dining_action = self._add_dining_action(
+            entry, planned_turn=5, menu_key="basic"
+        )
+        entry["planned_actions"] = [free_action, paid_action, dining_action]
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [entry]
+
+        result = {"events": []}
+        engine._process_dining(result)
+
+        self.assertEqual(free_action["status"], "pending")
+        self.assertEqual(paid_action["status"], "pending")
+        self.assertEqual(dining_action["status"], "pending")
+        self.assertEqual(result["events"], [])
+        self.assertEqual(engine.state.today_income["dining"], 0)
+
     def test_overnight_guest_uses_planned_menu_key_without_redraw_or_downgrade(self):
         engine = self._new_engine()
         engine.state.day = 6
@@ -790,66 +915,25 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
 
     def test_reserved_guest_dining_action_reuses_id_and_skips_lodging_charge(self):
         engine = self._new_engine()
-        engine.state.day = 1
-        engine.state.turn = 1
-        engine.state.reservation = {
-            "group_size": 2,
-            "economic_level": 1,
-            "spending_habit": 2,
-            "temperament": 1,
-        }
-
-        reservation_result = engine.accept_reservation(2)
-        self.assertTrue(reservation_result["success"])
-        balance_after_reservation = engine.state.balance
-        accommodation_income_after_reservation = engine.state.today_income["accommodation"]
-
-        engine.state.day = 2
-        engine.state.turn = 2
-        engine.facilities["dining"].level = 1
-        engine.state.food_stock = 2
-
-        with mock.patch.object(
-            CampingPlazaEngine,
-            "_calculate_daily_visitor_demand",
-            return_value={"day_guest_count": 0, "overnight_guest_count": 0},
-        ):
-            with mock.patch(
-                "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
-            ):
-                with mock.patch.object(
-                    CampingPlazaEngine, "_roll_arrival_turn", return_value=2
-                ):
-                    with mock.patch("game_engine.random.choices", return_value=["standard"]):
-                        with mock.patch("game_engine.random.sample", return_value=[2]):
-                            self.assertTrue(engine._ensure_today_arrival_plan())
-
-        self.assertIsNone(engine.state.reservation)
-        self.assertIsNone(engine.state.reserved_tent_id)
-        self.assertIsNone(engine.state.reserved_tent_day)
-
-        self.assertEqual(len(engine.state.today_arrival_plan), 1)
-        plan_entry = engine.state.today_arrival_plan[0]
-        dining_action = plan_entry["planned_actions"][0]
-
-        self.assertEqual(plan_entry["source"], "reservation")
-        self.assertEqual(plan_entry["arrival_turn"], 2)
-        self.assertEqual(dining_action["action"], "dining")
-        self.assertGreaterEqual(dining_action["planned_turn"], plan_entry["arrival_turn"])
-        self.assertLessEqual(dining_action["planned_turn"], 5)
-        self.assertEqual(dining_action["menu_key"], "standard")
-        self.assertEqual(dining_action["status"], "pending")
-        self.assertIsNotNone(plan_entry["npc_id"])
+        prepared = self._prepare_auto_reserved_overnight_dining_plan(engine)
+        plan_entry = prepared["plan_entry"]
+        dining_action = prepared["dining_action"]
+        balance_after_reservation = prepared["balance_after_reservation"]
+        accommodation_income_after_reservation = prepared[
+            "accommodation_income_after_reservation"
+        ]
+        reserved_npc_id = prepared["reserved_npc_id"]
+        reserved_tent_id = prepared["reserved_tent_id"]
 
         result = {"events": []}
-        engine._process_reservations(result)
+        engine._process_planned_arrivals(result)
 
         self.assertEqual(plan_entry["arrival_status"], "arrived")
         self.assertEqual(len(engine.npc_pool), 1)
-        self.assertEqual(engine.npc_pool[0].id, plan_entry["npc_id"])
+        self.assertEqual(engine.npc_pool[0].id, reserved_npc_id)
         self.assertTrue(engine.npc_pool[0].is_reserved)
         self.assertTrue(engine.npc_pool[0].paid)
-        self.assertEqual(engine.npc_pool[0].location, "tent_1")
+        self.assertEqual(engine.npc_pool[0].location, f"tent_{reserved_tent_id}")
         self.assertEqual(engine.state.balance, balance_after_reservation)
         self.assertEqual(
             engine.state.today_income["accommodation"],
@@ -875,54 +959,15 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.addCleanup(_cleanup_db_path, db_path)
 
         engine = CampingPlazaEngine(db_path=db_path)
-        engine.state.day = 1
-        engine.state.turn = 1
-        engine.state.reservation = {
-            "group_size": 2,
-            "economic_level": 1,
-            "spending_habit": 2,
-            "temperament": 1,
-        }
-
-        self.assertTrue(engine.accept_reservation(2)["success"])
-        balance_after_reservation = engine.state.balance
-        accommodation_income_after_reservation = engine.state.today_income["accommodation"]
-
-        engine.state.day = 2
-        engine.state.turn = 2
-        engine.facilities["dining"].level = 1
-        engine.state.food_stock = 2
-
-        with mock.patch.object(
-            CampingPlazaEngine,
-            "_calculate_daily_visitor_demand",
-            return_value={"day_guest_count": 0, "overnight_guest_count": 0},
-        ):
-            with mock.patch(
-                "game_engine.random.random", side_effect=[0.0, 0.99, 0.99]
-            ):
-                with mock.patch.object(
-                    CampingPlazaEngine, "_roll_arrival_turn", return_value=2
-                ):
-                    with mock.patch("game_engine.random.choices", return_value=["standard"]):
-                        with mock.patch("game_engine.random.sample", return_value=[2]):
-                            self.assertTrue(engine._ensure_today_arrival_plan())
-
-        plan_entry = engine.state.today_arrival_plan[0]
-        dining_action = plan_entry["planned_actions"][0]
-        reserved_npc_id = plan_entry["npc_id"]
-        self.assertEqual(plan_entry["source"], "reservation")
-        self.assertEqual(plan_entry["npc_id"], reserved_npc_id)
-        self.assertEqual(plan_entry["arrival_turn"], 2)
-        self.assertEqual(plan_entry["arrival_status"], "pending")
-        self.assertEqual(dining_action["action"], "dining")
-        self.assertGreaterEqual(dining_action["planned_turn"], plan_entry["arrival_turn"])
-        self.assertLessEqual(dining_action["planned_turn"], 5)
-        self.assertEqual(dining_action["menu_key"], "standard")
-        self.assertEqual(dining_action["status"], "pending")
-        self.assertIsNone(engine.state.reservation)
-        self.assertIsNone(engine.state.reserved_tent_id)
-        self.assertIsNone(engine.state.reserved_tent_day)
+        prepared = self._prepare_auto_reserved_overnight_dining_plan(engine)
+        plan_entry = prepared["plan_entry"]
+        dining_action = prepared["dining_action"]
+        reserved_npc_id = prepared["reserved_npc_id"]
+        reserved_tent_id = prepared["reserved_tent_id"]
+        balance_after_reservation = prepared["balance_after_reservation"]
+        accommodation_income_after_reservation = prepared[
+            "accommodation_income_after_reservation"
+        ]
 
         self.assertTrue(engine.save_state())
 
@@ -933,6 +978,8 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         reloaded_action = reloaded_entry["planned_actions"][0]
         self.assertEqual(reloaded_entry["source"], "reservation")
         self.assertEqual(reloaded_entry["npc_id"], reserved_npc_id)
+        self.assertEqual(reloaded_entry["paid"], True)
+        self.assertEqual(reloaded_entry["tent_id"], reserved_tent_id)
         self.assertEqual(reloaded_entry["arrival_turn"], 2)
         self.assertEqual(reloaded_entry["arrival_status"], "pending")
         self.assertEqual(reloaded_action["action"], "dining")
@@ -942,7 +989,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
 
         reloaded.state.turn = 2
         result = {"events": []}
-        reloaded._process_reservations(result)
+        reloaded._process_planned_arrivals(result)
         balance_after_checkin = reloaded.state.balance
         accommodation_income_after_checkin = reloaded.state.today_income["accommodation"]
         reloaded._process_dining(result)

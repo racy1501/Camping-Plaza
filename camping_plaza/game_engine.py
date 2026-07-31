@@ -1275,7 +1275,6 @@ class CampingPlazaEngine:
                 continue
             for action in entry.get("planned_actions", []):
                 if action.get("action") != "dining":
-                    result["events"].append(reaction)
                     continue
                 if action.get("status") != "pending":
                     continue
