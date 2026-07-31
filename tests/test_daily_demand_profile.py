@@ -28,6 +28,104 @@ def tearDownModule():
 
 
 class DailyDemandHelperTests(unittest.TestCase):
+    def test_first_daily_demand_profile_call_generates_day_and_overnight_demand(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
+                profile = engine._ensure_daily_demand_profile()
+
+        self.assertEqual(
+            profile,
+            {
+                "natural_day_group_demand": 7,
+                "natural_overnight_group_demand": 4,
+            },
+        )
+        self.assertEqual(engine.state.daily_demand_profile, profile)
+        self.assertEqual(engine.state.daily_demand_profile_day, engine.state.day)
+        day_mock.assert_called_once_with()
+        overnight_mock.assert_called_once_with()
+
+    def test_same_day_daily_demand_profile_does_not_recalculate(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
+                first_profile = engine._ensure_daily_demand_profile()
+                second_profile = engine._ensure_daily_demand_profile()
+
+        self.assertIs(first_profile, second_profile)
+        day_mock.assert_called_once_with()
+        overnight_mock.assert_called_once_with()
+
+    def test_same_day_daily_demand_profile_returns_same_result(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 5,
+            "natural_overnight_group_demand": 3,
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", side_effect=AssertionError("day demand recalculated")):
+            with mock.patch.object(
+                engine,
+                "_calculate_overnight_guest_demand",
+                side_effect=AssertionError("overnight demand recalculated"),
+            ):
+                profile = engine._ensure_daily_demand_profile()
+
+        self.assertIs(profile, engine.state.daily_demand_profile)
+        self.assertEqual(
+            profile,
+            {
+                "natural_day_group_demand": 5,
+                "natural_overnight_group_demand": 3,
+            },
+        )
+
+    def test_daily_demand_profile_rebuilds_when_day_changes(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                first_profile = engine._ensure_daily_demand_profile()
+
+        engine.state.day += 1
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8):
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5):
+                second_profile = engine._ensure_daily_demand_profile()
+
+        self.assertNotEqual(first_profile, second_profile)
+        self.assertEqual(second_profile["natural_day_group_demand"], 8)
+        self.assertEqual(second_profile["natural_overnight_group_demand"], 5)
+        self.assertEqual(engine.state.daily_demand_profile_day, engine.state.day)
+
+    def test_new_day_daily_demand_profile_recalculates_day_and_overnight_once_each(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                engine._ensure_daily_demand_profile()
+
+        engine.state.day += 1
+
+        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8) as day_mock:
+            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5) as overnight_mock:
+                engine._ensure_daily_demand_profile()
+
+        day_mock.assert_called_once_with()
+        overnight_mock.assert_called_once_with()
+
     def test_day_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
         engine = make_engine()
 

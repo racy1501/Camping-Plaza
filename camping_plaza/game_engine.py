@@ -116,6 +116,9 @@ class GameState:
     # 修复：营业回合结算后产生故障，标记本回合结算已完成
     turn_settled: bool = False
 
+    daily_demand_profile_day: int = 0
+    daily_demand_profile: Optional[dict] = None
+
     today_arrival_plan_day: int = 0
     today_arrival_plan: list = field(default_factory=list)
 
@@ -422,10 +425,26 @@ class CampingPlazaEngine:
         return self._probabilistic_round(raw_demand)
 
     def _calculate_daily_visitor_demand(self) -> dict:
+        profile = self._ensure_daily_demand_profile()
         return {
-            "day_guest_count": self._calculate_day_guest_demand(),
-            "overnight_guest_count": self._calculate_overnight_guest_demand(),
+            "day_guest_count": profile["natural_day_group_demand"],
+            "overnight_guest_count": profile["natural_overnight_group_demand"],
         }
+
+    def _ensure_daily_demand_profile(self) -> dict:
+        if (
+            self.state.daily_demand_profile_day == self.state.day
+            and self.state.daily_demand_profile is not None
+        ):
+            return self.state.daily_demand_profile
+
+        profile = {
+            "natural_day_group_demand": self._calculate_day_guest_demand(),
+            "natural_overnight_group_demand": self._calculate_overnight_guest_demand(),
+        }
+        self.state.daily_demand_profile = profile
+        self.state.daily_demand_profile_day = self.state.day
+        return profile
 
     def _create_day_guest(self) -> NPCGroup:
         npc = NPCGroup(
