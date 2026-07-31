@@ -438,9 +438,19 @@ class CampingPlazaEngine:
         ):
             return self.state.daily_demand_profile
 
+        reservation_request_available = random.random() < 0.30
+        reservation_visit_type = None
+        reservation_group_size = None
+        if reservation_request_available:
+            reservation_visit_type = "day" if random.random() < 0.5 else "overnight"
+            reservation_group_size = random.randint(1, 6)
+
         profile = {
             "natural_day_group_demand": self._calculate_day_guest_demand(),
             "natural_overnight_group_demand": self._calculate_overnight_guest_demand(),
+            "reservation_request_available": reservation_request_available,
+            "reservation_visit_type": reservation_visit_type,
+            "reservation_group_size": reservation_group_size,
         }
         self.state.daily_demand_profile = profile
         self.state.daily_demand_profile_day = self.state.day

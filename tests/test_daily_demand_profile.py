@@ -33,15 +33,19 @@ class DailyDemandHelperTests(unittest.TestCase):
         engine.state.daily_demand_profile = None
         engine.state.daily_demand_profile_day = 0
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
-                profile = engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
+                    profile = engine._ensure_daily_demand_profile()
 
         self.assertEqual(
             profile,
             {
                 "natural_day_group_demand": 7,
                 "natural_overnight_group_demand": 4,
+                "reservation_request_available": False,
+                "reservation_visit_type": None,
+                "reservation_group_size": None,
             },
         )
         self.assertEqual(engine.state.daily_demand_profile, profile)
@@ -54,10 +58,11 @@ class DailyDemandHelperTests(unittest.TestCase):
         engine.state.daily_demand_profile = None
         engine.state.daily_demand_profile_day = 0
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
-                first_profile = engine._ensure_daily_demand_profile()
-                second_profile = engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7) as day_mock:
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4) as overnight_mock:
+                    first_profile = engine._ensure_daily_demand_profile()
+                    second_profile = engine._ensure_daily_demand_profile()
 
         self.assertIs(first_profile, second_profile)
         day_mock.assert_called_once_with()
@@ -68,6 +73,9 @@ class DailyDemandHelperTests(unittest.TestCase):
         engine.state.daily_demand_profile = {
             "natural_day_group_demand": 5,
             "natural_overnight_group_demand": 3,
+            "reservation_request_available": False,
+            "reservation_visit_type": None,
+            "reservation_group_size": None,
         }
         engine.state.daily_demand_profile_day = engine.state.day
 
@@ -85,6 +93,9 @@ class DailyDemandHelperTests(unittest.TestCase):
             {
                 "natural_day_group_demand": 5,
                 "natural_overnight_group_demand": 3,
+                "reservation_request_available": False,
+                "reservation_visit_type": None,
+                "reservation_group_size": None,
             },
         )
 
@@ -93,15 +104,17 @@ class DailyDemandHelperTests(unittest.TestCase):
         engine.state.daily_demand_profile = None
         engine.state.daily_demand_profile_day = 0
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
-                first_profile = engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                    first_profile = engine._ensure_daily_demand_profile()
 
         engine.state.day += 1
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8):
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5):
-                second_profile = engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8):
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5):
+                    second_profile = engine._ensure_daily_demand_profile()
 
         self.assertNotEqual(first_profile, second_profile)
         self.assertEqual(second_profile["natural_day_group_demand"], 8)
@@ -113,18 +126,150 @@ class DailyDemandHelperTests(unittest.TestCase):
         engine.state.daily_demand_profile = None
         engine.state.daily_demand_profile_day = 0
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
-                engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                    engine._ensure_daily_demand_profile()
 
         engine.state.day += 1
 
-        with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8) as day_mock:
-            with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5) as overnight_mock:
-                engine._ensure_daily_demand_profile()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8) as day_mock:
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5) as overnight_mock:
+                    engine._ensure_daily_demand_profile()
 
         day_mock.assert_called_once_with()
         overnight_mock.assert_called_once_with()
+
+    def test_daily_demand_profile_sets_reservation_fields_when_not_triggered(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", return_value=0.30):
+            with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                    profile = engine._ensure_daily_demand_profile()
+
+        self.assertFalse(profile["reservation_request_available"])
+        self.assertIsNone(profile["reservation_visit_type"])
+        self.assertIsNone(profile["reservation_group_size"])
+
+    def test_daily_demand_profile_can_generate_day_reservation(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]):
+            with mock.patch("game_engine.random.randint", return_value=6):
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                        profile = engine._ensure_daily_demand_profile()
+
+        self.assertTrue(profile["reservation_request_available"])
+        self.assertEqual(profile["reservation_visit_type"], "day")
+        self.assertEqual(profile["reservation_group_size"], 6)
+
+    def test_daily_demand_profile_can_generate_overnight_reservation(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.50]):
+            with mock.patch("game_engine.random.randint", return_value=5):
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                        profile = engine._ensure_daily_demand_profile()
+
+        self.assertTrue(profile["reservation_request_available"])
+        self.assertEqual(profile["reservation_visit_type"], "overnight")
+        self.assertEqual(profile["reservation_group_size"], 5)
+
+    def test_daily_demand_profile_reservation_group_size_uses_one_to_six(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]):
+            with mock.patch("game_engine.random.randint", return_value=6) as randint_mock:
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                        profile = engine._ensure_daily_demand_profile()
+
+        self.assertEqual(profile["reservation_group_size"], 6)
+        randint_mock.assert_called_once_with(1, 6)
+
+    def test_same_day_daily_demand_profile_does_not_reroll_reservation(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]) as random_mock:
+            with mock.patch("game_engine.random.randint", return_value=6) as randint_mock:
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                        first_profile = engine._ensure_daily_demand_profile()
+                        second_profile = engine._ensure_daily_demand_profile()
+
+        self.assertIs(first_profile, second_profile)
+        self.assertEqual(random_mock.call_count, 2)
+        randint_mock.assert_called_once_with(1, 6)
+
+    def test_new_day_daily_demand_profile_rerolls_reservation(self):
+        engine = make_engine()
+        engine.state.daily_demand_profile = None
+        engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]):
+            with mock.patch("game_engine.random.randint", return_value=6):
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=4):
+                        first_profile = engine._ensure_daily_demand_profile()
+
+        engine.state.day += 1
+
+        with mock.patch("game_engine.random.random", side_effect=[0.30]) as random_mock:
+            with mock.patch("game_engine.random.randint") as randint_mock:
+                with mock.patch.object(engine, "_calculate_day_guest_demand", return_value=8):
+                    with mock.patch.object(engine, "_calculate_overnight_guest_demand", return_value=5):
+                        second_profile = engine._ensure_daily_demand_profile()
+
+        self.assertNotEqual(first_profile, second_profile)
+        self.assertFalse(second_profile["reservation_request_available"])
+        self.assertIsNone(second_profile["reservation_visit_type"])
+        self.assertIsNone(second_profile["reservation_group_size"])
+        self.assertEqual(random_mock.call_count, 1)
+        randint_mock.assert_not_called()
+
+    def test_reservation_roll_does_not_depend_on_management_quality_or_development_degree(self):
+        engine_a = make_engine()
+        engine_b = make_engine()
+        for engine in (engine_a, engine_b):
+            engine.state.daily_demand_profile = None
+            engine.state.daily_demand_profile_day = 0
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]):
+            with mock.patch("game_engine.random.randint", return_value=6):
+                with mock.patch.object(engine_a, "_calculate_day_guest_demand", return_value=7):
+                    with mock.patch.object(engine_a, "_calculate_overnight_guest_demand", return_value=4):
+                        with mock.patch.object(engine_a, "_calculate_management_quality", return_value=0.1):
+                            with mock.patch.object(engine_a, "_calculate_development_degree", return_value=0.1):
+                                profile_a = engine_a._ensure_daily_demand_profile()
+
+        with mock.patch("game_engine.random.random", side_effect=[0.29, 0.49]):
+            with mock.patch("game_engine.random.randint", return_value=6):
+                with mock.patch.object(engine_b, "_calculate_day_guest_demand", return_value=8):
+                    with mock.patch.object(engine_b, "_calculate_overnight_guest_demand", return_value=5):
+                        with mock.patch.object(engine_b, "_calculate_management_quality", return_value=0.9):
+                            with mock.patch.object(engine_b, "_calculate_development_degree", return_value=0.9):
+                                profile_b = engine_b._ensure_daily_demand_profile()
+
+        self.assertTrue(profile_a["reservation_request_available"])
+        self.assertTrue(profile_b["reservation_request_available"])
+        self.assertEqual(profile_a["reservation_visit_type"], "day")
+        self.assertEqual(profile_b["reservation_visit_type"], "day")
+        self.assertEqual(profile_a["reservation_group_size"], 6)
+        self.assertEqual(profile_b["reservation_group_size"], 6)
 
     def test_day_guest_demand_uses_management_quality_development_degree_and_probabilistic_round(self):
         engine = make_engine()
