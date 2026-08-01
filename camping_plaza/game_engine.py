@@ -2474,6 +2474,7 @@ class CampingPlazaEngine:
 
     def get_state_for_display(self) -> str:
         state = self.get_full_state()
+        greenery = state["greenery"]
         lines = [
             f"📍 第{state['day']}天 · 回合{state['turn']}",
             f"💰 余额: {state['balance']}金币",
@@ -2495,7 +2496,16 @@ class CampingPlazaEngine:
             "--- 设施 ---",
             f"  餐饮区 Lv.{state['facilities']['dining']['level']}",
             f"  娱乐区 Lv.{state['facilities']['entertainment']['level']}",
-            f"  绿化 Lv.{state['facilities']['greenery']['level']} (环境满意度+{state['facilities']['greenery']['greenery_satisfaction']:.1f})",
+            f"  绿化值 Lv.{greenery['level']}：{greenery['value']:g} / {greenery['max']:g}",
+            (
+                "  绿化状态稳定，不会自然衰减"
+                if greenery["level"] >= 2
+                else (
+                    "  今日已维护，次日不会衰减"
+                    if greenery["maintained_today"]
+                    else f"  今日未维护，次日将下降 {greenery['decay_next_day']:.1f}"
+                )
+            ),
             "",
             "--- 今日收入 ---",
             f"  住宿: +{state['today_income']['accommodation']}",

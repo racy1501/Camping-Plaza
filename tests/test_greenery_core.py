@@ -234,6 +234,30 @@ class GreeneryCoreTests(unittest.TestCase):
         self.assertFalse(lv2_greenery["maintained_today"])
         self.assertEqual(lv2_greenery["decay_next_day"], 0.0)
 
+    def test_get_state_for_display_uses_greenery_summary_and_status_texts(self):
+        engine = make_engine()
+
+        unmaintained_display = engine.get_state_for_display()
+        self.assertIn("绿化值 Lv.0：2 / 4", unmaintained_display)
+        self.assertIn("今日未维护，次日将下降 0.5", unmaintained_display)
+        self.assertNotIn("环境满意度", unmaintained_display)
+
+        engine = make_engine()
+        engine.state.greenery_processed_today = True
+        maintained_display = engine.get_state_for_display()
+        self.assertIn("绿化值 Lv.0：2 / 4", maintained_display)
+        self.assertIn("今日已维护，次日不会衰减", maintained_display)
+        self.assertNotIn("环境满意度", maintained_display)
+
+        engine = make_engine()
+        engine.facilities["greenery"].level = 2
+        engine.facilities["greenery"].greenery_satisfaction = 9.0
+        engine.state.greenery_processed_today = False
+        lv2_display = engine.get_state_for_display()
+        self.assertIn("绿化值 Lv.2：9 / 10", lv2_display)
+        self.assertIn("绿化状态稳定，不会自然衰减", lv2_display)
+        self.assertNotIn("环境满意度", lv2_display)
+
     def test_day_guest_arrival_gets_greenery_bonus_once(self):
         engine = make_engine()
         engine.state.turn = 2
