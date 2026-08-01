@@ -2401,6 +2401,14 @@ class CampingPlazaEngine:
             for tid, t in self.tents.items()
         }
 
+        greenery = self.facilities["greenery"]
+        greenery_max = round(self.GREENERY_LEVEL_MAX.get(greenery.level, 10.0), 1)
+        greenery_value = round(greenery.greenery_satisfaction, 1)
+        greenery_maintained_today = self.state.greenery_processed_today
+        greenery_decay_next_day = 0.0
+        if greenery.level < 2 and not greenery_maintained_today:
+            greenery_decay_next_day = 0.5
+
         return {
             "day": self.state.day,
             "turn": self.state.turn,
@@ -2408,6 +2416,13 @@ class CampingPlazaEngine:
             "reputation_rate": round(self.state.reputation_rate, 1),
             "tents": safe_tents,
             "facilities": {k: asdict(v) for k, v in self.facilities.items()},
+            "greenery": {
+                "level": greenery.level,
+                "value": greenery_value,
+                "max": greenery_max,
+                "maintained_today": greenery_maintained_today,
+                "decay_next_day": greenery_decay_next_day,
+            },
             "active_npcs": safe_npcs,
             "reservation": safe_reservation,
             "decisions_left": self.state.decisions_left,

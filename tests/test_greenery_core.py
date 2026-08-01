@@ -129,6 +129,38 @@ class GreeneryCoreTests(unittest.TestCase):
         self.assertEqual(greenery.greenery_satisfaction, 10.0)
         self.assertTrue(engine.state.greenery_processed_today)
 
+    def test_get_full_state_greenery_summary_for_lv0_not_maintained(self):
+        engine = make_engine()
+
+        greenery = engine.get_full_state()["greenery"]
+
+        self.assertEqual(greenery["level"], 0)
+        self.assertEqual(greenery["value"], 2.0)
+        self.assertEqual(greenery["max"], 4.0)
+        self.assertFalse(greenery["maintained_today"])
+        self.assertEqual(greenery["decay_next_day"], 0.5)
+
+    def test_get_full_state_greenery_summary_has_zero_decay_when_maintained_or_lv2(self):
+        engine = make_engine()
+        engine.state.greenery_processed_today = True
+        maintained_greenery = engine.get_full_state()["greenery"]
+
+        self.assertEqual(maintained_greenery["max"], 4.0)
+        self.assertTrue(maintained_greenery["maintained_today"])
+        self.assertEqual(maintained_greenery["decay_next_day"], 0.0)
+
+        engine = make_engine()
+        engine.facilities["greenery"].level = 2
+        engine.facilities["greenery"].greenery_satisfaction = 9.0
+        engine.state.greenery_processed_today = False
+        lv2_greenery = engine.get_full_state()["greenery"]
+
+        self.assertEqual(lv2_greenery["level"], 2)
+        self.assertEqual(lv2_greenery["value"], 9.0)
+        self.assertEqual(lv2_greenery["max"], 10.0)
+        self.assertFalse(lv2_greenery["maintained_today"])
+        self.assertEqual(lv2_greenery["decay_next_day"], 0.0)
+
     def test_day_guest_arrival_gets_greenery_bonus_once(self):
         engine = make_engine()
         engine.state.turn = 2
