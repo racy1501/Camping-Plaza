@@ -2227,7 +2227,16 @@ class CampingPlazaEngine:
         # 修复 #5：先根据上一日是否处理绿化决定是否衰减
         if not self.state.greenery_processed_today:
             # 上一日没有处理绿化，自动衰减一次
-            self._process_greenery_decay()
+            decay_before, decay_after = self._process_greenery_decay()
+            if (
+                result is not None
+                and decay_before is not None
+                and decay_after is not None
+                and decay_after < decay_before
+            ):
+                result["events"].append(
+                    f"昨日未维护绿化，绿化值 {decay_before:.1f} → {decay_after:.1f}。"
+                )
 
         self.state.day += 1
         self.state.turn = 1
@@ -2256,13 +2265,17 @@ class CampingPlazaEngine:
         self._ensure_today_arrival_plan()
         self._generate_daily_reservation()
 
-    def _process_greenery_decay(self):
+    def _process_greenery_decay(self) -> tuple[Optional[float], Optional[float]]:
         """绿化衰减"""
         facility = self.facilities["greenery"]
-        if facility.level < 2:
-            facility.greenery_satisfaction = round(
-                max(0.0, facility.greenery_satisfaction - 0.5), 1
-            )
+        if facility.level >= 2:
+            return None, None
+
+        before = round(facility.greenery_satisfaction, 1)
+        facility.greenery_satisfaction = round(
+            max(0.0, facility.greenery_satisfaction - 0.5), 1
+        )
+        return before, facility.greenery_satisfaction
 
     def _generate_daily_reservation(self):
         """生成每日预定。修复 #2 #3：有待处理请求或已确认预定时不生成"""

@@ -58,6 +58,39 @@ class GreeneryCoreTests(unittest.TestCase):
                 self.assertEqual(greenery.greenery_satisfaction, expected_value)
                 self.assertFalse(engine.state.greenery_processed_today)
 
+    def test_greenery_decay_logs_event_when_value_really_drops(self):
+        engine = make_engine()
+        greenery = engine.facilities["greenery"]
+        greenery.level = 0
+        greenery.greenery_satisfaction = 3.0
+        engine.state.greenery_processed_today = False
+        result = {"events": []}
+
+        engine._new_day(result)
+
+        self.assertEqual(greenery.greenery_satisfaction, 2.5)
+        self.assertIn("昨日未维护绿化，绿化值 3.0 → 2.5。", result["events"])
+
+    def test_greenery_decay_does_not_log_when_maintained_lv2_or_zero(self):
+        cases = (
+            {"level": 0, "value": 3.0, "maintained_today": True},
+            {"level": 2, "value": 9.0, "maintained_today": False},
+            {"level": 0, "value": 0.0, "maintained_today": False},
+        )
+
+        for case in cases:
+            with self.subTest(case=case):
+                engine = make_engine()
+                greenery = engine.facilities["greenery"]
+                greenery.level = case["level"]
+                greenery.greenery_satisfaction = case["value"]
+                engine.state.greenery_processed_today = case["maintained_today"]
+                result = {"events": []}
+
+                engine._new_day(result)
+
+                self.assertNotIn("昨日未维护绿化，绿化值", " ".join(result["events"]))
+
     def test_maintain_at_max_costs_50_caps_value_and_blocks_next_day_decay(self):
         engine = make_engine()
         greenery = engine.facilities["greenery"]
