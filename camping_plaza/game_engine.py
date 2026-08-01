@@ -1769,6 +1769,17 @@ class CampingPlazaEngine:
     def _process_day_end(self, result: dict):
         """日终管理阶段"""
         result["events"].append("=== 日终管理阶段 ===")
+        greenery = self.facilities["greenery"]
+        greenery_value = round(greenery.greenery_satisfaction, 1)
+        if (
+            greenery.level < 2
+            and not self.state.greenery_processed_today
+            and greenery_value > 0.0
+        ):
+            next_day_value = round(max(0.0, greenery_value - 0.5), 1)
+            result["events"].append(
+                f"今日绿化尚未维护，进入下一天后将从 {greenery_value:.1f} 降至 {next_day_value:.1f}。"
+            )
         result["phase"] = "management"
         result["next_actions"] = [
             "upgrade_tent", "upgrade_facility", "manage_greenery", "next_day"
