@@ -59,6 +59,7 @@ class NPCGroup:
     # 预定标记
     is_reserved: bool = False  # 是否是预定客
     paid: bool = False  # 是否已付款
+    greenery_entry_bonus_applied: bool = False
 
 
 @dataclass
@@ -190,6 +191,7 @@ class CampingPlazaEngine:
     TENT_UPGRADE_COST = [0, 500, 1200, 2500]
     FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
+    GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
     TURN_PLAN_ACTIONS = {
         "clean_tents": {
             "kind": "free",
@@ -957,7 +959,7 @@ class CampingPlazaEngine:
         self.facilities["dining"] = Facility(name="餐饮区")
         self.facilities["entertainment"] = Facility(name="娱乐区", level=0)
         self.facilities["greenery"] = Facility(
-            name="绿化", level=1, greenery_decay_rate=0.5
+            name="绿化", level=0, greenery_satisfaction=2.0, greenery_decay_rate=0.5
         )
 
     # -------------------------------------------------------------------------
@@ -1148,9 +1150,6 @@ class CampingPlazaEngine:
         npc.location = "leaving"
         npc.has_left = True
 
-        satisfaction_change = self.facilities["greenery"].greenery_satisfaction
-        npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_change)
-
         result["events"].append(f"帐篷{tent_id}号客人退房")
         self._try_leave_review(npc, result)
 
@@ -1189,6 +1188,7 @@ class CampingPlazaEngine:
                 guest.temperament = entry["temperament"]
                 guest.location = "campsite"
                 guest.arrival_turn = self.state.turn
+                self._apply_greenery_entry_bonus_once(guest)
                 self.npc_pool.append(guest)
                 self.state.day_campsite_groups_served += 1
                 self.state.balance += self.CAMPSITE_FEE
@@ -1258,10 +1258,24 @@ class CampingPlazaEngine:
 
         satisfaction_gain = 10 + tent.level * 3
         npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_gain)
+        self._apply_greenery_entry_bonus_once(npc)
 
         if npc not in self.npc_pool:
             self.npc_pool.append(npc)
         result["events"].append(f"一组{npc.group_size}人入住{tent_id}号帐篷")
+
+    def _apply_greenery_entry_bonus_once(self, npc: NPCGroup):
+        """客组首次成功入场时结算一次绿化加成"""
+        if npc.greenery_entry_bonus_applied:
+            return
+        npc.total_satisfaction = round(
+            min(
+                100.0,
+                npc.total_satisfaction + self.facilities["greenery"].greenery_satisfaction,
+            ),
+            1,
+        )
+        npc.greenery_entry_bonus_applied = True
 
     # -------------------------------------------------------------------------
     # 餐饮与娱乐
@@ -1775,20 +1789,22 @@ class CampingPlazaEngine:
             return "今天已经处理过绿化了"
 
         facility = self.facilities["greenery"]
-        self.state.greenery_processed_today = True
+
+        if action == "maintain":
+            cost = 50
+            if self.state.balance < cost:
+                return f"余额不足，需要{cost}金币"
+            self.state.balance -= cost
+            facility.greenery_satisfaction = min(
+                self.GREENERY_LEVEL_MAX.get(facility.level, 10.0),
+                facility.greenery_satisfaction + 1.0,
+            )
+            self.state.greenery_processed_today = True
+            return f"绿化已打理，花费{cost}金币"
 
         if facility.level < 2:
-            if action == "maintain":
-                cost = 50 * max(1, facility.level)
-                self.state.balance -= cost
-                facility.greenery_satisfaction = min(10, facility.greenery_satisfaction + 1)
-                return f"绿化已打理，花费{cost}金币"
-            else:
-                facility.greenery_satisfaction = max(
-                    0, facility.greenery_satisfaction - facility.greenery_decay_rate
-                )
-                return f"绿化未打理，环境满意度-{facility.greenery_decay_rate}"
-        return "绿化已达最高级（Lv.2），自动维护"
+            return "绿化未打理"
+        return "绿化已达最高级（Lv.2）"
 
     # -------------------------------------------------------------------------
     # 经营操作
@@ -1880,7 +1896,14 @@ class CampingPlazaEngine:
             facility.entertainment_satisfaction += 3
             facility.entertainment_income_multiplier += 0.2
         elif facility_name == "greenery":
-            facility.greenery_satisfaction += 2
+            facility.greenery_satisfaction = round(
+                min(
+                    self.GREENERY_LEVEL_MAX.get(facility.level, 10.0),
+                    facility.greenery_satisfaction + 2.0,
+                ),
+                1,
+            )
+            self.state.greenery_processed_today = True
             if facility.level >= 2:
                 facility.greenery_decay_rate = 0
 
@@ -2129,6 +2152,7 @@ class CampingPlazaEngine:
                 guest.temperament = entry["temperament"]
                 guest.location = "campsite"
                 guest.arrival_turn = self.state.turn
+                self._apply_greenery_entry_bonus_once(guest)
                 self.npc_pool.append(guest)
                 self.state.day_campsite_groups_served += 1
                 if not entry.get("paid", False):
@@ -2236,8 +2260,8 @@ class CampingPlazaEngine:
         """绿化衰减"""
         facility = self.facilities["greenery"]
         if facility.level < 2:
-            facility.greenery_satisfaction = max(
-                0, facility.greenery_satisfaction - facility.greenery_decay_rate
+            facility.greenery_satisfaction = round(
+                max(0.0, facility.greenery_satisfaction - 0.5), 1
             )
 
     def _generate_daily_reservation(self):

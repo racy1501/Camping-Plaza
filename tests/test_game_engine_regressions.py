@@ -1744,7 +1744,7 @@ class DiningRulesTests(unittest.TestCase):
         engine._checkout_npc(npc, {"events": []})
 
         self.assertEqual(npc.last_dining_day, engine.state.day)
-        self.assertEqual(npc.total_satisfaction, 65.0)
+        self.assertEqual(npc.total_satisfaction, 62.0)
 
     def test_checkout_without_dining_does_not_gain_free_dining_satisfaction(self):
         engine = make_engine()
@@ -1762,7 +1762,7 @@ class DiningRulesTests(unittest.TestCase):
         engine._checkout_npc(npc, {"events": []})
 
         self.assertEqual(npc.last_dining_day, 0)
-        self.assertEqual(npc.total_satisfaction, 63.0)
+        self.assertEqual(npc.total_satisfaction, 60)
 
     def test_dining_level_upgrade_changes_menu_selection_without_new_state(self):
         engine, npc = self._make_dining_npc(group_size=2, economic_level=2, total_satisfaction=50)
@@ -2091,18 +2091,22 @@ class GreeneryAndPhaseProtectionTests(unittest.TestCase):
 
         self.assertEqual(message2, "今天已经处理过绿化了")
 
-    def test_greenery_lv2_auto_maintain_free(self):
-        """绿化 Lv2 自动维护且不扣维护费"""
+    def test_greenery_lv2_paid_maintain_below_cap(self):
+        """绿化 Lv2 付费维护且不超过上限"""
         engine = make_engine()
         engine.state.turn = 6
         engine.state.greenery_processed_today = False
         engine.facilities["greenery"].level = 2
+        engine.facilities["greenery"].greenery_satisfaction = 9.5
+        engine.state.balance = 1000
         balance_before = engine.state.balance
 
         message = engine.manage_greenery("maintain")
 
-        self.assertIn("自动维护", message)
-        self.assertEqual(engine.state.balance, balance_before)
+        self.assertIn("绿化已打理，花费50金币", message)
+        self.assertEqual(engine.state.balance, balance_before - 50)
+        self.assertEqual(engine.facilities["greenery"].greenery_satisfaction, 10.0)
+        self.assertTrue(engine.state.greenery_processed_today)
 
 class TentLockingAndCapacityTests(unittest.TestCase):
     def test_tent_capacity_map_updated(self):
