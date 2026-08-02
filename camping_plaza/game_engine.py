@@ -1323,15 +1323,15 @@ class CampingPlazaEngine:
                 current_stock = self.state.food_stock
 
                 if current_stock < required_portions:
-                    action["status"] = "failed"
+                    action["status"] = "waiting_for_restock"
                     action["result"] = "insufficient_food"
                     reaction = self._get_temperament_service_reaction(
                         npc, "insufficient_food"
                     )
                     result["events"].append(
-                        f"{npc.group_size}人客人想在餐饮区用餐，但食材不足：需要{required_portions}份，当前只有{current_stock}份"
+                        f"{npc.group_size}人客人想在餐饮区用餐，但食材不足："
+                        f"需要{required_portions}份，当前只有{current_stock}份。{reaction}"
                     )
-                    result["events"].append(reaction)
                     continue
 
                 spend = menu["price_per_person"] * npc.group_size
@@ -1367,10 +1367,10 @@ class CampingPlazaEngine:
         if failure_type != "insufficient_food":
             return ""
         if npc.temperament == 0:
-            return "客人表示理解，决定下次再来尝尝。"
+            return "客人表示理解，愿意稍等补货。"
         if npc.temperament == 2:
-            return "客人明显不满，抱怨餐饮区准备得不够充分。"
-        return "客人有些失望，但还是接受了这个结果。"
+            return "客人明显不满，催促尽快补货。"
+        return "客人有些失望，决定先等等。"
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""

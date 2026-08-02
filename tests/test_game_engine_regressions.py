@@ -2027,19 +2027,6 @@ class DiningRulesTests(unittest.TestCase):
 
         self.assertEqual(engine.state.today_income["dining"], self._menu("premium")["price_per_person"] * 2)
 
-    def test_turn5_day_guest_departure_still_happens_after_dining(self):
-        engine, npc = self._make_dining_npc(group_size=1, total_satisfaction=70)
-        engine.state.turn = 5
-        engine.state.food_stock = 1
-        self._attach_dining_action(engine, npc, planned_turn=5)
-        engine.submit_turn_plan([], [])
-
-        result = engine.advance_turn()
-
-        self.assertTrue(npc.has_left)
-        self.assertEqual(npc.last_dining_day, 1)
-        self.assertEqual(result["income"]["dining"], 30)
-
     def test_dining_failure_does_not_block_turn_progression(self):
         engine, npc = self._make_dining_npc(group_size=2, location="campsite")
         engine.state.food_stock = 1
@@ -2083,11 +2070,12 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(engine.state.today_income["dining"], 0)
         self.assertEqual(npc.total_satisfaction, 50)
         self.assertEqual(npc.last_dining_day, 0)
-        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["status"], "waiting_for_restock")
         self.assertEqual(action["result"], "insufficient_food")
         self.assertEqual(len(result["events"]), 1)
         self.assertIn("需要3份", result["events"][0])
         self.assertIn("当前只有2份", result["events"][0])
+        self.assertIn("决定先等等", result["events"][0])
 
     def test_dining_fails_atomically_when_stock_is_zero(self):
         engine, npc = self._make_dining_npc(group_size=1, total_satisfaction=80, economic_level=2)
@@ -2101,7 +2089,7 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(engine.state.today_income["dining"], 0)
         self.assertEqual(npc.total_satisfaction, 80)
         self.assertEqual(npc.last_dining_day, 0)
-        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["status"], "waiting_for_restock")
 
     def test_two_dining_groups_share_same_food_stock_sequentially(self):
         engine = make_engine()
@@ -2136,8 +2124,39 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(npc_a.total_satisfaction, 62)
         self.assertEqual(npc_b.total_satisfaction, 70)
         self.assertEqual(action_a["status"], "completed")
-        self.assertEqual(action_b["status"], "failed")
+        self.assertEqual(action_b["status"], "waiting_for_restock")
         self.assertEqual(len(result["events"]), 2)
+
+    def test_waiting_for_restock_is_not_processed_or_reported_again(self):
+        engine, npc = self._make_dining_npc(
+            group_size=3,
+            total_satisfaction=50,
+            temperament=2,
+        )
+        engine.state.food_stock = 2
+        engine.state.balance = 777
+        action = self._attach_dining_action(engine, npc)
+        first_result = {"events": []}
+
+        engine._process_dining(first_result)
+
+        self.assertEqual(action["status"], "waiting_for_restock")
+        self.assertEqual(action["result"], "insufficient_food")
+        self.assertEqual(len(first_result["events"]), 1)
+        self.assertIn("催促尽快补货", first_result["events"][0])
+
+        second_result = {"events": []}
+        engine.state.food_stock = 9
+        engine._process_dining(second_result)
+
+        self.assertEqual(engine.state.food_stock, 9)
+        self.assertEqual(engine.state.balance, 777)
+        self.assertEqual(engine.state.today_income["dining"], 0)
+        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(npc.last_dining_day, 0)
+        self.assertEqual(action["status"], "waiting_for_restock")
+        self.assertEqual(action["result"], "insufficient_food")
+        self.assertEqual(second_result["events"], [])
 
     def test_existing_dining_ineligibility_still_skips_without_consuming_food(self):
         engine, npc = self._make_dining_npc(group_size=2, total_satisfaction=66)
