@@ -1382,6 +1382,46 @@ class CampingPlazaEngine:
             f"整组满意度+{menu['satisfaction_gain']}"
         )
 
+    def _retry_waiting_dining_after_restock(self, result: dict):
+        waiting_actions = []
+        for entry_index, entry in enumerate(self.state.today_arrival_plan):
+            if entry.get("planned_day") != self.state.day:
+                continue
+            for action_index, action in enumerate(entry.get("planned_actions", [])):
+                if action.get("action") != "dining":
+                    continue
+                if action.get("status") != "waiting_for_restock":
+                    continue
+                waiting_actions.append(
+                    (
+                        action.get("planned_turn", 0),
+                        entry_index,
+                        action_index,
+                        entry,
+                        action,
+                    )
+                )
+
+        waiting_actions.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        for _, _, _, entry, action in waiting_actions:
+            npc = self._find_npc(entry["npc_id"])
+            if npc is None or npc.has_left or self._has_consumed_dining_today(npc):
+                continue
+
+            menu_key = action.get("menu_key")
+            if menu_key not in self.DINING_SET_MENUS:
+                continue
+
+            menu = self.DINING_SET_MENUS[menu_key]
+            spend = menu["price_per_person"] * npc.group_size
+            if spend <= 0:
+                continue
+            if self.state.food_stock < npc.group_size:
+                continue
+
+            self._complete_dining_action(npc, action, menu, spend, result)
+
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
         for entry in self.state.today_arrival_plan:

@@ -208,6 +208,157 @@ class DayToOvernightSettlementTests(unittest.TestCase):
         self.assertTrue(engine.submit_turn_plan([], [{"action": "repair_tent", "tent_id": 1}])["success"])
 
 
+class DiningRestockRetryHelperTests(unittest.TestCase):
+    def _make_engine(self, stock=0):
+        engine = make_engine()
+        engine.state.day = 1
+        engine.state.turn = 3
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = []
+        engine.state.today_events = []
+        engine.state.food_stock = stock
+        for tent in engine.tents.values():
+            tent.next_breakdown_turn = 99999
+        return engine
+
+    def _append_waiting_action(
+        self,
+        engine,
+        group_size,
+        planned_turn,
+        menu_key="premium",
+        total_satisfaction=50,
+    ):
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=group_size,
+            visit_type="day",
+            arrival_turn=planned_turn,
+            location="dining",
+            total_satisfaction=total_satisfaction,
+            economic_level=2,
+        )
+        engine.npc_pool.append(npc)
+        entry = {
+            "npc_id": npc.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "source": "natural_day",
+            "planned_actions": [
+                {
+                    "action": "dining",
+                    "menu_key": menu_key,
+                    "planned_turn": planned_turn,
+                    "status": "waiting_for_restock",
+                    "result": "insufficient_food",
+                }
+            ],
+            "arrival_status": "arrived",
+        }
+        engine.state.today_arrival_plan.append(entry)
+        return npc, entry["planned_actions"][0]
+
+    def test_single_waiting_action_completes_after_restock_and_does_not_repeat(self):
+        engine = self._make_engine()
+        npc, action = self._append_waiting_action(engine, group_size=2, planned_turn=3)
+        menu = engine.DINING_SET_MENUS["premium"]
+        balance_before = engine.state.balance
+
+        engine.state.food_stock = 2
+        result1 = {"events": []}
+        engine._retry_waiting_dining_after_restock(result1)
+
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(action["result"], "success")
+        self.assertEqual(engine.state.food_stock, 0)
+        self.assertEqual(engine.state.today_income["dining"], menu["price_per_person"] * 2)
+        self.assertEqual(engine.state.balance, balance_before + menu["price_per_person"] * 2)
+        self.assertEqual(npc.total_satisfaction, 50 + menu["satisfaction_gain"])
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(len(result1["events"]), 1)
+
+        balance_after_first = engine.state.balance
+        food_after_first = engine.state.food_stock
+        satisfaction_after_first = npc.total_satisfaction
+        result2 = {"events": []}
+        engine._retry_waiting_dining_after_restock(result2)
+
+        self.assertEqual(engine.state.balance, balance_after_first)
+        self.assertEqual(engine.state.food_stock, food_after_first)
+        self.assertEqual(npc.total_satisfaction, satisfaction_after_first)
+        self.assertEqual(result2["events"], [])
+
+    def test_single_waiting_action_stays_waiting_when_stock_is_still_insufficient(self):
+        engine = self._make_engine(stock=2)
+        npc, action = self._append_waiting_action(engine, group_size=3, planned_turn=3)
+        balance_before = engine.state.balance
+
+        result = {"events": []}
+        engine._retry_waiting_dining_after_restock(result)
+
+        self.assertEqual(action["status"], "waiting_for_restock")
+        self.assertEqual(action["result"], "insufficient_food")
+        self.assertEqual(engine.state.food_stock, 2)
+        self.assertEqual(engine.state.today_income["dining"], 0)
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(result["events"], [])
+
+    def test_earlier_planned_turn_is_processed_before_later_turn(self):
+        engine = self._make_engine()
+        earlier_npc, earlier_action = self._append_waiting_action(
+            engine, group_size=2, planned_turn=2
+        )
+        later_npc, later_action = self._append_waiting_action(
+            engine, group_size=1, planned_turn=4
+        )
+        engine.state.food_stock = 2
+
+        result = {"events": []}
+        engine._retry_waiting_dining_after_restock(result)
+
+        self.assertEqual(earlier_action["status"], "completed")
+        self.assertEqual(later_action["status"], "waiting_for_restock")
+        self.assertEqual(len(result["events"]), 1)
+        self.assertIn(f"客组{earlier_npc.id}", result["events"][0])
+        self.assertEqual(engine.state.today_income["dining"], engine.DINING_SET_MENUS["premium"]["price_per_person"] * 2)
+
+    def test_same_planned_turn_keeps_original_plan_order(self):
+        engine = self._make_engine()
+        first_npc, first_action = self._append_waiting_action(
+            engine, group_size=1, planned_turn=3
+        )
+        second_npc, second_action = self._append_waiting_action(
+            engine, group_size=2, planned_turn=3
+        )
+        engine.state.food_stock = 1
+
+        result = {"events": []}
+        engine._retry_waiting_dining_after_restock(result)
+
+        self.assertEqual(first_action["status"], "completed")
+        self.assertEqual(second_action["status"], "waiting_for_restock")
+        self.assertIn(f"客组{first_npc.id}", result["events"][0])
+        self.assertEqual(len(result["events"]), 1)
+
+    def test_large_waiting_group_does_not_block_later_smaller_group(self):
+        engine = self._make_engine(stock=2)
+        large_npc, large_action = self._append_waiting_action(
+            engine, group_size=3, planned_turn=2
+        )
+        small_npc, small_action = self._append_waiting_action(
+            engine, group_size=2, planned_turn=4
+        )
+
+        result = {"events": []}
+        engine._retry_waiting_dining_after_restock(result)
+
+        self.assertEqual(large_action["status"], "waiting_for_restock")
+        self.assertEqual(small_action["status"], "completed")
+        self.assertEqual(engine.state.today_income["dining"], engine.DINING_SET_MENUS["premium"]["price_per_person"] * 2)
+        self.assertIn(f"客组{small_npc.id}", result["events"][0])
+
+
 class DayCampsiteCapacityTests(unittest.TestCase):
     """日间营位每日10组上限与生命周期"""
 
