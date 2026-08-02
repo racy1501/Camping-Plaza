@@ -1035,6 +1035,183 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(engine.state.food_stock, 0)
 
 
+class DiningRestockPurchaseIntegrationTests(unittest.TestCase):
+    def _make_engine(self, *, balance=1000, food_stock=0, turn=2):
+        engine = make_engine()
+        engine.state.day = 1
+        engine.state.turn = turn
+        engine.state.decisions_left = 3
+        engine.state.pending_turn_plan = None
+        engine.state.balance = balance
+        engine.state.food_stock = food_stock
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = []
+        engine.state.today_events = []
+        for tent in engine.tents.values():
+            tent.next_breakdown_turn = 99999
+        return engine
+
+    def _add_waiting_dining_action(
+        self,
+        engine,
+        *,
+        group_size,
+        planned_turn,
+        menu_key="premium",
+        total_satisfaction=50,
+    ):
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=group_size,
+            visit_type="day",
+            arrival_turn=planned_turn,
+            location="dining",
+            total_satisfaction=total_satisfaction,
+            economic_level=2,
+        )
+        engine.npc_pool.append(npc)
+        entry = {
+            "npc_id": npc.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "source": "natural_day",
+            "planned_actions": [
+                {
+                    "action": "dining",
+                    "menu_key": menu_key,
+                    "planned_turn": planned_turn,
+                    "status": "waiting_for_restock",
+                    "result": "insufficient_food",
+                }
+            ],
+            "arrival_status": "arrived",
+        }
+        engine.state.today_arrival_plan.append(entry)
+        return npc, entry["planned_actions"][0]
+
+    def test_successful_purchase_immediately_completes_waiting_dining(self):
+        engine = self._make_engine()
+        npc, action = self._add_waiting_dining_action(engine, group_size=4, planned_turn=2)
+        menu = engine.DINING_SET_MENUS["premium"]
+        food_package = CampingPlazaEngine.FOOD_PACKAGES["small"]
+
+        self.assertTrue(
+            engine.submit_turn_plan([], [{"action": "buy_food_package", "package_key": "small"}])["success"]
+        )
+        result = {"events": []}
+
+        with mock.patch.object(
+            engine,
+            "_retry_waiting_dining_after_restock",
+            wraps=engine._retry_waiting_dining_after_restock,
+        ) as retry_mock:
+            engine._execute_pending_turn_plan(result)
+
+        self.assertEqual(retry_mock.call_count, 1)
+        self.assertEqual(result["plan_execution"]["actions"][0]["success"], True)
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(action["result"], "success")
+        self.assertEqual(engine.state.food_stock, food_package["portions"] - npc.group_size)
+        self.assertEqual(engine.state.balance, 1000 - food_package["price"] + menu["price_per_person"] * 4)
+        self.assertEqual(engine.state.today_income["dining"], menu["price_per_person"] * 4)
+        self.assertEqual(npc.total_satisfaction, 50 + menu["satisfaction_gain"])
+        self.assertEqual(npc.last_dining_day, engine.state.day)
+        self.assertEqual(len(result["events"]), 1)
+
+    def test_failed_purchase_does_not_trigger_restock_retry(self):
+        engine = self._make_engine(balance=100)
+        npc, action = self._add_waiting_dining_action(engine, group_size=4, planned_turn=2)
+
+        self.assertTrue(
+            engine.submit_turn_plan([], [{"action": "buy_food_package", "package_key": "large"}])["success"]
+        )
+        result = {"events": []}
+
+        with mock.patch.object(
+            engine,
+            "_retry_waiting_dining_after_restock",
+            wraps=engine._retry_waiting_dining_after_restock,
+        ) as retry_mock:
+            engine._execute_pending_turn_plan(result)
+
+        self.assertEqual(retry_mock.call_count, 0)
+        self.assertFalse(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(action["status"], "waiting_for_restock")
+        self.assertEqual(action["result"], "insufficient_food")
+        self.assertEqual(engine.state.food_stock, 0)
+        self.assertEqual(engine.state.balance, 100)
+        self.assertEqual(engine.state.today_income["dining"], 0)
+        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(npc.last_dining_day, 0)
+        self.assertEqual(result["events"], [])
+
+    def test_two_successful_purchases_retry_each_time_without_repeat(self):
+        engine = self._make_engine(balance=300)
+        npc, action = self._add_waiting_dining_action(engine, group_size=6, planned_turn=2)
+        menu = engine.DINING_SET_MENUS["premium"]
+        small_package = CampingPlazaEngine.FOOD_PACKAGES["small"]
+
+        self.assertTrue(
+            engine.submit_turn_plan(
+                [],
+                [
+                    {"action": "buy_food_package", "package_key": "small"},
+                    {"action": "buy_food_package", "package_key": "small"},
+                ],
+            )["success"]
+        )
+        result = {"events": []}
+
+        with mock.patch.object(
+            engine,
+            "_retry_waiting_dining_after_restock",
+            wraps=engine._retry_waiting_dining_after_restock,
+        ) as retry_mock:
+            engine._execute_pending_turn_plan(result)
+
+        self.assertEqual(retry_mock.call_count, 2)
+        self.assertEqual([item["success"] for item in result["plan_execution"]["actions"]], [True, True])
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(action["result"], "success")
+        self.assertEqual(engine.state.food_stock, small_package["portions"] * 2 - npc.group_size)
+        self.assertEqual(
+            engine.state.balance,
+            300 - small_package["price"] * 2 + menu["price_per_person"] * npc.group_size,
+        )
+        self.assertEqual(engine.state.today_income["dining"], menu["price_per_person"] * npc.group_size)
+        self.assertEqual(npc.total_satisfaction, 50 + menu["satisfaction_gain"])
+        self.assertEqual(len(result["events"]), 1)
+
+        balance_after = engine.state.balance
+        food_after = engine.state.food_stock
+        satisfaction_after = npc.total_satisfaction
+        repeat_result = {"events": []}
+        engine._retry_waiting_dining_after_restock(repeat_result)
+
+        self.assertEqual(engine.state.balance, balance_after)
+        self.assertEqual(engine.state.food_stock, food_after)
+        self.assertEqual(npc.total_satisfaction, satisfaction_after)
+        self.assertEqual(repeat_result["events"], [])
+
+    def test_turn6_direct_purchase_does_not_trigger_restock_retry(self):
+        engine = self._make_engine(turn=6)
+        npc, action = self._add_waiting_dining_action(engine, group_size=4, planned_turn=6)
+
+        with mock.patch.object(
+            engine,
+            "_retry_waiting_dining_after_restock",
+            wraps=engine._retry_waiting_dining_after_restock,
+        ) as retry_mock:
+            result = engine.buy_food_package("small")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(retry_mock.call_count, 0)
+        self.assertEqual(action["status"], "waiting_for_restock")
+        self.assertEqual(action["result"], "insufficient_food")
+        self.assertEqual(engine.state.food_stock, CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"])
+        self.assertEqual(engine.state.last_food_preorder_day, engine.state.day)
+
+
 class FoodPackagePurchaseTests(unittest.TestCase):
     def test_shared_food_package_helper_uses_config(self):
         engine = make_engine()

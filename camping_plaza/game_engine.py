@@ -810,9 +810,13 @@ class CampingPlazaEngine:
                 self._run_turn_plan_action(action_data)
             )
         for action_data in plan.get("actions", []):
-            result["plan_execution"]["actions"].append(
-                self._run_turn_plan_action(action_data)
-            )
+            action_result = self._run_turn_plan_action(action_data)
+            result["plan_execution"]["actions"].append(action_result)
+            if (
+                action_data.get("action") == "buy_food_package"
+                and action_result.get("success")
+            ):
+                self._retry_waiting_dining_after_restock(result)
         self.state.pending_turn_plan = None
 
     def _apply_opening_food_gift(self):
