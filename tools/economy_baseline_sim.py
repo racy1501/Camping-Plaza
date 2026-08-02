@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import math
 import random
 import statistics
@@ -81,7 +82,17 @@ def stats_row(values: list[float]) -> list[str]:
 
 def create_engine(seed: int) -> tuple[CampingPlazaEngine, tempfile.TemporaryDirectory[str]]:
     random.seed(seed)
-    temp_dir_path = Path(tempfile.mkdtemp(prefix="economy-baseline-"))
+    temp_dir_path = Path(
+        tempfile.mkdtemp(
+            prefix="economy-baseline-",
+            dir=os.path.join(
+                os.environ.get("TEMP")
+                or os.environ.get("TMP")
+                or tempfile.gettempdir(),
+                "camping_plaza_fix_temp",
+            ),
+        )
+    )
     db_path = temp_dir_path / "baseline.db"
     engine = CampingPlazaEngine(db_path=str(db_path))
     return engine, temp_dir_path

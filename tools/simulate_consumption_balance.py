@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 import tempfile
@@ -111,7 +112,15 @@ def new_level_stats(level: int) -> dict[str, Any]:
 
 
 def create_engine() -> tuple[CampingPlazaEngine, tempfile.TemporaryDirectory[str]]:
-    temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    temp_dir = tempfile.TemporaryDirectory(
+        dir=os.path.join(
+            os.environ.get("TEMP")
+            or os.environ.get("TMP")
+            or tempfile.gettempdir(),
+            "camping_plaza_fix_temp",
+        ),
+        ignore_cleanup_errors=True,
+    )
     db_path = Path(temp_dir.name) / "simulation.db"
     engine = CampingPlazaEngine(db_path=str(db_path))
     engine.state.today_arrival_plan = []

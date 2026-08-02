@@ -22,7 +22,14 @@ class PersistenceTestCase(unittest.TestCase):
     """公共基类：每个测试独立临时目录与数据库路径"""
 
     def setUp(self):
-        self._td = tempfile.TemporaryDirectory()
+        self._td = tempfile.TemporaryDirectory(
+            dir=os.path.join(
+                os.environ.get("TEMP")
+                or os.environ.get("TMP")
+                or tempfile.gettempdir(),
+                "camping_plaza_fix_temp",
+            )
+        )
         self.addCleanup(self._td.cleanup)
         self.db_path = os.path.join(self._td.name, "test.db")
 

@@ -47,7 +47,14 @@ class LongRunTestCase(unittest.TestCase):
     """公共基类：独立临时数据库 + 替换 game_api.engine"""
 
     def setUp(self):
-        self._td = tempfile.TemporaryDirectory()
+        self._td = tempfile.TemporaryDirectory(
+            dir=os.path.join(
+                os.environ.get("TEMP")
+                or os.environ.get("TMP")
+                or tempfile.gettempdir(),
+                "camping_plaza_fix_temp",
+            )
+        )
         self.addCleanup(self._td.cleanup)
         self.db_path = os.path.join(self._td.name, "test.db")
         self.engine = CampingPlazaEngine(db_path=self.db_path)

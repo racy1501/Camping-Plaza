@@ -13,7 +13,15 @@ _TEMP_DIRS = []
 
 
 def make_engine() -> CampingPlazaEngine:
-    td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    td = tempfile.TemporaryDirectory(
+        dir=os.path.join(
+            os.environ.get("TEMP")
+            or os.environ.get("TMP")
+            or tempfile.gettempdir(),
+            "camping_plaza_fix_temp",
+        ),
+        ignore_cleanup_errors=True,
+    )
     _TEMP_DIRS.append(td)
     return CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
 

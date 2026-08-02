@@ -17,8 +17,17 @@ from game_engine import CampingPlazaEngine, NPCGroup
 _TEMP_DIRS = []
 
 
+def _project_temp_root() -> str:
+    base_temp = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+    temp_root = os.path.join(base_temp, "camping_plaza_fix_temp")
+    os.makedirs(temp_root, exist_ok=True)
+    return temp_root
+
+
 def make_engine() -> CampingPlazaEngine:
-    td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    td = tempfile.TemporaryDirectory(
+        dir=_project_temp_root(), ignore_cleanup_errors=True
+    )
     _TEMP_DIRS.append(td)
     return CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
 
