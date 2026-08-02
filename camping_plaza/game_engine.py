@@ -2052,6 +2052,70 @@ class CampingPlazaEngine:
             return tent.id
         return None
 
+    def _match_day_to_overnight_tents(
+        self,
+        candidate_guests: list[NPCGroup],
+        available_tents: list[Tent],
+    ) -> dict[int, int]:
+        """为日转夜候选客组整体匹配帐篷，不修改任何输入或游戏状态。"""
+        candidates = list(candidate_guests)
+        tents = list(available_tents)
+        best_score = None
+        best_matches = []
+
+        def search(
+            tent_index: int,
+            used_guest_indexes: set[int],
+            assignments: dict[int, int],
+            capacity_waste: int,
+            individual_wastes: list[int],
+        ) -> None:
+            nonlocal best_score, best_matches
+            if tent_index == len(tents):
+                waste_distribution_score = tuple(
+                    -waste for waste in sorted(individual_wastes, reverse=True)
+                )
+                score = (
+                    len(assignments),
+                    -capacity_waste,
+                    waste_distribution_score,
+                )
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_matches = [assignments]
+                elif score == best_score:
+                    best_matches.append(assignments)
+                return
+
+            tent = tents[tent_index]
+            search(
+                tent_index + 1,
+                used_guest_indexes,
+                assignments,
+                capacity_waste,
+                individual_wastes,
+            )
+            for guest_index, guest in enumerate(candidates):
+                if (
+                    guest_index in used_guest_indexes
+                    or tent.capacity < guest.group_size
+                ):
+                    continue
+                search(
+                    tent_index + 1,
+                    used_guest_indexes | {guest_index},
+                    {**assignments, guest.id: tent.id},
+                    capacity_waste + tent.capacity - guest.group_size,
+                    individual_wastes + [tent.capacity - guest.group_size],
+                )
+
+        search(0, set(), {}, 0, [])
+        if not best_matches:
+            return {}
+        if len(best_matches) == 1:
+            return best_matches[0]
+        return random.choice(best_matches)
+
     def _has_available_capacity(self) -> bool:
         return any(t.status == "available" for t in self._get_unlocked_tents())
 

@@ -450,6 +450,89 @@ class DayToOvernightIntentPlanTests(unittest.TestCase):
         self.assertEqual(random_mock.call_count, 1)
 
 
+class DayToOvernightTentMatchingTests(unittest.TestCase):
+    """日转夜客组在执行前的纯帐篷匹配。"""
+
+    def _guest(self, npc_id, group_size):
+        return NPCGroup(id=npc_id, group_size=group_size, visit_type="day")
+
+    def _tent(self, tent_id, capacity):
+        return Tent(id=tent_id, capacity=capacity)
+
+    def test_maximizes_successful_guest_groups(self):
+        engine = make_engine()
+        guests = [self._guest(1, 2), self._guest(2, 3)]
+        tents = [self._tent(1, 3), self._tent(2, 2)]
+
+        matches = engine._match_day_to_overnight_tents(guests, tents)
+
+        self.assertEqual(matches, {1: 2, 2: 1})
+
+    def test_prefers_smallest_total_capacity_waste(self):
+        engine = make_engine()
+        guests = [self._guest(1, 2), self._guest(2, 4)]
+        tents = [self._tent(1, 2), self._tent(2, 4), self._tent(3, 6)]
+
+        matches = engine._match_day_to_overnight_tents(guests, tents)
+
+        self.assertEqual(matches, {1: 1, 2: 2})
+
+    def test_prefers_evenly_smaller_individual_capacity_waste(self):
+        engine = make_engine()
+        guests = [self._guest(1, 1), self._guest(2, 2)]
+        tents = [self._tent(1, 2), self._tent(2, 3)]
+
+        with mock.patch("game_engine.random.choice") as choice_mock:
+            matches = engine._match_day_to_overnight_tents(guests, tents)
+
+        self.assertEqual(matches, {1: 1, 2: 2})
+        choice_mock.assert_not_called()
+
+    def test_uses_random_choice_for_exactly_equal_matches(self):
+        engine = make_engine()
+        guests = [self._guest(1, 2)]
+        tents = [self._tent(1, 2), self._tent(2, 2)]
+
+        with mock.patch(
+            "game_engine.random.choice", side_effect=lambda choices: choices[-1]
+        ) as choice_mock:
+            matches = engine._match_day_to_overnight_tents(guests, tents)
+
+        choice_mock.assert_called_once()
+        self.assertIn(matches, ({1: 1}, {1: 2}))
+
+    def test_returns_empty_match_when_no_tent_fits(self):
+        engine = make_engine()
+
+        matches = engine._match_day_to_overnight_tents(
+            [self._guest(1, 3)], [self._tent(1, 2)]
+        )
+
+        self.assertEqual(matches, {})
+
+    def test_does_not_mutate_guests_tents_or_game_state(self):
+        engine = make_engine()
+        guests = [self._guest(1, 2)]
+        tents = [self._tent(1, 2)]
+        guest_before = [(guest.visit_type, guest.location, guest.has_left) for guest in guests]
+        tent_before = [(tent.status, tent.occupied_by) for tent in tents]
+        balance_before = engine.state.balance
+        accommodation_before = engine.state.today_income["accommodation"]
+
+        matches = engine._match_day_to_overnight_tents(guests, tents)
+
+        self.assertEqual(matches, {1: 1})
+        self.assertEqual(
+            [(guest.visit_type, guest.location, guest.has_left) for guest in guests],
+            guest_before,
+        )
+        self.assertEqual(
+            [(tent.status, tent.occupied_by) for tent in tents], tent_before
+        )
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.today_income["accommodation"], accommodation_before)
+
+
 class TurnPlanTests(unittest.TestCase):
     def _engine_for_plan(self, turn: int = 2) -> CampingPlazaEngine:
         engine = make_engine()
