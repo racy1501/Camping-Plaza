@@ -111,9 +111,6 @@ class GameState:
     # 绿化每日标记
     greenery_processed_today: bool = False
 
-    # 修复 #4：转过夜结果缓存
-    day_to_overnight_cache: list = field(default_factory=list)
-
     # 修复：营业回合结算后产生故障，标记本回合结算已完成
     turn_settled: bool = False
 
@@ -1065,8 +1062,8 @@ class CampingPlazaEngine:
             self._process_business_turn(result)
             self._process_dining(result)
             self._process_entertainment(result)
-            if self.state.turn == 5:
-                self._process_turn5_day_guest_departures(result)
+            if self.state.turn == 4:
+                self._process_day_to_overnight(result)
             self._handle_breakdowns(result)
             if self.state.turn == 5:
                 self.state.food_stock = 0
@@ -1115,14 +1112,11 @@ class CampingPlazaEngine:
 
         elif turn == 4:
             self._execute_pending_turn_plan(result)
-            self._process_day_to_overnight(result)  # 修复 #4：先处理Turn 4开始前已在营地的日间客
             self._process_reservations(result)  # 修复 #1：预定客Turn 4继续重试入住
             self._process_checkin(result)
 
         elif turn == 5:
             self._execute_pending_turn_plan(result)
-            # 修复 #4：展示Turn 4的转过夜缓存
-            self._flush_day_to_overnight_cache(result)
 
         # 清理已离开的NPC
         self._cleanup_left_npcs()
@@ -1610,70 +1604,87 @@ class CampingPlazaEngine:
             self.state.today_events.append("被拒绝的客人发了条不太满意的帖子")
 
     # -------------------------------------------------------------------------
-    # 日间客转过夜（修复 #3 #4）
+    # 日间客转过夜
     # -------------------------------------------------------------------------
 
-    def _leave_day_guest(self, npc: NPCGroup):
-        """日间游客离场，统一写入转过夜缓存并触发评价"""
+    def _leave_day_guest(self, npc: NPCGroup, result: dict):
+        """日间游客离场并触发评价。"""
         npc.has_left = True
         npc.location = "leaving"
-        temp_result = {"events": []}
-        self._try_leave_review(npc, temp_result)
-        for event in temp_result["events"]:
-            self.state.day_to_overnight_cache.append(event)
-
-    def _process_turn5_day_guest_departures(self, result: dict):
-        """Turn 5营业结算完成后，统一让仍在场的日间客离场。"""
-        departing_guests = [
-            n for n in self.npc_pool
-            if n.visit_type == "day" and not n.has_left
-        ]
-        if not departing_guests:
-            return
-
-        for guest in departing_guests:
-            self._leave_day_guest(guest)
-        self._cleanup_left_npcs()
+        self._try_leave_review(npc, result)
 
     def _process_day_to_overnight(self, result: dict):
-        """Turn 4: 日间游客转过夜。修复 #4：结果写入缓存，不立即展示"""
-        day_guests = [n for n in self.npc_pool
-                     if n.visit_type == "day" and not n.has_left]
+        """Turn 4 营业结束后，按当天计划包统一结算日转夜。"""
+        intent_npc_ids = {
+            entry["npc_id"]
+            for entry in self.state.today_arrival_plan
+            if entry.get("planned_day") == self.state.day
+            and entry.get("visit_type") == "day"
+            and entry.get("day_to_overnight_intent") is True
+        }
+        day_guests = [
+            npc for npc in self.npc_pool
+            if npc.visit_type == "day"
+        ]
+        candidate_guests = [
+            npc for npc in day_guests if npc.id in intent_npc_ids
+        ]
+        available_tents = [
+            tent for tent in self.tents.values()
+            if self._is_tent_unlocked(tent) and tent.status == "available"
+        ]
+        matches = self._match_day_to_overnight_tents(
+            candidate_guests, available_tents
+        )
+
+        for guest in candidate_guests:
+            tent_id = matches.get(guest.id)
+            if tent_id is None:
+                continue
+            tent = self.tents[tent_id]
+            tent.status = "occupied"
+            tent.occupied_by = guest.id
+            guest.location = f"tent_{tent_id}"
+            guest.visit_type = "overnight"
+            guest.checkout_turn = 1
+            income = self.TENT_PRICES[tent_id]
+            self.state.balance += income
+            self.state.today_income["accommodation"] += income
 
         for guest in day_guests:
-            if guest.total_satisfaction > 70:
-                # 修复 #3：不能占用今日预定帐篷
-                tent_id = self._find_available_tent(guest.group_size)
-                if tent_id:
-                    tent = self.tents[tent_id]
-                    tent.status = "occupied"
-                    tent.occupied_by = guest.id
-                    guest.location = f"tent_{tent_id}"
-                    guest.visit_type = "overnight"
-                    self._ensure_checkout_turn(guest)
-                    income = self.TENT_PRICES[tent_id]
-                    self.state.balance += income
-                    self.state.today_income["accommodation"] += income
-                    # 修复 #4：写入缓存而不是直接写入result
-                    self.state.day_to_overnight_cache.append(
-                        f"日间游客转为过夜，入住{tent_id}号帐篷（住宿费+{income}）"
-                    )
-                else:
-                    # 想留宿但没有空帐篷，记录遗憾事件后离场
-                    if random.random() < 0.4:
-                        self.state.day_to_overnight_cache.append(
-                            "有日间游客想留下但没空帐篷，不太开心"
-                        )
-                    self._leave_day_guest(guest)
-            else:
-                # 不想留宿，直接离场
-                self._leave_day_guest(guest)
+            if guest.visit_type == "day":
+                self._leave_day_guest(guest, result)
+        self._cleanup_left_npcs()
 
-    def _flush_day_to_overnight_cache(self, result: dict):
-        """Turn 5: 展示Turn 4的转过夜缓存。修复 #4"""
-        for event in self.state.day_to_overnight_cache:
-            result["events"].append(event)
-        self.state.day_to_overnight_cache.clear()
+        if not candidate_guests:
+            return
+        matched_tent_ids = [matches[guest.id] for guest in candidate_guests if guest.id in matches]
+        successful_count = len(matched_tent_ids)
+        total_count = len(candidate_guests)
+        tent_text = "、".join(f"{tent_id}号" for tent_id in matched_tent_ids)
+        if successful_count == total_count:
+            if total_count == 1:
+                result["events"].append(
+                    f"傍晚，有1组日间客决定留下过夜，已入住{tent_text}帐篷。"
+                )
+            else:
+                result["events"].append(
+                    f"傍晚，有{total_count}组日间客决定留下过夜，已分别入住{tent_text}帐篷。"
+                )
+        elif successful_count:
+            failed_count = total_count - successful_count
+            failed_text = (
+                "另一组因没有合适的空帐篷，只能按原计划离开。"
+                if failed_count == 1
+                else f"另外{failed_count}组因没有合适的空帐篷，只能按原计划离开。"
+            )
+            result["events"].append(
+                f"傍晚，有{total_count}组日间客决定留下过夜，其中{successful_count}组入住了{tent_text}帐篷；{failed_text}"
+            )
+        else:
+            result["events"].append(
+                f"傍晚，有{total_count}组日间客决定留下过夜，但没有合适的空帐篷，只能按原计划离开。"
+            )
 
     # -------------------------------------------------------------------------
     # 帐篷故障
@@ -2334,8 +2345,6 @@ class CampingPlazaEngine:
         self.state.pending_turn_plan = None
         # 修复：营业回合故障阻塞标记重置
         self.state.turn_settled = False
-        # 修复 #4：防御性清空缓存
-        self.state.day_to_overnight_cache.clear()
         self.state.day_campsite_groups_served = 0
         # 重置绿化标记
         self.state.greenery_processed_today = False

@@ -45,20 +45,34 @@ def tearDownModule():
     _TEMP_DIRS.clear()
 
 
-class Turn4OrderTests(unittest.TestCase):
-    """Turn 4 日间客转过夜执行顺序"""
+class DayToOvernightSettlementTests(unittest.TestCase):
+    """Turn 4 营业结束后的日转夜完整结算。"""
 
     def _engine_at_turn4(self):
         engine = make_engine()
         engine.state.day = 1
         engine.state.turn = 4
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = []
+        engine.state.today_events = []
         # 屏蔽故障干扰
         for t in engine.tents.values():
             t.next_breakdown_turn = 99999
         return engine
 
-    def test_existing_day_guest_converts(self):
-        """Turn 4 开始前已存在的高满意度日间客参与转过夜"""
+    def _add_day_plan(self, engine, guest, intent, source="natural_day"):
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan.append({
+            "npc_id": guest.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "source": source,
+            "day_to_overnight_intent": intent,
+            "planned_actions": [],
+            "arrival_status": "arrived",
+        })
+
+    def test_low_satisfaction_guest_with_intent_converts_in_turn4_result(self):
         engine = self._engine_at_turn4()
         guest = NPCGroup(
             id=engine._next_npc_id(),
@@ -66,71 +80,132 @@ class Turn4OrderTests(unittest.TestCase):
             visit_type="day",
             arrival_turn=3,
             location="dining",
-            total_satisfaction=80,
+            total_satisfaction=10,
         )
         engine.npc_pool.append(guest)
+        self._add_day_plan(engine, guest, True)
 
-        result = {"events": []}
-        engine._process_business_turn(result)
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        result = engine.advance_turn()
 
         self.assertEqual(guest.visit_type, "overnight")
         self.assertTrue(guest.location.startswith("tent_"))
+        self.assertEqual(guest.checkout_turn, 1)
+        self.assertEqual(result["turn"], 5)
         self.assertTrue(
-            any("日间游客转为过夜" in e for e in engine.state.day_to_overnight_cache)
+            any("日间客决定留下过夜" in event for event in result["events"])
         )
 
-    def test_new_day_guest_not_processed_same_turn(self):
-        """Turn 4 当回合新生成的日间客不被同一回合处理"""
-        engine = self._engine_at_turn4()
-        new_guest = NPCGroup(
-            id=engine._next_npc_id(),
-            group_size=2,
-            visit_type="day",
-            arrival_turn=0,
-            location="dining",
-            total_satisfaction=80,
-        )
-        with mock.patch.object(
-            CampingPlazaEngine, "_generate_day_guests", return_value=[new_guest]
-        ):
-            with mock.patch.object(
-                CampingPlazaEngine, "_generate_overnight_guests", return_value=[]
-            ):
-                result = {"events": []}
-                engine._process_business_turn(result)
-
-        self.assertEqual(new_guest.visit_type, "day")
-        self.assertFalse(new_guest.has_left)
-        self.assertIn(new_guest.location, ("dining", "entertainment"))
-
-    def test_cache_flushed_on_turn5(self):
-        """转过夜事件写入缓存，Turn 5 展示后清空"""
+    def test_high_satisfaction_guest_without_intent_leaves(self):
         engine = self._engine_at_turn4()
         guest = NPCGroup(
             id=engine._next_npc_id(),
-            group_size=1,
+            group_size=2,
             visit_type="day",
             arrival_turn=3,
-            location="entertainment",
+            location="dining",
             total_satisfaction=80,
         )
         engine.npc_pool.append(guest)
+        self._add_day_plan(engine, guest, False)
 
-        result4 = {"events": []}
-        engine._process_business_turn(result4)
-        cache = list(engine.state.day_to_overnight_cache)
-        self.assertGreater(len(cache), 0)
-        self.assertFalse(
-            any("日间游客转为过夜" in e for e in result4["events"])
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        with mock.patch("game_engine.random.random", return_value=1.0):
+            result = engine.advance_turn()
+
+        self.assertTrue(guest.has_left)
+        self.assertNotIn(guest, engine.npc_pool)
+        self.assertFalse(any("日间客决定留下过夜" in event for event in result["events"]))
+
+    def test_reservation_and_natural_day_guests_use_same_plan_logic_and_matcher(self):
+        engine = self._engine_at_turn4()
+        natural = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="day")
+        reserved = NPCGroup(id=engine._next_npc_id(), group_size=2, visit_type="day")
+        engine.npc_pool.extend([natural, reserved])
+        engine.tents[2].is_unlocked = True
+        self._add_day_plan(engine, natural, True, "natural_day")
+        self._add_day_plan(engine, reserved, True, "reservation")
+
+        with mock.patch.object(engine, "_match_day_to_overnight_tents", wraps=engine._match_day_to_overnight_tents) as matcher:
+            result = {"events": []}
+            engine._process_day_to_overnight(result)
+
+        matcher.assert_called_once()
+        self.assertEqual(natural.visit_type, "overnight")
+        self.assertEqual(reserved.visit_type, "overnight")
+        self.assertEqual(engine.state.today_income["accommodation"], 200)
+        self.assertEqual(len(result["events"]), 1)
+
+    def test_unmatched_guest_is_not_charged_and_leaves(self):
+        engine = self._engine_at_turn4()
+        guest = NPCGroup(id=engine._next_npc_id(), group_size=3, visit_type="day")
+        engine.npc_pool.append(guest)
+        self._add_day_plan(engine, guest, True)
+        balance_before = engine.state.balance
+
+        result = {"events": []}
+        with mock.patch("game_engine.random.random", return_value=1.0):
+            engine._process_day_to_overnight(result)
+
+        self.assertTrue(guest.has_left)
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.today_income["accommodation"], 0)
+        self.assertEqual(len(result["events"]), 1)
+
+    def test_partial_success_uses_failed_count_in_event_text(self):
+        engine = self._engine_at_turn4()
+        guests = [
+            NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="day"),
+            NPCGroup(id=engine._next_npc_id(), group_size=2, visit_type="day"),
+            NPCGroup(id=engine._next_npc_id(), group_size=3, visit_type="day"),
+        ]
+        engine.npc_pool.extend(guests)
+        for guest in guests:
+            self._add_day_plan(engine, guest, True)
+        for tent in engine.tents.values():
+            tent.status = "cleaning"
+        engine.tents[3].is_unlocked = True
+        engine.tents[3].capacity = 3
+        engine.tents[3].status = "available"
+        balance_before = engine.state.balance
+        accommodation_before = engine.state.today_income["accommodation"]
+        tent_income = engine.TENT_PRICES[3]
+
+        result = {"events": []}
+        engine._process_day_to_overnight(result)
+
+        day_to_overnight_events = [
+            event for event in result["events"]
+            if "日间客决定留下过夜" in event
+        ]
+        self.assertEqual(len(day_to_overnight_events), 1)
+        self.assertIn("另外2组", day_to_overnight_events[0])
+        self.assertNotIn("另一组", day_to_overnight_events[0])
+        self.assertEqual(
+            len([guest for guest in guests if guest.visit_type == "overnight"]),
+            1,
         )
+        self.assertEqual(
+            len([guest for guest in guests if guest.has_left]),
+            2,
+        )
+        self.assertEqual(engine.state.balance, balance_before + tent_income)
+        self.assertEqual(engine.state.today_income["accommodation"], accommodation_before + tent_income)
 
-        engine.state.turn = 5
-        result5 = {"events": []}
-        engine._process_business_turn(result5)
+    def test_settlement_precedes_breakdown_and_keeps_occupant_for_turn5_repair(self):
+        engine = self._engine_at_turn4()
+        guest = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="day")
+        engine.npc_pool.append(guest)
+        self._add_day_plan(engine, guest, True)
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
 
-        for event in cache:
-            self.assertIn(event, result5["events"])
-        self.assertEqual(len(engine.state.day_to_overnight_cache), 0)
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 5)
+        self.assertEqual(engine.tents[1].status, "broken")
+        self.assertEqual(engine.tents[1].occupied_by, guest.id)
+        self.assertTrue(engine.submit_turn_plan([], [{"action": "repair_tent", "tent_id": 1}])["success"])
 
 
 class DayCampsiteCapacityTests(unittest.TestCase):
@@ -304,6 +379,13 @@ class DayCampsiteCapacityTests(unittest.TestCase):
             total_satisfaction=90,
         )
         engine.npc_pool.append(guest)
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [{
+            "npc_id": guest.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "day_to_overnight_intent": True,
+        }]
 
         engine._process_day_to_overnight({"events": []})
 
@@ -328,36 +410,6 @@ class DayCampsiteCapacityTests(unittest.TestCase):
 
         self.assertEqual(engine.state.day_campsite_groups_served, 10)
         self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day"]), 1)
-
-    def test_turn5_departs_all_remaining_day_guests_but_keeps_overnight(self):
-        engine = make_engine()
-        engine.state.turn = 5
-        day_guest = NPCGroup(
-            id=engine._next_npc_id(),
-            group_size=2,
-            visit_type="day",
-            location="dining",
-            total_satisfaction=65,
-        )
-        overnight_guest = NPCGroup(
-            id=engine._next_npc_id(),
-            group_size=1,
-            visit_type="overnight",
-            location="tent_1",
-            total_satisfaction=80,
-        )
-        engine.tents[1].status = "occupied"
-        engine.tents[1].occupied_by = overnight_guest.id
-        engine.npc_pool.extend([day_guest, overnight_guest])
-        engine.submit_turn_plan([], [])
-
-        with mock.patch("game_engine.random.random", return_value=0.99):
-            result = engine.advance_turn()
-
-        self.assertEqual(result["turn"], 6)
-        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "day" and not n.has_left]), 0)
-        self.assertEqual(len([n for n in engine.npc_pool if n.visit_type == "overnight" and not n.has_left]), 1)
-        self.assertGreaterEqual(len(engine.npc_history), 1)
 
     def test_new_day_resets_day_campsite_counter_once(self):
         engine = make_engine()
@@ -1339,6 +1391,21 @@ class CheckoutTurnTests(unittest.TestCase):
         engine.state.reserved_tent_id = 1
         engine.state.reserved_tent_day = 2
         engine.tents[1].status = "reserved"
+        engine.state.today_arrival_plan_day = 2
+        engine.state.today_arrival_plan = [{
+            "npc_id": engine._next_npc_id(),
+            "planned_day": 2,
+            "source": "reservation",
+            "visit_type": "day",
+            "arrival_status": "pending",
+            "arrival_turn": 2,
+            "tent_id": 1,
+            "group_size": 1,
+            "total_satisfaction": 50,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }]
 
         with mock.patch("game_engine.random.random", return_value=0.8):
             engine._process_reservations({"events": []})
@@ -1347,7 +1414,7 @@ class CheckoutTurnTests(unittest.TestCase):
         self.assertEqual(len(reserved_npcs), 1)
         self.assertEqual(reserved_npcs[0].checkout_turn, 2)
 
-    def test_day_to_overnight_assigns_checkout_turn(self):
+    def test_day_to_overnight_fixes_checkout_turn_to_one_without_reroll(self):
         engine = make_engine()
         guest = NPCGroup(
             id=engine._next_npc_id(),
@@ -1357,12 +1424,20 @@ class CheckoutTurnTests(unittest.TestCase):
             total_satisfaction=90,
         )
         engine.npc_pool.append(guest)
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [{
+            "npc_id": guest.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "day_to_overnight_intent": True,
+        }]
 
-        with mock.patch("game_engine.random.random", return_value=0.2):
+        with mock.patch("game_engine.random.random") as random_mock:
             engine._process_day_to_overnight({"events": []})
 
         self.assertEqual(guest.visit_type, "overnight")
         self.assertEqual(guest.checkout_turn, 1)
+        random_mock.assert_not_called()
 
     def test_existing_checkout_turn_is_not_overwritten(self):
         engine = make_engine()
@@ -1893,7 +1968,7 @@ class DiningRulesTests(unittest.TestCase):
         self._attach_dining_action(engine, npc)
         engine._process_dining({"events": []})
         with mock.patch("game_engine.random.random", return_value=0.0):
-            engine._leave_day_guest(npc)
+            engine._leave_day_guest(npc, {"events": []})
 
         self.assertTrue(npc.has_left)
         self.assertEqual(npc.review_rating, 4)
@@ -2373,6 +2448,13 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         )
         engine.npc_pool.append(guest)
         engine.state.day_campsite_groups_served = 1
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [{
+            "npc_id": guest.id,
+            "planned_day": engine.state.day,
+            "visit_type": "day",
+            "day_to_overnight_intent": True,
+        }]
 
         engine._process_day_to_overnight({"events": []})
 
