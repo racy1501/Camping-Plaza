@@ -1340,25 +1340,7 @@ class CampingPlazaEngine:
                     action["result"] = "invalid_spend"
                     continue
 
-                npc.location = "dining"
-                self.state.food_stock -= required_portions
-                self.state.balance += spend
-                self.state.today_income["dining"] += spend
-                npc.total_satisfaction = min(
-                    100, npc.total_satisfaction + menu["satisfaction_gain"]
-                )
-                self._mark_dining_consumed(npc)
-                action["status"] = "completed"
-                action["result"] = "success"
-                action["charged_amount"] = spend
-                action["food_portions_used"] = required_portions
-                action["satisfaction_gain"] = menu["satisfaction_gain"]
-                result["events"].append(
-                    f"客组{npc.id}购买{menu['display_name']}，"
-                    f"{npc.group_size}人用餐，收入+{spend}，"
-                    f"消耗食材{required_portions}份，"
-                    f"整组满意度+{menu['satisfaction_gain']}"
-                )
+                self._complete_dining_action(npc, action, menu, spend, result)
         return
 
     def _get_temperament_service_reaction(
@@ -1371,6 +1353,34 @@ class CampingPlazaEngine:
         if npc.temperament == 2:
             return "客人明显不满，催促尽快补货。"
         return "客人有些失望，决定先等等。"
+
+    def _complete_dining_action(
+        self,
+        npc: NPCGroup,
+        action: dict,
+        menu: dict,
+        spend: int,
+        result: dict,
+    ):
+        npc.location = "dining"
+        self.state.food_stock -= npc.group_size
+        self.state.balance += spend
+        self.state.today_income["dining"] += spend
+        npc.total_satisfaction = min(
+            100, npc.total_satisfaction + menu["satisfaction_gain"]
+        )
+        self._mark_dining_consumed(npc)
+        action["status"] = "completed"
+        action["result"] = "success"
+        action["charged_amount"] = spend
+        action["food_portions_used"] = npc.group_size
+        action["satisfaction_gain"] = menu["satisfaction_gain"]
+        result["events"].append(
+            f"客组{npc.id}购买{menu['display_name']}，"
+            f"{npc.group_size}人用餐，收入+{spend}，"
+            f"消耗食材{npc.group_size}份，"
+            f"整组满意度+{menu['satisfaction_gain']}"
+        )
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
