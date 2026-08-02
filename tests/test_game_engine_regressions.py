@@ -371,6 +371,85 @@ class DayCampsiteCapacityTests(unittest.TestCase):
         self.assertEqual(engine.state.turn, 1)
         self.assertEqual(engine.state.day_campsite_groups_served, 0)
 
+class DayToOvernightIntentPlanTests(unittest.TestCase):
+    """日转夜意向在日初计划包中一次生成。"""
+
+    def test_natural_day_guests_roll_intent_and_overnight_guests_are_false(self):
+        engine = make_engine()
+        engine.state.day = 2
+        day_guests = [
+            NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="day"),
+            NPCGroup(id=engine._next_npc_id(), group_size=2, visit_type="day"),
+        ]
+        overnight_guest = NPCGroup(
+            id=engine._next_npc_id(), group_size=3, visit_type="overnight"
+        )
+
+        with mock.patch.object(
+            engine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 2, "overnight_guest_count": 1},
+        ), mock.patch.object(engine, "_create_day_guest", side_effect=day_guests), mock.patch.object(
+            engine, "_create_overnight_guest", return_value=overnight_guest
+        ), mock.patch.object(engine, "_roll_arrival_turn", return_value=2), mock.patch.object(
+            engine, "_append_planned_actions"
+        ), mock.patch("game_engine.random.random", side_effect=[0.1, 0.15]):
+            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        entries = engine.state.today_arrival_plan
+        self.assertEqual(
+            [entry["day_to_overnight_intent"] for entry in entries],
+            [True, False, False],
+        )
+
+    def test_repeated_plan_read_does_not_reroll_intent(self):
+        engine = make_engine()
+        engine.state.day = 2
+        day_guest = NPCGroup(id=engine._next_npc_id(), group_size=1, visit_type="day")
+
+        with mock.patch.object(
+            engine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 1, "overnight_guest_count": 0},
+        ), mock.patch.object(engine, "_create_day_guest", return_value=day_guest), mock.patch.object(
+            engine, "_roll_arrival_turn", return_value=2
+        ), mock.patch.object(engine, "_append_planned_actions"), mock.patch(
+            "game_engine.random.random", return_value=0.1
+        ) as random_mock:
+            self.assertTrue(engine._ensure_today_arrival_plan())
+            plan = engine.state.today_arrival_plan
+            self.assertFalse(engine._ensure_today_arrival_plan())
+
+        self.assertIs(engine.state.today_arrival_plan, plan)
+        self.assertEqual(random_mock.call_count, 1)
+
+    def test_reserved_day_guest_uses_same_intent_roll(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.reservation = {
+            "npc_id": engine._next_npc_id(),
+            "group_size": 2,
+            "visit_type": "day",
+            "status": "accepted",
+            "arrival_day": engine.state.day,
+        }
+
+        with mock.patch.object(
+            engine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 0, "overnight_guest_count": 0},
+        ), mock.patch.object(engine, "_roll_arrival_turn", return_value=2), mock.patch.object(
+            engine, "_append_planned_actions"
+        ), mock.patch("game_engine.random.random", return_value=0.1) as random_mock:
+            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        entry = engine.state.today_arrival_plan[0]
+        self.assertEqual(entry["source"], "reservation")
+        self.assertEqual(entry["visit_type"], "day")
+        self.assertTrue(entry["day_to_overnight_intent"])
+        self.assertEqual(random_mock.call_count, 1)
+
+
 class TurnPlanTests(unittest.TestCase):
     def _engine_for_plan(self, turn: int = 2) -> CampingPlazaEngine:
         engine = make_engine()

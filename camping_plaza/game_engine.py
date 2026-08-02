@@ -132,6 +132,7 @@ class CampingPlazaEngine:
     """露营广场游戏引擎"""
 
     DAY_CAMPSITE_CAPACITY = 10
+    DAY_TO_OVERNIGHT_INTENT_PROBABILITY = 0.15
     TENT_PRICES = {1: 80, 2: 120, 3: 120, 4: 180, 5: 180, 6: 300}
     CAMPSITE_FEE = 20
     DINING_BASE_PRICE = 30
@@ -272,6 +273,11 @@ class CampingPlazaEngine:
             "is_reserved": npc.is_reserved,
             "paid": npc.paid,
             "tent_id": tent_id,
+            "day_to_overnight_intent": (
+                random.random() < self.DAY_TO_OVERNIGHT_INTENT_PROBABILITY
+                if npc.visit_type == "day"
+                else False
+            ),
         }
 
     def _roll_arrival_turn(self) -> int:
