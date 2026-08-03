@@ -61,6 +61,11 @@ class NPCGroup:
     paid: bool = False  # 是否已付款
     greenery_entry_bonus_applied: bool = False
 
+    # 成长进度账本的幂等标记：同一到访客组只计入一次。
+    growth_served_recorded: bool = False
+    growth_dining_recorded: bool = False
+    growth_paid_entertainment_recorded: bool = False
+
 
 @dataclass
 class Facility:
@@ -102,6 +107,12 @@ class GameState:
     day_campsite_groups_served: int = 0
     food_stock: int = 0
     last_food_preorder_day: int = 0
+
+    # 长期成长进度账本。旧快照缺少这些字段时保持默认 0，不补算历史。
+    total_served_groups: int = 0
+    successful_dining_groups: int = 0
+    successful_paid_entertainment_groups: int = 0
+    successful_greenery_maintenance_count: int = 0
 
     # 预定
     reservation: Optional[dict] = None  # 待处理的预定请求
@@ -938,6 +949,9 @@ class CampingPlazaEngine:
             for ndata in payload["npc_pool"]:
                 normalized_ndata = dict(ndata)
                 normalized_ndata.setdefault("last_dining_day", 0)
+                normalized_ndata.setdefault("growth_served_recorded", False)
+                normalized_ndata.setdefault("growth_dining_recorded", False)
+                normalized_ndata.setdefault("growth_paid_entertainment_recorded", False)
                 restored_npc_pool.append(NPCGroup(**normalized_ndata))
             restored_npc_history = list(payload["npc_history"])
             restored_npc_id_counter = int(payload["npc_id_counter"])
@@ -977,6 +991,73 @@ class CampingPlazaEngine:
         """生成全局唯一NPC ID"""
         self._npc_id_counter += 1
         return self._npc_id_counter
+
+    def _record_served_group_once(self, npc: NPCGroup) -> bool:
+        """记录实际成功入场的客组；同一到访客组最多记录一次。"""
+        if npc.growth_served_recorded:
+            return False
+        npc.growth_served_recorded = True
+        self.state.total_served_groups += 1
+        return True
+
+    def _record_successful_dining_once(self, npc: NPCGroup) -> bool:
+        """记录实际成功用餐的客组；正常与补货补救共用此入口。"""
+        if npc.growth_dining_recorded:
+            return False
+        npc.growth_dining_recorded = True
+        self.state.successful_dining_groups += 1
+        return True
+
+    def _record_successful_paid_entertainment_once(self, npc: NPCGroup) -> bool:
+        """记录实际完成收费娱乐的客组；免费娱乐不调用此入口。"""
+        if npc.growth_paid_entertainment_recorded:
+            return False
+        npc.growth_paid_entertainment_recorded = True
+        self.state.successful_paid_entertainment_groups += 1
+        return True
+
+    def _get_valid_growth_facility_level(self, facility_name: str) -> int:
+        """读取成长节点使用的设施等级；异常状态必须显式暴露。"""
+        level = self.facilities[facility_name].level
+        if type(level) is not int or level not in (0, 1, 2):
+            raise ValueError(
+                f"invalid growth facility level: {facility_name}={level!r}"
+            )
+        return level
+
+    def get_growth_progress(self) -> dict:
+        """只读返回成长进度；成长节点从当前解锁与设施等级实时派生。"""
+        unlocked_tent_nodes = sum(
+            1
+            for tent_id in range(2, 7)
+            if self.tents.get(tent_id) is not None
+            and self.tents[tent_id].is_unlocked
+        )
+        dining_nodes = self._get_valid_growth_facility_level("dining")
+        entertainment_nodes = self._get_valid_growth_facility_level("entertainment")
+        greenery_nodes = self._get_valid_growth_facility_level("greenery")
+        completed_growth_nodes = (
+            unlocked_tent_nodes
+            + dining_nodes
+            + entertainment_nodes
+            + greenery_nodes
+        )
+        return {
+            "unlocked_tent_nodes": unlocked_tent_nodes,
+            "dining_nodes": dining_nodes,
+            "entertainment_nodes": entertainment_nodes,
+            "greenery_nodes": greenery_nodes,
+            "completed_growth_nodes": completed_growth_nodes,
+            "total_served_groups": self.state.total_served_groups,
+            "successful_dining_groups": self.state.successful_dining_groups,
+            "successful_paid_entertainment_groups": (
+                self.state.successful_paid_entertainment_groups
+            ),
+            "successful_greenery_maintenance_count": (
+                self.state.successful_greenery_maintenance_count
+            ),
+            "operating_day": self.state.day,
+        }
 
     # -------------------------------------------------------------------------
     # 修复 #3 辅助方法：判断帐篷是否为今日预定帐篷
@@ -1266,6 +1347,7 @@ class CampingPlazaEngine:
 
         if npc not in self.npc_pool:
             self.npc_pool.append(npc)
+        self._record_served_group_once(npc)
         result["events"].append(f"一组{npc.group_size}人入住{tent_id}号帐篷")
 
     def _apply_greenery_entry_bonus_once(self, npc: NPCGroup):
@@ -1374,6 +1456,7 @@ class CampingPlazaEngine:
             100, npc.total_satisfaction + menu["satisfaction_gain"]
         )
         self._mark_dining_consumed(npc)
+        self._record_successful_dining_once(npc)
         action["status"] = "completed"
         action["result"] = "success"
         action["charged_amount"] = spend
@@ -1478,6 +1561,7 @@ class CampingPlazaEngine:
                     action["result"] = "success"
                     action["charged_amount"] = spend
                     action["satisfaction_gain"] = tier["satisfaction_gain"]
+                    self._record_successful_paid_entertainment_once(npc)
                     result["events"].append(
                         f"客组{npc.id}参加{tier['display_name']}，"
                         f"整组收费+{spend}，"
@@ -1882,6 +1966,7 @@ class CampingPlazaEngine:
                 facility.greenery_satisfaction + 1.0,
             )
             self.state.greenery_processed_today = True
+            self.state.successful_greenery_maintenance_count += 1
             return f"绿化已打理，花费{cost}金币"
 
         if facility.level < 2:
@@ -2300,6 +2385,7 @@ class CampingPlazaEngine:
                 guest.arrival_turn = self.state.turn
                 self._apply_greenery_entry_bonus_once(guest)
                 self.npc_pool.append(guest)
+                self._record_served_group_once(guest)
                 self.state.day_campsite_groups_served += 1
                 if not entry.get("paid", False):
                     self.state.balance += self.CAMPSITE_FEE
