@@ -1258,7 +1258,7 @@ class CampingPlazaEngine:
         return catalog
 
     def purchase_growth_project(self, project_id: str) -> dict:
-        """原子购买成长项目；当前支持帐篷与餐饮项目。"""
+        """原子购买成长项目。"""
         project_definition = next(
             (
                 project
@@ -1275,7 +1275,7 @@ class CampingPlazaEngine:
             }
 
         category = project_definition["category"]
-        if category not in ("tent", "dining", "entertainment"):
+        if category not in ("tent", "dining", "entertainment", "greenery"):
             return {
                 "success": False,
                 "project_id": project_id,
@@ -1328,6 +1328,50 @@ class CampingPlazaEngine:
                 "balance_before": balance_before,
                 "balance_after": self.state.balance,
                 "target_tent_id": target_tent_id,
+                "completed_growth_nodes": self.get_growth_progress()[
+                    "completed_growth_nodes"
+                ],
+            }
+
+        if category == "greenery":
+            greenery = self.facilities["greenery"]
+            previous_level = greenery.level
+            previous_satisfaction = greenery.greenery_satisfaction
+            previous_processed_today = self.state.greenery_processed_today
+            try:
+                self.state.balance -= project_status["price"]
+                greenery.level = project_definition["target_level"]
+                greenery.greenery_satisfaction = round(
+                    min(
+                        self.GREENERY_LEVEL_MAX[greenery.level],
+                        greenery.greenery_satisfaction + 2.0,
+                    ),
+                    1,
+                )
+                self.state.greenery_processed_today = True
+            except Exception as exc:
+                self.state.balance = balance_before
+                greenery.level = previous_level
+                greenery.greenery_satisfaction = previous_satisfaction
+                self.state.greenery_processed_today = previous_processed_today
+                return {
+                    "success": False,
+                    "project_id": project_id,
+                    "category": category,
+                    "error_code": "growth_project_purchase_failed",
+                    "error": str(exc),
+                }
+
+            return {
+                "success": True,
+                "project_id": project_id,
+                "category": category,
+                "display_name": project_status["display_name"],
+                "price": project_status["price"],
+                "balance_before": balance_before,
+                "balance_after": self.state.balance,
+                "previous_level": previous_level,
+                "target_level": project_definition["target_level"],
                 "completed_growth_nodes": self.get_growth_progress()[
                     "completed_growth_nodes"
                 ],

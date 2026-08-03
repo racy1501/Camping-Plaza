@@ -175,17 +175,6 @@ class GrowthEntertainmentPurchaseTests(unittest.TestCase):
             self.engine.get_growth_progress()["completed_growth_nodes"], nodes_before + 2
         )
 
-    def test_greenery_remains_unimplemented_and_atomic(self):
-        for project_id in ("greenery_lv1", "greenery_lv2"):
-            with self.subTest(project_id=project_id):
-                before = self._snapshot()
-                result = self.engine.purchase_growth_project(project_id)
-                self.assertFalse(result["success"])
-                self.assertEqual(
-                    result["error_code"], "growth_project_category_not_implemented"
-                )
-                self._assert_snapshot_unchanged(before)
-
     def test_purchase_state_survives_snapshot_restore(self):
         self._open_management_phase()
         self.engine.state.successful_paid_entertainment_groups = 8

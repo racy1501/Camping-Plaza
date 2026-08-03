@@ -60,11 +60,25 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
     def test_unimplemented_project_is_rejected_without_changing_state(self):
         before = self._snapshot()
+        original_catalog = CampingPlazaEngine.GROWTH_PROJECT_CATALOG
+        future_project = {
+            "project_id": "future_project",
+            "category": "future",
+            "display_name": "未来项目",
+            "price": 1,
+            "sequence": 99,
+        }
 
-        result = self.engine.purchase_growth_project("greenery_lv1")
+        try:
+            CampingPlazaEngine.GROWTH_PROJECT_CATALOG = original_catalog + (
+                future_project,
+            )
+            result = self.engine.purchase_growth_project("future_project")
+        finally:
+            CampingPlazaEngine.GROWTH_PROJECT_CATALOG = original_catalog
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["category"], "greenery")
+        self.assertEqual(result["category"], "future")
         self.assertEqual(result["error_code"], "growth_project_category_not_implemented")
         self._assert_snapshot_unchanged(before)
 
