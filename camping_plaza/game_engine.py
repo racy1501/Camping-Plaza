@@ -201,6 +201,73 @@ class CampingPlazaEngine:
     FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
+    GROWTH_PROJECT_CATALOG = (
+        {
+            "project_id": "tent_2", "category": "tent", "display_name": "2号帐篷",
+            "price": 600, "target_tent_id": 2, "sequence": 1,
+            "prerequisite_tent_id": 1, "operation": "day", "required_day": 2,
+        },
+        {
+            "project_id": "tent_3", "category": "tent", "display_name": "3号帐篷",
+            "price": 1100, "target_tent_id": 3, "sequence": 2,
+            "prerequisite_tent_id": 2, "operation": "served_or_day",
+            "required_served_groups": 15, "fallback_operating_day": 7,
+        },
+        {
+            "project_id": "tent_4", "category": "tent", "display_name": "4号帐篷",
+            "price": 1900, "target_tent_id": 4, "sequence": 3,
+            "prerequisite_tent_id": 3, "operation": "served_or_day",
+            "required_served_groups": 50, "fallback_operating_day": 12,
+        },
+        {
+            "project_id": "tent_5", "category": "tent", "display_name": "5号帐篷",
+            "price": 3200, "target_tent_id": 5, "sequence": 4,
+            "prerequisite_tent_id": 4, "operation": "served_or_day",
+            "required_served_groups": 90, "fallback_operating_day": 17,
+        },
+        {
+            "project_id": "tent_6", "category": "tent", "display_name": "6号帐篷",
+            "price": 4800, "target_tent_id": 6, "sequence": 5,
+            "prerequisite_tent_id": 5, "operation": "served_or_day",
+            "required_served_groups": 150, "fallback_operating_day": 23,
+        },
+        {
+            "project_id": "dining_lv1", "category": "dining", "display_name": "餐饮 Lv1",
+            "price": 700, "target_level": 1, "sequence": 6,
+            "required_level": 0, "operation": "successful_dining",
+            "required_successful_dining_groups": 8,
+        },
+        {
+            "project_id": "dining_lv2", "category": "dining", "display_name": "餐饮 Lv2",
+            "price": 1800, "target_level": 2, "sequence": 7,
+            "required_level": 1, "operation": "successful_dining",
+            "required_successful_dining_groups": 36,
+        },
+        {
+            "project_id": "entertainment_lv1", "category": "entertainment",
+            "display_name": "娱乐 Lv1", "price": 600, "target_level": 1,
+            "sequence": 8, "required_level": 0, "operation": "successful_paid_entertainment",
+            "required_successful_paid_entertainment_groups": 8,
+        },
+        {
+            "project_id": "entertainment_lv2", "category": "entertainment",
+            "display_name": "娱乐 Lv2", "price": 1600, "target_level": 2,
+            "sequence": 9, "required_level": 1, "operation": "successful_paid_entertainment",
+            "required_successful_paid_entertainment_groups": 32,
+        },
+        {
+            "project_id": "greenery_lv1", "category": "greenery", "display_name": "绿化 Lv1",
+            "price": 600, "target_level": 1, "sequence": 10,
+            "required_level": 0, "operation": "greenery_maintenance",
+            "required_successful_greenery_maintenance_count": 4,
+        },
+        {
+            "project_id": "greenery_lv2", "category": "greenery", "display_name": "绿化 Lv2",
+            "price": 1600, "target_level": 2, "sequence": 11,
+            "required_level": 1, "operation": "greenery_maintenance",
+            "required_successful_greenery_maintenance_count": 12,
+        },
+    )
     TURN_PLAN_ACTIONS = {
         "clean_tents": {
             "kind": "free",
@@ -1058,6 +1125,137 @@ class CampingPlazaEngine:
             ),
             "operating_day": self.state.day,
         }
+
+    def _get_growth_project_operation_status(self, project: dict) -> tuple:
+        """只读计算一个成长项目的经营条件与进度。"""
+        operation = project["operation"]
+        if operation == "day":
+            required_day = project["required_day"]
+            return (
+                self.state.day >= required_day,
+                "operating_day_required",
+                {
+                    "current_operating_day": self.state.day,
+                    "required_operating_day": required_day,
+                },
+            )
+        if operation == "served_or_day":
+            required_served = project["required_served_groups"]
+            fallback_day = project["fallback_operating_day"]
+            return (
+                self.state.total_served_groups >= required_served
+                or self.state.day >= fallback_day,
+                "served_groups_or_days_required",
+                {
+                    "current_served_groups": self.state.total_served_groups,
+                    "required_served_groups": required_served,
+                    "current_operating_day": self.state.day,
+                    "fallback_operating_day": fallback_day,
+                },
+            )
+
+        requirement_map = {
+            "successful_dining": (
+                "successful_dining_groups",
+                "required_successful_dining_groups",
+                "successful_dining_required",
+            ),
+            "successful_paid_entertainment": (
+                "successful_paid_entertainment_groups",
+                "required_successful_paid_entertainment_groups",
+                "successful_paid_entertainment_required",
+            ),
+            "greenery_maintenance": (
+                "successful_greenery_maintenance_count",
+                "required_successful_greenery_maintenance_count",
+                "greenery_maintenance_required",
+            ),
+        }
+        state_field, project_field, unmet_code = requirement_map[operation]
+        current_value = getattr(self.state, state_field)
+        required_value = project[project_field]
+        return (
+            current_value >= required_value,
+            unmet_code,
+            {
+                f"current_{state_field}": current_value,
+                project_field: required_value,
+            },
+        )
+
+    def get_growth_project_catalog(self) -> list:
+        """只读返回预温泉阶段的成长项目及其当前购买资格。"""
+        facility_levels = {
+            name: self._get_valid_growth_facility_level(name)
+            for name in ("dining", "entertainment", "greenery")
+        }
+        management_phase_open = self.state.turn == 6 and not self.state.turn_settled
+        catalog = []
+        for project in self.GROWTH_PROJECT_CATALOG:
+            category = project["category"]
+            unmet_conditions = []
+            if category == "tent":
+                target_tent_id = project["target_tent_id"]
+                completed = self.tents[target_tent_id].is_unlocked
+                prerequisite_met = self.tents[
+                    project["prerequisite_tent_id"]
+                ].is_unlocked
+                progress = {"target_tent_id": target_tent_id}
+                prerequisite_unmet_code = "previous_tent_required"
+            else:
+                current_level = facility_levels[category]
+                completed = current_level >= project["target_level"]
+                prerequisite_met = completed or current_level == project["required_level"]
+                progress = {
+                    "current_level": current_level,
+                    "required_level": project["required_level"],
+                    "target_level": project["target_level"],
+                }
+                prerequisite_unmet_code = "previous_level_required"
+
+            operation_requirement_met, operation_unmet_code, operation_progress = (
+                self._get_growth_project_operation_status(project)
+            )
+            progress.update(operation_progress)
+            affordable = self.state.balance >= project["price"]
+
+            if completed:
+                unmet_conditions.append("already_completed")
+            else:
+                if not prerequisite_met:
+                    unmet_conditions.append(prerequisite_unmet_code)
+                if not operation_requirement_met:
+                    unmet_conditions.append(operation_unmet_code)
+                if not affordable:
+                    unmet_conditions.append("insufficient_balance")
+                if self.state.turn != 6:
+                    unmet_conditions.append("turn_6_required")
+                elif self.state.turn_settled:
+                    unmet_conditions.append("turn_already_settled")
+
+            catalog.append(
+                {
+                    "project_id": project["project_id"],
+                    "category": category,
+                    "display_name": project["display_name"],
+                    "price": project["price"],
+                    "completed": completed,
+                    "prerequisite_met": prerequisite_met,
+                    "operation_requirement_met": operation_requirement_met,
+                    "affordable": affordable,
+                    "management_phase_open": management_phase_open,
+                    "can_purchase_now": (
+                        not completed
+                        and prerequisite_met
+                        and operation_requirement_met
+                        and affordable
+                        and management_phase_open
+                    ),
+                    "unmet_conditions": unmet_conditions,
+                    "progress": progress,
+                }
+            )
+        return catalog
 
     # -------------------------------------------------------------------------
     # 修复 #3 辅助方法：判断帐篷是否为今日预定帐篷
