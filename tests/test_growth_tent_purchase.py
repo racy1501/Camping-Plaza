@@ -58,13 +58,13 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "unknown_growth_project")
         self._assert_snapshot_unchanged(before)
 
-    def test_facility_project_is_not_implemented_without_changing_state(self):
+    def test_unimplemented_project_is_rejected_without_changing_state(self):
         before = self._snapshot()
 
-        result = self.engine.purchase_growth_project("dining_lv1")
+        result = self.engine.purchase_growth_project("entertainment_lv1")
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["category"], "dining")
+        self.assertEqual(result["category"], "entertainment")
         self.assertEqual(result["error_code"], "growth_project_category_not_implemented")
         self._assert_snapshot_unchanged(before)
 
