@@ -1257,6 +1257,81 @@ class CampingPlazaEngine:
             )
         return catalog
 
+    def purchase_growth_project(self, project_id: str) -> dict:
+        """原子购买成长项目；当前仅执行帐篷项目。"""
+        project_definition = next(
+            (
+                project
+                for project in self.GROWTH_PROJECT_CATALOG
+                if project["project_id"] == project_id
+            ),
+            None,
+        )
+        if project_definition is None:
+            return {
+                "success": False,
+                "project_id": project_id,
+                "error_code": "unknown_growth_project",
+            }
+
+        category = project_definition["category"]
+        if category != "tent":
+            return {
+                "success": False,
+                "project_id": project_id,
+                "category": category,
+                "error_code": "growth_project_category_not_implemented",
+            }
+
+        project_status = next(
+            project
+            for project in self.get_growth_project_catalog()
+            if project["project_id"] == project_id
+        )
+        if not project_status["can_purchase_now"]:
+            return {
+                "success": False,
+                "project_id": project_id,
+                "category": category,
+                "error_code": "growth_project_not_purchasable",
+                "unmet_conditions": project_status["unmet_conditions"],
+            }
+
+        target_tent_id = project_definition["target_tent_id"]
+        tent = self.tents[target_tent_id]
+        balance_before = self.state.balance
+        previous_unlocked = tent.is_unlocked
+        previous_next_breakdown_turn = tent.next_breakdown_turn
+        try:
+            self.state.balance -= project_status["price"]
+            tent.is_unlocked = True
+            self._set_next_breakdown(tent)
+        except Exception as exc:
+            self.state.balance = balance_before
+            tent.is_unlocked = previous_unlocked
+            tent.next_breakdown_turn = previous_next_breakdown_turn
+            return {
+                "success": False,
+                "project_id": project_id,
+                "category": category,
+                "error_code": "growth_project_purchase_failed",
+                "error": str(exc),
+            }
+
+        return {
+            "success": True,
+            "project_id": project_id,
+            "category": category,
+            "display_name": project_status["display_name"],
+            "price": project_status["price"],
+            "balance_before": balance_before,
+            "balance_after": self.state.balance,
+            "target_tent_id": target_tent_id,
+            "completed_growth_nodes": self.get_growth_progress()[
+                "completed_growth_nodes"
+            ],
+        }
+
     # -------------------------------------------------------------------------
     # 修复 #3 辅助方法：判断帐篷是否为今日预定帐篷
     # -------------------------------------------------------------------------
