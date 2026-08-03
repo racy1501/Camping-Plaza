@@ -1275,7 +1275,7 @@ class CampingPlazaEngine:
             }
 
         category = project_definition["category"]
-        if category not in ("tent", "dining"):
+        if category not in ("tent", "dining", "entertainment"):
             return {
                 "success": False,
                 "project_id": project_id,
@@ -1333,14 +1333,14 @@ class CampingPlazaEngine:
                 ],
             }
 
-        dining = self.facilities["dining"]
-        previous_level = dining.level
+        facility = self.facilities[category]
+        previous_level = facility.level
         try:
             self.state.balance -= project_status["price"]
-            dining.level = project_definition["target_level"]
+            facility.level = project_definition["target_level"]
         except Exception as exc:
             self.state.balance = balance_before
-            dining.level = previous_level
+            facility.level = previous_level
             return {
                 "success": False,
                 "project_id": project_id,
