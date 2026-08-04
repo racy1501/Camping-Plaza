@@ -133,8 +133,19 @@ class DayToOvernightSettlementTests(unittest.TestCase):
         matcher.assert_called_once()
         self.assertEqual(natural.visit_type, "overnight")
         self.assertEqual(reserved.visit_type, "overnight")
-        self.assertEqual(engine.state.today_income["accommodation"], 200)
+        self.assertEqual(
+            engine.state.today_income["accommodation"],
+            engine.TENT_PRICES[1] + engine.TENT_PRICES[2],
+        )
         self.assertEqual(len(result["events"]), 1)
+
+    def test_tent_prices_match_current_design(self):
+        engine = self._engine_at_turn4()
+
+        self.assertEqual(
+            engine.TENT_PRICES,
+            {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500},
+        )
 
     def test_unmatched_guest_is_not_charged_and_leaves(self):
         engine = self._engine_at_turn4()
