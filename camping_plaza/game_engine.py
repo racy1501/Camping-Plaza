@@ -105,6 +105,7 @@ class GameState:
     day_campsite_groups_served: int = 0
     food_stock: int = 0
     last_food_preorder_day: int = 0
+    hot_spring_built: bool = False
 
     # 长期成长进度账本。旧快照缺少这些字段时保持默认 0，不补算历史。
     total_served_groups: int = 0
@@ -263,6 +264,12 @@ class CampingPlazaEngine:
             "price": 1600, "target_level": 2, "sequence": 11,
             "required_level": 1, "operation": "greenery_maintenance",
             "required_successful_greenery_maintenance_count": 12,
+        },
+        {
+            "project_id": "hot_spring", "category": "hot_spring", "display_name": "温泉",
+            "price": 8000, "sequence": 12,
+            "operation": "hot_spring_operation", "required_served_groups": 150,
+            "fallback_operating_day": 25, "required_growth_nodes": 8,
         },
     )
     TURN_PLAN_ACTIONS = {
@@ -1120,6 +1127,7 @@ class CampingPlazaEngine:
             "successful_greenery_maintenance_count": (
                 self.state.successful_greenery_maintenance_count
             ),
+            "hot_spring_built": self.state.hot_spring_built,
             "operating_day": self.state.day,
         }
 
@@ -1137,6 +1145,20 @@ class CampingPlazaEngine:
                 },
             )
         if operation == "served_or_day":
+            required_served = project["required_served_groups"]
+            fallback_day = project["fallback_operating_day"]
+            return (
+                self.state.total_served_groups >= required_served
+                or self.state.day >= fallback_day,
+                "served_groups_or_days_required",
+                {
+                    "current_served_groups": self.state.total_served_groups,
+                    "required_served_groups": required_served,
+                    "current_operating_day": self.state.day,
+                    "fallback_operating_day": fallback_day,
+                },
+            )
+        if operation == "hot_spring_operation":
             required_served = project["required_served_groups"]
             fallback_day = project["fallback_operating_day"]
             return (
@@ -1199,6 +1221,15 @@ class CampingPlazaEngine:
                 ].is_unlocked
                 progress = {"target_tent_id": target_tent_id}
                 prerequisite_unmet_code = "previous_tent_required"
+            elif category == "hot_spring":
+                completed = self.state.hot_spring_built
+                current_nodes = self.get_growth_progress()["completed_growth_nodes"]
+                prerequisite_met = current_nodes >= project["required_growth_nodes"]
+                progress = {
+                    "current_completed_growth_nodes": current_nodes,
+                    "required_completed_growth_nodes": project["required_growth_nodes"],
+                }
+                prerequisite_unmet_code = "growth_nodes_required"
             else:
                 current_level = facility_levels[category]
                 completed = current_level >= project["target_level"]
@@ -1272,7 +1303,7 @@ class CampingPlazaEngine:
             }
 
         category = project_definition["category"]
-        if category not in ("tent", "dining", "entertainment", "greenery"):
+        if category not in ("tent", "dining", "entertainment", "greenery", "hot_spring"):
             return {
                 "success": False,
                 "project_id": project_id,
@@ -1325,6 +1356,35 @@ class CampingPlazaEngine:
                 "balance_before": balance_before,
                 "balance_after": self.state.balance,
                 "target_tent_id": target_tent_id,
+                "completed_growth_nodes": self.get_growth_progress()[
+                    "completed_growth_nodes"
+                ],
+            }
+
+        if category == "hot_spring":
+            previous_built = self.state.hot_spring_built
+            try:
+                self.state.balance -= project_status["price"]
+                self.state.hot_spring_built = True
+            except Exception as exc:
+                self.state.balance = balance_before
+                self.state.hot_spring_built = previous_built
+                return {
+                    "success": False,
+                    "project_id": project_id,
+                    "category": category,
+                    "error_code": "growth_project_purchase_failed",
+                    "error": str(exc),
+                }
+            return {
+                "success": True,
+                "project_id": project_id,
+                "category": category,
+                "display_name": project_status["display_name"],
+                "price": project_status["price"],
+                "balance_before": balance_before,
+                "balance_after": self.state.balance,
+                "hot_spring_built": self.state.hot_spring_built,
                 "completed_growth_nodes": self.get_growth_progress()[
                     "completed_growth_nodes"
                 ],

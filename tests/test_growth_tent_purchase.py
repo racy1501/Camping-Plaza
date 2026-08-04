@@ -204,6 +204,79 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertEqual(restored.state.balance, expected_balance)
         self.assertEqual(restored.tents[2], expected_tent)
 
+    def _qualify_hot_spring(self, *, day=1, balance=10000):
+        self._open_management_phase(balance=balance, day=day)
+        for tent_id in range(2, 6):
+            self.engine.tents[tent_id].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+        self.engine.state.total_served_groups = 150 if day < 25 else 0
+
+    def test_hot_spring_purchase_is_atomic_repeat_safe_and_persistent(self):
+        self._qualify_hot_spring()
+        nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
+        result = self.engine.purchase_growth_project("hot_spring")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["price"], 8000)
+        self.assertEqual(result["balance_before"], 10000)
+        self.assertEqual(result["balance_after"], 2000)
+        self.assertTrue(self.engine.state.hot_spring_built)
+        self.assertEqual(result["completed_growth_nodes"], nodes_before)
+        self.assertEqual(self.engine.get_growth_progress()["completed_growth_nodes"], nodes_before)
+        self.assertTrue(self.engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertTrue(restored.state.hot_spring_built)
+        self.assertEqual(restored.state.turn, 6)
+        before_balance = restored.state.balance
+        repeated = restored.purchase_growth_project("hot_spring")
+        self.assertFalse(repeated["success"])
+        self.assertIn("already_completed", repeated["unmet_conditions"])
+        self.assertEqual(restored.state.balance, before_balance)
+
+    def test_hot_spring_qualification_failures_are_atomic(self):
+        cases = (
+            (1, 10000, "served_groups_or_days_required"),
+            (25, 7999, "insufficient_balance"),
+        )
+        for day, balance, expected_code in cases:
+            with self.subTest(day=day, balance=balance):
+                self.setUp()
+                self._qualify_hot_spring(day=day, balance=balance)
+                if day == 1:
+                    self.engine.state.total_served_groups = 0
+                before = self._snapshot()
+                result = self.engine.purchase_growth_project("hot_spring")
+                self.assertFalse(result["success"])
+                self.assertIn(expected_code, result["unmet_conditions"])
+                self._assert_snapshot_unchanged(before)
+                self.tearDown()
+
+    def test_hot_spring_requires_eight_nodes_and_open_unsettled_turn_six(self):
+        self._open_management_phase(balance=10000, day=25)
+        self.engine.state.total_served_groups = 150
+        before = self._snapshot()
+        result = self.engine.purchase_growth_project("hot_spring")
+        self.assertFalse(result["success"])
+        self.assertIn("growth_nodes_required", result["unmet_conditions"])
+        self._assert_snapshot_unchanged(before)
+
+        self._qualify_hot_spring()
+        self.engine.state.turn = 5
+        before = self._snapshot()
+        result = self.engine.purchase_growth_project("hot_spring")
+        self.assertFalse(result["success"])
+        self.assertIn("turn_6_required", result["unmet_conditions"])
+        self._assert_snapshot_unchanged(before)
+
+        self.engine.state.turn = 6
+        self.engine.state.turn_settled = True
+        before = self._snapshot()
+        result = self.engine.purchase_growth_project("hot_spring")
+        self.assertFalse(result["success"])
+        self.assertIn("turn_already_settled", result["unmet_conditions"])
+        self._assert_snapshot_unchanged(before)
+
     def test_breakdown_setup_failure_restores_partial_changes(self):
         self._open_management_phase()
         before = self._snapshot()
