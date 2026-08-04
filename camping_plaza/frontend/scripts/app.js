@@ -277,6 +277,25 @@ async function advanceTurn() {
     }
 }
 
+function extractActionErrorMessage(result, action) {
+    // 按优先级提取 HTTP 错误文案：
+    // 1. detail 是对象且 message 非空；2. detail 本身是非空字符串；3. message 非空；4. 兜底
+    if (result && typeof result === 'object') {
+        if (result.detail && typeof result.detail === 'object'
+                && typeof result.detail.message === 'string'
+                && result.detail.message) {
+            return result.detail.message;
+        }
+        if (typeof result.detail === 'string' && result.detail) {
+            return result.detail;
+        }
+        if (typeof result.message === 'string' && result.message) {
+            return result.message;
+        }
+    }
+    return `执行失败: ${action}`;
+}
+
 async function doAction(action, params) {
     try {
         const response = await fetch(`${API_BASE}/api/action`, {
@@ -287,7 +306,14 @@ async function doAction(action, params) {
 
         const result = await response.json();
 
-        // 重新加载状态
+        // HTTP 非成功（请求语义错误，如缺参、未知 action）：
+        // 后端未执行业务动作，也未保存状态，因此只显示错误，不刷新状态。
+        if (!response.ok) {
+            addLog(extractActionErrorMessage(result, action), 'warning');
+            return;
+        }
+
+        // 重新加载状态（HTTP 200 成功或业务拒绝 success=false 都需刷新）
         gameState = await fetch(`${API_BASE}/api/state`).then(r => r.json());
         updateUI(gameState);
 
