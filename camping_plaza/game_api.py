@@ -137,6 +137,52 @@ def _get_day_campsite_status(eng: CampingPlazaEngine) -> dict:
     }
 
 
+def _get_arrival_plan_summary(eng: CampingPlazaEngine) -> dict:
+    """今日到达计划安全摘要（只读），仅聚合不生成/不修改计划。"""
+    today = eng.state.day
+    current_entries = [
+        e for e in eng.state.today_arrival_plan
+        if e.get("planned_day") == today
+    ]
+
+    total_groups = len(current_entries)
+    total_people = sum(e.get("group_size", 0) for e in current_entries)
+    pending_entries = [e for e in current_entries if e.get("arrival_status") == "pending"]
+    arrived_groups = sum(1 for e in current_entries if e.get("arrival_status") == "arrived")
+    turned_away_full_groups = sum(
+        1 for e in current_entries if e.get("arrival_status") == "turned_away_full"
+    )
+
+    pending_by_turn = {
+        "2": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
+        "3": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
+        "4": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
+    }
+    for e in pending_entries:
+        turn_key = str(e.get("arrival_turn"))
+        if turn_key not in pending_by_turn:
+            continue
+        size = e.get("group_size", 0)
+        bucket = pending_by_turn[turn_key]
+        if e.get("visit_type") == "overnight":
+            bucket["overnight_groups"] += 1
+            bucket["overnight_people"] += size
+        else:
+            bucket["day_groups"] += 1
+            bucket["day_people"] += size
+
+    return {
+        "day": eng.state.today_arrival_plan_day,
+        "total_groups": total_groups,
+        "total_people": total_people,
+        "pending_groups": len(pending_entries),
+        "pending_people": sum(e.get("group_size", 0) for e in pending_entries),
+        "arrived_groups": arrived_groups,
+        "turned_away_full_groups": turned_away_full_groups,
+        "pending_by_turn": pending_by_turn,
+    }
+
+
 # =============================================================================
 # 游戏状态接口
 # =============================================================================
@@ -153,6 +199,7 @@ def get_state():
     state = eng.get_full_state()
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
+    state["arrival_plan"] = _get_arrival_plan_summary(eng)
     return state
 
 
@@ -174,6 +221,7 @@ def get_display_state():
     state = eng.get_full_state()
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
+    state["arrival_plan"] = _get_arrival_plan_summary(eng)
     return {
         "text": eng.get_state_for_display(),
         "data": state
@@ -385,6 +433,7 @@ def mcp_state():
         "today_income": state["today_income"],
         "hot_spring": _get_hot_spring_status(eng),
         "day_campsite": _get_day_campsite_status(eng),
+        "arrival_plan": _get_arrival_plan_summary(eng),
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,

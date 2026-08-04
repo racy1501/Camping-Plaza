@@ -880,5 +880,216 @@ class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
         self.assertEqual(game_api.get_state()["hot_spring"], hot_spring_before)
 
 
+class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
+    """三个只读状态输出应统一携带今日到达计划的安全摘要"""
+
+    def test_empty_plan(self):
+        self.engine.state.today_arrival_plan_day = self.engine.state.day
+        self.engine.state.today_arrival_plan = []
+
+        summary = game_api.get_state()["arrival_plan"]
+
+        self.assertEqual(summary["total_groups"], 0)
+        self.assertEqual(summary["total_people"], 0)
+        self.assertEqual(summary["pending_groups"], 0)
+        self.assertEqual(summary["pending_people"], 0)
+        self.assertEqual(summary["arrived_groups"], 0)
+        self.assertEqual(summary["turned_away_full_groups"], 0)
+
+        self.assertEqual(
+            set(summary["pending_by_turn"].keys()),
+            {"2", "3", "4"},
+        )
+        for turn_bucket in summary["pending_by_turn"].values():
+            self.assertEqual(turn_bucket["day_groups"], 0)
+            self.assertEqual(turn_bucket["day_people"], 0)
+            self.assertEqual(turn_bucket["overnight_groups"], 0)
+            self.assertEqual(turn_bucket["overnight_people"], 0)
+
+    def test_mixed_plan_aggregation(self):
+        self.engine.state.today_arrival_plan_day = self.engine.state.day
+        self.engine.state.today_arrival_plan = [
+            {
+                "npc_id": 5001,
+                "group_size": 2,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "pending",
+                "source": "natural_day",
+                "economic_level": 2,
+                "spending_habit": 1,
+                "temperament": 0,
+                "total_satisfaction": 70,
+                "paid": True,
+                "is_reserved": False,
+                "tent_id": None,
+                "day_to_overnight_intent": False,
+                "planned_actions": [{"action": "dine", "menu_key": "hotpot"}],
+            },
+            {
+                "npc_id": 5002,
+                "group_size": 4,
+                "visit_type": "overnight",
+                "arrival_turn": 3,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "pending",
+                "source": "natural_overnight",
+                "economic_level": 1,
+                "spending_habit": 2,
+                "temperament": 1,
+                "total_satisfaction": 60,
+                "paid": True,
+                "is_reserved": False,
+                "tent_id": 3,
+                "day_to_overnight_intent": False,
+                "planned_actions": [{"action": "dine", "menu_key": "bbq"}],
+            },
+            {
+                "npc_id": 5003,
+                "group_size": 3,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "arrived",
+                "source": "natural_day",
+            },
+            {
+                "npc_id": 5004,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "arrival_turn": 4,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "turned_away_full",
+                "source": "natural_overnight",
+            },
+            {
+                # 非当前日计划，必须被忽略
+                "npc_id": 5005,
+                "group_size": 9,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day + 1,
+                "arrival_status": "pending",
+                "source": "natural_day",
+            },
+        ]
+
+        summary = game_api.get_state()["arrival_plan"]
+
+        self.assertEqual(summary["day"], self.engine.state.day)
+        self.assertEqual(summary["total_groups"], 4)
+        self.assertEqual(summary["total_people"], 2 + 4 + 3 + 2)
+        self.assertEqual(summary["pending_groups"], 2)
+        self.assertEqual(summary["pending_people"], 2 + 4)
+        self.assertEqual(summary["arrived_groups"], 1)
+        self.assertEqual(summary["turned_away_full_groups"], 1)
+
+        pending_by_turn = summary["pending_by_turn"]
+        self.assertEqual(pending_by_turn["2"]["day_groups"], 1)
+        self.assertEqual(pending_by_turn["2"]["day_people"], 2)
+        self.assertEqual(pending_by_turn["2"]["overnight_groups"], 0)
+        self.assertEqual(pending_by_turn["2"]["overnight_people"], 0)
+        self.assertEqual(pending_by_turn["3"]["overnight_groups"], 1)
+        self.assertEqual(pending_by_turn["3"]["overnight_people"], 4)
+        self.assertEqual(pending_by_turn["3"]["day_groups"], 0)
+        self.assertEqual(pending_by_turn["3"]["day_people"], 0)
+        self.assertEqual(pending_by_turn["4"]["overnight_groups"], 0)
+        self.assertEqual(pending_by_turn["4"]["overnight_people"], 0)
+        self.assertEqual(pending_by_turn["4"]["day_groups"], 0)
+        self.assertEqual(pending_by_turn["4"]["day_people"], 0)
+
+    def test_three_outputs_share_same_arrival_plan(self):
+        self.engine.state.today_arrival_plan_day = self.engine.state.day
+        self.engine.state.today_arrival_plan = [
+            {
+                "npc_id": 6001,
+                "group_size": 2,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "pending",
+                "source": "natural_day",
+            }
+        ]
+
+        expected = game_api.get_state()["arrival_plan"]
+        self.assertEqual(
+            game_api.get_display_state()["data"]["arrival_plan"],
+            expected,
+        )
+        self.assertEqual(game_api.mcp_state()["arrival_plan"], expected)
+
+    def test_summary_exposes_no_sensitive_fields(self):
+        self.engine.state.today_arrival_plan_day = self.engine.state.day
+        self.engine.state.today_arrival_plan = [
+            {
+                "npc_id": 7001,
+                "group_size": 2,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "pending",
+                "source": "reservation",
+                "paid": True,
+                "is_reserved": True,
+                "tent_id": 5,
+                "economic_level": 3,
+                "spending_habit": 1,
+                "temperament": 0,
+                "total_satisfaction": 80,
+                "day_to_overnight_intent": True,
+                "planned_actions": [{"action": "dine", "menu_key": "steak"}],
+            }
+        ]
+
+        dumped = json.dumps(game_api.get_state()["arrival_plan"], ensure_ascii=False)
+
+        for forbidden in [
+            "npc_id",
+            "economic_level",
+            "spending_habit",
+            "temperament",
+            "total_satisfaction",
+            "source",
+            "paid",
+            "tent_id",
+            "planned_actions",
+            "menu_key",
+            "day_to_overnight_intent",
+        ]:
+            self.assertNotIn(forbidden, dumped)
+
+    def test_read_only_arrival_plan_outputs_do_not_save_or_mutate(self):
+        self.engine.state.today_arrival_plan_day = self.engine.state.day
+        plan_before = [
+            {
+                "npc_id": 8001,
+                "group_size": 2,
+                "visit_type": "day",
+                "arrival_turn": 2,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "pending",
+                "source": "natural_day",
+            }
+        ]
+        self.engine.state.today_arrival_plan = list(plan_before)
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            with mock.patch.object(self.engine, "_ensure_today_arrival_plan") as ensure_mock:
+                game_api.get_state()
+                game_api.get_display_state()
+                game_api.mcp_state()
+                save_mock.assert_not_called()
+                ensure_mock.assert_not_called()
+
+        self.assertEqual(self.engine.state.today_arrival_plan, plan_before)
+        self.assertEqual(self.engine.state.today_arrival_plan_day, self.engine.state.day)
+
+        state = game_api.get_state()
+        self.assertIn("hot_spring", state)
+        self.assertIn("day_campsite", state)
+
+
 if __name__ == "__main__":
     unittest.main()
