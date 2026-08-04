@@ -228,7 +228,7 @@ class EntertainmentPlannedActionsPhase2BTests(unittest.TestCase):
                 CampingPlazaEngine, "_create_day_guest", return_value=guest
             ):
                 with mock.patch(
-                    "game_engine.random.random", side_effect=[0.99, 0.00, 0.99]
+                    "game_engine.random.random", side_effect=[0.99, 0.99, 0.00, 0.99]
                 ):
                     with mock.patch(
                         "game_engine.random.choices", return_value=["standard"]

@@ -176,17 +176,17 @@ class CampingPlazaEngine:
     ENTERTAINMENT_TIER_OPTIONS = {
         "basic": {
             "display_name": "基础娱乐",
-            "price_per_group": 30,
+            "price_per_group": 40,
             "satisfaction_gain": 2,
         },
         "standard": {
             "display_name": "中档娱乐",
-            "price_per_group": 45,
+            "price_per_group": 60,
             "satisfaction_gain": 4,
         },
         "premium": {
             "display_name": "高级娱乐",
-            "price_per_group": 65,
+            "price_per_group": 90,
             "satisfaction_gain": 6,
         },
     }

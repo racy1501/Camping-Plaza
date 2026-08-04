@@ -101,11 +101,22 @@ class EntertainmentExecutionPhase2BTests(unittest.TestCase):
         )
         return entry["planned_actions"][-1]
 
+    def test_paid_tier_prices_match_current_design(self):
+        engine = self._new_engine()
+
+        self.assertEqual(
+            {
+                key: option["price_per_group"]
+                for key, option in engine.ENTERTAINMENT_TIER_OPTIONS.items()
+            },
+            {"basic": 40, "standard": 60, "premium": 90},
+        )
+
     def test_paid_tier_prices_are_fixed_per_group(self):
         expectations = {
-            "basic": 30,
-            "standard": 45,
-            "premium": 65,
+            "basic": 40,
+            "standard": 60,
+            "premium": 90,
         }
 
         for tier_key, expected_income in expectations.items():
@@ -191,7 +202,7 @@ class EntertainmentExecutionPhase2BTests(unittest.TestCase):
 
         self.assertEqual(action["status"], "completed")
         self.assertEqual(action["tier_key"], "premium")
-        self.assertEqual(engine.state.today_income["entertainment"], 65)
+        self.assertEqual(engine.state.today_income["entertainment"], 90)
         self.assertEqual(npc.total_satisfaction, 66)
 
     def test_free_and_paid_entertainment_can_both_execute_on_different_turns(self):
@@ -212,7 +223,7 @@ class EntertainmentExecutionPhase2BTests(unittest.TestCase):
 
         self.assertEqual(free_action["status"], "completed")
         self.assertEqual(paid_action["status"], "completed")
-        self.assertEqual(engine.state.today_income["entertainment"], 45)
+        self.assertEqual(engine.state.today_income["entertainment"], 60)
         self.assertEqual(npc.total_satisfaction, 75)
 
     def test_completed_entertainment_action_does_not_repeat(self):

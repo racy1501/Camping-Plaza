@@ -1984,7 +1984,7 @@ class IncomeAndSpendingTagTests(unittest.TestCase):
         engine._process_entertainment({"events": []})
 
         self.assertEqual(engine.state.today_income["dining"], 30)
-        self.assertEqual(engine.state.today_income["entertainment"], 65)
+        self.assertEqual(engine.state.today_income["entertainment"], 90)
         return
         """餐饮和娱乐使用各自的收入倍率"""
         engine = make_engine()
