@@ -146,6 +146,7 @@ class CampingPlazaEngine:
     DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.40, 1: 0.55, 2: 0.70}
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
     FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY = 0.50
+    HOT_SPRING_PLANNED_ACTION_PROBABILITY = 0.30
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -432,6 +433,16 @@ class CampingPlazaEngine:
             "status": "pending",
         }
 
+    def _build_hot_spring_planned_action(self) -> Optional[dict]:
+        if not self.state.hot_spring_built:
+            return None
+        if random.random() >= self.HOT_SPRING_PLANNED_ACTION_PROBABILITY:
+            return None
+        return {
+            "action": "hot_spring",
+            "status": "pending",
+        }
+
     def _append_planned_actions(
         self, entry: dict, required_actions: Optional[list[dict]] = None
     ):
@@ -451,6 +462,9 @@ class CampingPlazaEngine:
         free_entertainment_action = self._build_free_entertainment_planned_action()
         if free_entertainment_action is not None:
             optional_actions.append(free_entertainment_action)
+        hot_spring_action = self._build_hot_spring_planned_action()
+        if hot_spring_action is not None:
+            optional_actions.append(hot_spring_action)
 
         random.shuffle(optional_actions)
         remaining_turn_count = available_turn_count - len(required_actions)
