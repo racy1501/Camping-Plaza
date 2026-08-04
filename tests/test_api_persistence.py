@@ -599,6 +599,45 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
         self.assertEqual(state["food_stock"], 9)
 
+    def test_mcp_state_exposes_greenery_summary(self):
+        self.engine.facilities["greenery"].level = 1
+        self.engine.facilities["greenery"].greenery_satisfaction = 6.5
+        self.engine.state.greenery_processed_today = True
+        day_before = self.engine.state.day
+        turn_before = self.engine.state.turn
+
+        expected_greenery = self.engine.get_full_state()["greenery"]
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            state = game_api.mcp_state()
+            save_mock.assert_not_called()
+
+        self.assertEqual(state["greenery"], expected_greenery)
+        self.assertEqual(
+            set(state["greenery"].keys()),
+            {"level", "value", "max", "maintained_today", "decay_next_day"},
+        )
+        self.assertNotIn("turn_settled", state)
+        self.assertNotIn("phase", state)
+        self.assertNotIn("available_actions", state)
+
+        for field in [
+            "hot_spring",
+            "day_campsite",
+            "arrival_plan",
+            "reservation",
+            "planning_available",
+            "plan_submitted",
+            "plan_target_turn",
+            "next_turn_checkout_tents",
+        ]:
+            self.assertIn(field, state)
+
+        self.assertEqual(self.engine.facilities["greenery"].greenery_satisfaction, 6.5)
+        self.assertTrue(self.engine.state.greenery_processed_today)
+        self.assertEqual(self.engine.state.day, day_before)
+        self.assertEqual(self.engine.state.turn, turn_before)
+
     def test_mcp_state_exposes_turn_plan_flags_only(self):
         self.engine.state.turn = 2
 

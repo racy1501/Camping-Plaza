@@ -434,6 +434,7 @@ def mcp_state():
         "hot_spring": _get_hot_spring_status(eng),
         "day_campsite": _get_day_campsite_status(eng),
         "arrival_plan": _get_arrival_plan_summary(eng),
+        "greenery": state["greenery"],
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,
