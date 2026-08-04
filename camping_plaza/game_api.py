@@ -54,15 +54,6 @@ class TurnPlanRequest(BaseModel):
     actions: list[ActionRequest] = Field(default_factory=list)
 
 
-class ReservationRequest(BaseModel):
-    group_size: int
-    economic_level: Optional[int] = 1
-
-
-class FacilityUpgradeRequest(BaseModel):
-    facility_name: str
-
-
 TURN_PLAN_IMMEDIATE_ACTIONS = {
     name for name, config in CampingPlazaEngine.TURN_PLAN_ACTIONS.items()
     if config["kind"] in {"free", "decision"}
