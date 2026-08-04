@@ -127,7 +127,6 @@ class GrowthTentPurchaseTests(unittest.TestCase):
     def test_tent_2_purchase_updates_only_required_state(self):
         self._open_management_phase(balance=1000)
         tent = self.engine.tents[2]
-        tent.level = 2
         tent.status = "cleaning"
         tent.occupied_by = 999
         absolute_turn = self.engine._absolute_turn()
@@ -140,7 +139,6 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertEqual(result["balance_before"], 1000)
         self.assertEqual(result["balance_after"], 400)
         self.assertTrue(tent.is_unlocked)
-        self.assertEqual(tent.level, 2)
         self.assertEqual(tent.status, "cleaning")
         self.assertEqual(tent.occupied_by, 999)
         self.assertGreater(tent.next_breakdown_turn, absolute_turn)

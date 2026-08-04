@@ -1570,13 +1570,11 @@ class HiddenInfoTests(unittest.TestCase):
     """对外状态隐藏内部字段"""
 
     def test_tents_hide_internal_fields(self):
-        """tents 不含 next_breakdown_turn 和 satisfaction_bonus"""
         engine = make_engine()
         state = engine.get_full_state()
 
         for tid, tent in state["tents"].items():
             self.assertNotIn("next_breakdown_turn", tent)
-            self.assertNotIn("satisfaction_bonus", tent)
 
     def test_reservation_hides_hidden_tags(self):
         """reservation 不暴露三个隐藏标签"""
@@ -2645,7 +2643,7 @@ class TentCleaningTests(unittest.TestCase):
         engine = make_engine()
         tent = engine.tents[1]
         tent.status = "cleaning"
-        tent.level = 2
+
         tent.occupied_by = None
         tent.next_breakdown_turn = 123
         balance_before = engine.state.balance
@@ -2653,7 +2651,7 @@ class TentCleaningTests(unittest.TestCase):
         engine.clean_tents([1])
 
         self.assertEqual(engine.state.balance, balance_before)
-        self.assertEqual(tent.level, 2)
+
         self.assertIsNone(tent.occupied_by)
         self.assertEqual(tent.next_breakdown_turn, 123)
 
@@ -2854,16 +2852,6 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(engine.state.decisions_left, decisions_before)
 
-    def test_upgrade_locked_tent_fails_without_spending_balance(self):
-        engine = make_engine()
-        engine.state.turn = 6
-        balance_before = engine.state.balance
-
-        result = engine.upgrade_tent(2)
-
-        self.assertFalse(result["success"])
-        self.assertEqual(engine.state.balance, balance_before)
-
     def test_full_state_exposes_unlocked_flag(self):
         engine = make_engine()
         state = engine.get_full_state()
@@ -2908,18 +2896,10 @@ class McpLockingStateTests(unittest.TestCase):
             self.engine.state.turn = turn
             self.assertEqual(game_api.mcp_state()["next_turn_checkout_tents"], [])
 
-    def test_mcp_actions_do_not_offer_locked_tent_upgrade(self):
+    def test_mcp_actions_do_not_offer_tent_upgrade(self):
         self.engine.state.turn = 6
-
         actions = game_api.mcp_available_actions()["available_actions"]
-        upgrade_tent_ids = [
-            action["params"]["tent_id"]
-            for action in actions
-            if action["action"] == "upgrade_tent"
-        ]
-
-        self.assertEqual(upgrade_tent_ids, [1])
-        self.assertNotIn("unlock_tent", [action["action"] for action in actions])
+        self.assertTrue(all(action["action"] != "upgrade_tent" for action in actions))
 
     def test_mcp_actions_reservation_capacity_ignores_locked_tents(self):
         self.engine.state.turn = 3

@@ -248,12 +248,6 @@ class CampMap {
             ctx.fillText(`${pos.capacity}人`, pos.x, pos.y + 10);
 
             // 等级标记
-            if (tent.level > 0) {
-                ctx.fillStyle = '#c9a96a';
-                ctx.font = '10px monospace';
-                const stars = '★'.repeat(tent.level);
-                ctx.fillText(stars, pos.x, pos.y + 22);
-            }
 
             // 故障标记
             if (tent.status === 'broken') {

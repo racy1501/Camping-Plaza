@@ -154,12 +154,10 @@ class FullSaveRestoreTests(PersistenceTestCase):
         }]
 
         # 帐篷内部字段
-        engine.tents[2].level = 2
         engine.tents[2].status = "occupied"
         engine.tents[2].is_unlocked = False
         engine.tents[2].occupied_by = 99
         engine.tents[2].next_breakdown_turn = 123
-        engine.tents[2].satisfaction_bonus = 6.0
         engine.tents[5].is_unlocked = True
         engine.tents[5].status = "reserved"
 
@@ -231,12 +229,10 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertIn(2, restored.tents)
         self.assertNotIn("2", restored.tents)
         t2 = restored.tents[2]
-        self.assertEqual(t2.level, 2)
         self.assertEqual(t2.status, "occupied")
         self.assertFalse(t2.is_unlocked)
         self.assertEqual(t2.occupied_by, 99)
         self.assertEqual(t2.next_breakdown_turn, 123)
-        self.assertEqual(t2.satisfaction_bonus, 6.0)
         self.assertTrue(restored.tents[1].is_unlocked)
         self.assertTrue(restored.tents[5].is_unlocked)
         self.assertEqual(restored.tents[5].status, "reserved")

@@ -251,12 +251,6 @@ def do_action(req: ActionRequest):
             raise HTTPException(400, "缺少tent_id参数")
         result = eng.repair_tent(int(tent_id))
 
-    elif req.action == "upgrade_tent":
-        tent_id = req.params.get("tent_id") if req.params else None
-        if tent_id is None:
-            raise HTTPException(400, "缺少tent_id参数")
-        result = eng.upgrade_tent(int(tent_id))
-
     elif req.action == "upgrade_facility":
         if not req.params or "facility_name" not in req.params:
             raise HTTPException(400, "缺少facility_name参数")
@@ -341,7 +335,6 @@ def mcp_state():
             tid: {
                 "status": t["status"],
                 "unlocked": t["unlocked"],
-                "level": t["level"],
                 "capacity": t["capacity"]
             }
             for tid, t in state["tents"].items()
@@ -439,15 +432,7 @@ def mcp_available_actions():
                 "params": {"tent_ids": cleaning_tent_ids},
                 "description": "批量清洁待清洁帐篷（不消耗决策点）"
             })
-        # 日终管理：为每顶可升级帐篷和每个可升级设施提供带完整 params 的操作
-        for tid, t in state["tents"].items():
-            if t["unlocked"] and t["level"] < 3:
-                actions.append({
-                    "action": "upgrade_tent",
-                    "params": {"tent_id": int(tid)},
-                    "description": f"升级{tid}号帐篷到Lv.{t['level']+1}"
-                })
-
+        # 日终管理：为每个可升级设施提供带完整 params 的操作
         for name, f in state["facilities"].items():
             # 所有设施统一最高 Lv2
             max_level = 2

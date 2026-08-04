@@ -125,13 +125,6 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             self._action("reject_reservation")
             save_mock.assert_called_once()
 
-    def test_upgrade_tent_saves(self):
-        self.engine.state.turn = 6
-        self.engine.state.balance = 99999
-        with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("upgrade_tent", {"tent_id": 1})
-            save_mock.assert_called_once()
-
     def test_upgrade_facility_saves(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
@@ -283,19 +276,6 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertIn("不太满意的帖子", "".join(restored.state.today_events))
         self.assertEqual(restored.state.balance, initial_balance)
         self.assertEqual(restored.state.today_income["accommodation"], 0)
-
-    def test_upgrade_tent_recovery(self):
-        """升级帐篷后恢复，等级和余额变化仍存在"""
-        self.engine.state.turn = 6
-        self.engine.state.balance = 99999
-        initial_level = self.engine.tents[1].level
-        initial_balance = self.engine.state.balance
-
-        self._action("upgrade_tent", {"tent_id": 1})
-
-        restored = self._new_engine_from_db()
-        self.assertEqual(restored.tents[1].level, initial_level + 1)
-        self.assertLess(restored.state.balance, initial_balance)
 
     def test_upgrade_facility_recovery(self):
         """升级设施后恢复，等级和余额变化仍存在"""

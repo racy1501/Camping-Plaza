@@ -22,12 +22,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // 初始渲染（默认状态）
     const defaultTents = {
-        1: { status: 'available', level: 0, capacity: 1 },
-        2: { status: 'available', level: 0, capacity: 2 },
-        3: { status: 'available', level: 0, capacity: 2 },
-        4: { status: 'available', level: 0, capacity: 3 },
-        5: { status: 'available', level: 0, capacity: 3 },
-        6: { status: 'available', level: 0, capacity: 5 }
+        1: { status: 'available', capacity: 1 },
+        2: { status: 'available', capacity: 2 },
+        3: { status: 'available', capacity: 2 },
+        4: { status: 'available', capacity: 3 },
+        5: { status: 'available', capacity: 3 },
+        6: { status: 'available', capacity: 5 }
     };
 
     campMap.draw(defaultTents, []);
@@ -107,7 +107,7 @@ function renderTentsPanel(tents) {
         card.innerHTML = `
             <div class="tent-id">${id}号帐篷</div>
             <div class="tent-status-icon">${statusIcons[tent.status] || '❓'}</div>
-            <div class="tent-info">Lv.${tent.level} · ${tent.capacity}人</div>
+            <div class="tent-info">${tent.capacity}人</div>
         `;
         grid.appendChild(card);
     }
@@ -167,12 +167,12 @@ function animateAI() {
         campMap.draw(gameState.tents, gameState.active_npcs || []);
     } else {
         const defaultTents = {
-            1: { status: 'available', level: 0, capacity: 1 },
-            2: { status: 'available', level: 0, capacity: 2 },
-            3: { status: 'available', level: 0, capacity: 2 },
-            4: { status: 'available', level: 0, capacity: 3 },
-            5: { status: 'available', level: 0, capacity: 3 },
-            6: { status: 'available', level: 0, capacity: 5 }
+            1: { status: 'available', capacity: 1 },
+            2: { status: 'available', capacity: 2 },
+            3: { status: 'available', capacity: 2 },
+            4: { status: 'available', capacity: 3 },
+            5: { status: 'available', capacity: 3 },
+            6: { status: 'available', capacity: 5 }
         };
         campMap.draw(defaultTents, []);
     }
@@ -354,7 +354,6 @@ function startDemoMode() {
         for (let i = 1; i <= 6; i++) {
             demoTents[i] = {
                 status: statuses[Math.floor(Math.random() * statuses.length)],
-                level: Math.floor(Math.random() * 2),
                 capacity: [1, 2, 2, 3, 3, 5][i - 1]
             };
         }

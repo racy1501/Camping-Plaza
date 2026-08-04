@@ -23,11 +23,9 @@ class Tent:
     id: int
     capacity: int
     is_unlocked: bool = False
-    level: int = 0
     status: str = "available"  # available, occupied, cleaning, broken, reserved
     occupied_by: Optional[int] = None  # NPC组ID
     next_breakdown_turn: int = 0
-    satisfaction_bonus: float = 0.0
 
     CAPACITY_MAP = {1: 2, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 
@@ -197,7 +195,6 @@ class CampingPlazaEngine:
     }
     OPENING_FOOD_GIFT_PACKAGE = "medium"
 
-    TENT_UPGRADE_COST = [0, 500, 1200, 2500]
     FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
@@ -1690,7 +1687,7 @@ class CampingPlazaEngine:
             self.state.balance += income
             self.state.today_income["accommodation"] += income
 
-        satisfaction_gain = 10 + tent.level * 3
+        satisfaction_gain = 10
         npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_gain)
         self._apply_greenery_entry_bonus_once(npc)
 
@@ -2286,7 +2283,7 @@ class CampingPlazaEngine:
             )
         result["phase"] = "management"
         result["next_actions"] = [
-            "upgrade_tent", "upgrade_facility", "manage_greenery", "next_day"
+            "upgrade_facility", "manage_greenery", "next_day"
         ]
 
     def manage_greenery(self, action: str) -> str:
@@ -2347,31 +2344,6 @@ class CampingPlazaEngine:
         if consume_decision:
             self.state.decisions_left -= 1
         return {"success": True, "message": f"{tent_id}号帐篷已修好"}
-
-    def upgrade_tent(self, tent_id: int) -> dict:
-        """升级帐篷"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一回合"}
-        # 修复：阶段保护，升级仅限日终管理阶段
-        if self.state.turn != 6:
-            return {"success": False, "message": "升级帐篷只能在日终管理阶段（Turn 6）进行"}
-        # 修复：引擎内部故障保护
-        if self._get_broken_tents():
-            return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
-        tent = self.tents.get(tent_id)
-        if not tent or not self._is_tent_unlocked(tent) or tent.level >= 3:
-            return {"success": False, "message": "无法升级"}
-
-        cost = self.TENT_UPGRADE_COST[tent.level + 1]
-        if self.state.balance < cost:
-            return {"success": False, "message": f"余额不足，需要{cost}金币"}
-
-        self.state.balance -= cost
-        tent.level += 1
-        tent.satisfaction_bonus = tent.level * 3
-        self._set_next_breakdown(tent)
-        return {"success": True, "message": f"{tent_id}号帐篷升级到Lv.{tent.level}"}
 
     def upgrade_facility(self, facility_name: str) -> dict:
         """兼容旧设施升级入口，转发至成长项目购买。"""
@@ -2764,7 +2736,7 @@ class CampingPlazaEngine:
         if not self._is_tent_unlocked(tent):
             tent.next_breakdown_turn = 0
             return
-        base_interval = 15 + tent.level * 5
+        base_interval = 15
         interval = random.randint(base_interval, base_interval + 10)
         tent.next_breakdown_turn = self._absolute_turn() + interval
 
@@ -2945,13 +2917,13 @@ class CampingPlazaEngine:
         else:
             safe_reservation = None
 
-        # 修复：对外只暴露帐篷必要字段，隐藏 next_breakdown_turn / satisfaction_bonus
+        # 修复：对外只暴露帐篷必要字段，隐藏 next_breakdown_turn
         safe_tents = {
             tid: {
                 "id": t.id,
                 "capacity": t.capacity,
                 "unlocked": t.is_unlocked,
-                "level": t.level,
+
                 "status": t.status,
                 "occupied_by": t.occupied_by
             }
@@ -2991,7 +2963,6 @@ class CampingPlazaEngine:
         return {tid: {
             "status": t.status,
             "unlocked": t.is_unlocked,
-            "level": t.level,
             "occupied_by": t.occupied_by,
             "capacity": t.capacity
         } for tid, t in self.tents.items()}
@@ -3019,7 +2990,7 @@ class CampingPlazaEngine:
         for tid, tent in state["tents"].items():
             si = {"available": "🟢", "occupied": "🔴",
                   "cleaning": "🟡", "broken": "⚠️", "reserved": "🔵"}.get(tent["status"], "❓")
-            line = f"  {tid}号: {si} Lv.{tent['level']} 容量{tent['capacity']}人"
+            line = f"  {tid}号: {si} 容量{tent['capacity']}人"
             if tent["occupied_by"]:
                 line += " (有客人)"
             lines.append(line)

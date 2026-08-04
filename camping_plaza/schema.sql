@@ -22,11 +22,9 @@ CREATE TABLE IF NOT EXISTS game_state (
 CREATE TABLE IF NOT EXISTS tents (
     id INTEGER PRIMARY KEY,
     capacity INTEGER NOT NULL,
-    level INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'available',  -- available/occupied/cleaning/broken
     occupied_by_npc_id INTEGER,
     next_breakdown_turn INTEGER NOT NULL DEFAULT 0,
-    satisfaction_bonus REAL NOT NULL DEFAULT 0.0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 

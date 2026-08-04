@@ -297,7 +297,7 @@ class GrowthProgressTests(unittest.TestCase):
             "balance": self.engine.state.balance,
             "food_stock": self.engine.state.food_stock,
             "tent_state": [
-                (tent.is_unlocked, tent.level, tent.status)
+                (tent.is_unlocked, tent.status)
                 for tent in self.engine.tents.values()
             ],
             "facility_levels": {
@@ -324,7 +324,7 @@ class GrowthProgressTests(unittest.TestCase):
         self.assertEqual(before["food_stock"], self.engine.state.food_stock)
         self.assertEqual(
             before["tent_state"],
-            [(tent.is_unlocked, tent.level, tent.status) for tent in self.engine.tents.values()],
+            [(tent.is_unlocked, tent.status) for tent in self.engine.tents.values()],
         )
         self.assertEqual(
             before["facility_levels"],

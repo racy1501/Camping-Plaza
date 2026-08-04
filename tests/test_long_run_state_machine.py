@@ -223,7 +223,7 @@ class MultiDayOperationTests(LongRunTestCase):
 
         # 5. 其余经营操作随机（提升服务/升级/绿化）
         optional = []
-        for name in ("improve_service", "upgrade_tent", "upgrade_facility",
+        for name in ("improve_service", "upgrade_facility",
                      "manage_greenery"):
             if name in by_name:
                 optional.append(by_name[name][0])
