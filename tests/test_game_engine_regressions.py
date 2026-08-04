@@ -1774,6 +1774,42 @@ class CheckoutTurnTests(unittest.TestCase):
         self.assertEqual(engine.tents[1].status, "cleaning")
         self.assertEqual(engine.tents[2].status, "cleaning")
 
+    def test_checkout_uses_occupied_tent_after_guest_activity(self):
+        for location in ("dining", "entertainment", "hot_spring"):
+            with self.subTest(location=location):
+                engine = make_engine()
+                npc = NPCGroup(
+                    id=engine._next_npc_id(),
+                    group_size=1,
+                    visit_type="overnight",
+                    location=location,
+                    checkout_turn=1,
+                )
+                engine.npc_pool.append(npc)
+                engine.tents[1].status = "occupied"
+                engine.tents[1].occupied_by = npc.id
+
+                engine._process_checkout_partial({"events": []})
+
+                self.assertTrue(npc.has_left)
+                self.assertEqual(engine.tents[1].occupied_by, None)
+
+    def test_next_turn_checkout_tents_uses_occupied_tent(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            location="hot_spring",
+            checkout_turn=2,
+        )
+        engine.npc_pool.append(npc)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = npc.id
+
+        self.assertEqual(engine.get_next_turn_checkout_tents(), [1])
+
 
 class IncomeAndSpendingTagTests(unittest.TestCase):
     """隐藏标签对收入的影响范围"""

@@ -98,7 +98,8 @@ class GameState:
         "accommodation": 0,
         "campsite": 0,
         "dining": 0,
-        "entertainment": 0
+        "entertainment": 0,
+        "hot_spring": 0,
     })
     today_events: list = field(default_factory=list)
     decisions_left: int = 3
@@ -106,6 +107,7 @@ class GameState:
     food_stock: int = 0
     last_food_preorder_day: int = 0
     hot_spring_built: bool = False
+    hot_spring_people_served_today: int = 0
 
     # 长期成长进度账本。旧快照缺少这些字段时保持默认 0，不补算历史。
     total_served_groups: int = 0
@@ -147,6 +149,9 @@ class CampingPlazaEngine:
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
     FREE_ENTERTAINMENT_PLANNED_ACTION_PROBABILITY = 0.50
     HOT_SPRING_PLANNED_ACTION_PROBABILITY = 0.30
+    HOT_SPRING_PRICE_PER_PERSON = 80
+    HOT_SPRING_SATISFACTION_GAIN = 6
+    HOT_SPRING_DAILY_CAPACITY = 20
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -1567,6 +1572,7 @@ class CampingPlazaEngine:
             self._process_business_turn(result)
             self._process_dining(result)
             self._process_entertainment(result)
+            self._process_hot_spring(result)
             if self.state.turn == 5:
                 self._process_day_guest_departures(result)
             if self.state.turn == 4:
@@ -1645,8 +1651,10 @@ class CampingPlazaEngine:
 
     def _checkout_npc(self, npc: NPCGroup, result: dict):
         """NPC退房"""
-        tent_id = int(npc.location.split("_")[1])
-        tent = self.tents[tent_id]
+        tent = self._find_occupied_tent_for_npc(npc.id)
+        if tent is None:
+            return
+        tent_id = tent.id
         was_broken = tent.status == "broken"
         # 修复：故障帐篷退房后保持 broken，必须经过 repair_tent() 才能恢复使用
         if was_broken:
@@ -1930,6 +1938,85 @@ class CampingPlazaEngine:
                 continue
 
             self._complete_dining_action(npc, action, menu, spend, result)
+
+    def _process_hot_spring(self, result: dict):
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
+                continue
+            for action in entry.get("planned_actions", []):
+                if action.get("action") != "hot_spring":
+                    continue
+                if action.get("status") != "pending":
+                    continue
+                if action.get("planned_turn") != self.state.turn:
+                    continue
+                if entry.get("arrival_status") != "arrived":
+                    action["status"] = "skipped"
+                    action["result"] = "not_arrived"
+                    continue
+
+                npc = self._find_npc(entry["npc_id"])
+                if npc is None:
+                    action["status"] = "skipped"
+                    action["result"] = "missing_npc"
+                    continue
+                if npc.has_left:
+                    action["status"] = "skipped"
+                    action["result"] = "npc_left"
+                    continue
+                if not self.state.hot_spring_built:
+                    action["status"] = "skipped"
+                    action["result"] = "hot_spring_unavailable"
+                    continue
+
+                remaining_capacity = (
+                    self.HOT_SPRING_DAILY_CAPACITY
+                    - self.state.hot_spring_people_served_today
+                )
+                if remaining_capacity < npc.group_size:
+                    action["status"] = "failed"
+                    action["result"] = "capacity_full"
+                    action["charged_amount"] = 0
+                    action["satisfaction_gain"] = 0
+                    action["people_served"] = 0
+                    result["events"].append(
+                        f"一组{npc.group_size}人的温泉需求失败：剩余容量{remaining_capacity}人，容量不足，未收费。"
+                    )
+                    continue
+
+                action_before = dict(action)
+                balance_before = self.state.balance
+                income_before = self.state.today_income["hot_spring"]
+                people_before = self.state.hot_spring_people_served_today
+                location_before = npc.location
+                satisfaction_before = npc.total_satisfaction
+                try:
+                    spend = self.HOT_SPRING_PRICE_PER_PERSON * npc.group_size
+                    npc.location = "hot_spring"
+                    self.state.balance += spend
+                    self.state.today_income["hot_spring"] += spend
+                    self.state.hot_spring_people_served_today += npc.group_size
+                    npc.total_satisfaction = min(
+                        100, npc.total_satisfaction + self.HOT_SPRING_SATISFACTION_GAIN
+                    )
+                    action["status"] = "completed"
+                    action["result"] = "success"
+                    action["charged_amount"] = spend
+                    action["satisfaction_gain"] = self.HOT_SPRING_SATISFACTION_GAIN
+                    action["people_served"] = npc.group_size
+                    result["events"].append(
+                        f"一组{npc.group_size}人的客组使用温泉，收入+{spend}，整组满意度+{self.HOT_SPRING_SATISFACTION_GAIN}。"
+                    )
+                except Exception:
+                    self.state.balance = balance_before
+                    self.state.today_income["hot_spring"] = income_before
+                    self.state.hot_spring_people_served_today = people_before
+                    npc.location = location_before
+                    npc.total_satisfaction = satisfaction_before
+                    action.clear()
+                    action.update(action_before)
+                    action["status"] = "failed"
+                    action["result"] = "execution_error"
 
     def _process_entertainment(self, result: dict):
         """处理娱乐消费"""
@@ -2586,19 +2673,25 @@ class CampingPlazaEngine:
                 return npc
         return None
 
+    def _find_occupied_tent_for_npc(self, npc_id: int) -> Optional[Tent]:
+        for tent in self.tents.values():
+            if tent.occupied_by == npc_id:
+                return tent
+        return None
+
     def _get_active_overnight_tent_npcs(self) -> list[NPCGroup]:
         return [
             npc for npc in self.npc_pool
             if npc.visit_type == "overnight"
             and not npc.has_left
-            and npc.location.startswith("tent_")
+            and self._find_occupied_tent_for_npc(npc.id) is not None
         ]
 
     def _ensure_checkout_turn(self, npc: NPCGroup) -> Optional[int]:
         if (
             npc.visit_type != "overnight"
             or npc.has_left
-            or not npc.location.startswith("tent_")
+            or self._find_occupied_tent_for_npc(npc.id) is None
         ):
             return None
         if npc.checkout_turn in (1, 2):
@@ -2610,7 +2703,7 @@ class CampingPlazaEngine:
         if self.state.turn != 2:
             return []
         tent_ids = {
-            int(npc.location.split("_")[1])
+            self._find_occupied_tent_for_npc(npc.id).id
             for npc in self._get_active_overnight_tent_npcs()
             if npc.checkout_turn == 2
         }
@@ -2789,7 +2882,8 @@ class CampingPlazaEngine:
             "accommodation": 0,
             "campsite": 0,
             "dining": 0,
-            "entertainment": 0
+            "entertainment": 0,
+            "hot_spring": 0,
         }
         self.state.today_events = []
         self.state.decisions_left = 3
@@ -2797,6 +2891,7 @@ class CampingPlazaEngine:
         # 修复：营业回合故障阻塞标记重置
         self.state.turn_settled = False
         self.state.day_campsite_groups_served = 0
+        self.state.hot_spring_people_served_today = 0
         # 重置绿化标记
         self.state.greenery_processed_today = False
 
