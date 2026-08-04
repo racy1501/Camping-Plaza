@@ -119,6 +119,50 @@ def _get_turn_plan_status(eng: CampingPlazaEngine) -> tuple[bool, bool, Optional
     return planning_available, has_current_plan, plan_target_turn
 
 
+def _safe_turn_plan_action(item) -> Optional[dict]:
+    """把单个 turn plan action 映射为安全摘要（显式白名单，不返回内部引用）。"""
+    if not isinstance(item, dict):
+        return None
+    action = item.get("action")
+    if action == "clean_tents":
+        tent_ids = item.get("tent_ids")
+        if tent_ids is None:
+            return {"action": "clean_tents"}
+        if isinstance(tent_ids, list):
+            return {"action": "clean_tents", "params": {"tent_ids": list(tent_ids)}}
+        return {"action": "clean_tents"}
+    if action == "repair_tent":
+        if "tent_id" in item:
+            return {"action": "repair_tent", "params": {"tent_id": item["tent_id"]}}
+        return {"action": "repair_tent"}
+    if action == "improve_service":
+        return {"action": "improve_service"}
+    if action == "buy_food_package":
+        if "package_key" in item:
+            return {"action": "buy_food_package", "params": {"package_key": item["package_key"]}}
+        return {"action": "buy_food_package"}
+    return None
+
+
+def _get_turn_plan_summary(eng: CampingPlazaEngine) -> Optional[dict]:
+    """已提交 Turn Plan 的只读安全摘要；无计划时返回 None。"""
+    plan = eng.state.pending_turn_plan
+    if plan is None:
+        return None
+    return {
+        "target_day": plan.get("target_day"),
+        "target_turn": plan.get("target_turn"),
+        "free_actions": [
+            s for s in (_safe_turn_plan_action(a) for a in plan.get("free_actions", []))
+            if s is not None
+        ],
+        "decision_actions": [
+            s for s in (_safe_turn_plan_action(a) for a in plan.get("actions", []))
+            if s is not None
+        ],
+    }
+
+
 def _get_hot_spring_status(eng: CampingPlazaEngine) -> dict:
     """温泉当前营业状态（只读），供各状态输出统一追加。"""
     served = eng.state.hot_spring_people_served_today
@@ -440,6 +484,7 @@ def mcp_state():
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,
+        "turn_plan": _get_turn_plan_summary(eng),
         "next_turn_checkout_tents": eng.get_next_turn_checkout_tents(),
     }
 

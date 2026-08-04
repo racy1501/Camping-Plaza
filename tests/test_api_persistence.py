@@ -1397,5 +1397,153 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.turn, turn_before)
 
 
+class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
+    """mcp/state 应提供已提交 Turn Plan 的只读安全摘要"""
+
+    def test_no_turn_plan_returns_null(self):
+        self.engine.state.pending_turn_plan = None
+        self.engine.state.turn = 2
+
+        state = game_api.mcp_state()
+
+        self.assertIsNone(state["turn_plan"])
+        self.assertFalse(state["plan_submitted"])
+        self.assertIsNone(state["plan_target_turn"])
+        self.assertTrue(state["planning_available"])
+
+    def test_full_safe_summary(self):
+        self.engine.state.pending_turn_plan = {
+            "target_day": 7,
+            "target_turn": 3,
+            "free_actions": [
+                {"action": "clean_tents", "tent_ids": [1, 2]},
+            ],
+            "actions": [
+                {"action": "repair_tent", "tent_id": 1},
+                {"action": "improve_service"},
+                {"action": "buy_food_package", "package_key": "basic"},
+            ],
+        }
+
+        state = game_api.mcp_state()
+
+        self.assertEqual(
+            state["turn_plan"],
+            {
+                "target_day": 7,
+                "target_turn": 3,
+                "free_actions": [
+                    {"action": "clean_tents", "params": {"tent_ids": [1, 2]}},
+                ],
+                "decision_actions": [
+                    {"action": "repair_tent", "params": {"tent_id": 1}},
+                    {"action": "improve_service"},
+                    {"action": "buy_food_package", "params": {"package_key": "basic"}},
+                ],
+            },
+        )
+
+    def test_whitelist_filters_unknown_fields_and_actions(self):
+        self.engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 3,
+            "free_actions": [
+                {
+                    "action": "clean_tents",
+                    "tent_ids": [3],
+                    "secret": "x",
+                    "raw_params": {"a": 1},
+                    "internal_note": "n",
+                },
+                {"action": "mystery_action", "thing": 1},
+                "not_a_dict",
+            ],
+            "actions": [],
+        }
+
+        state = game_api.mcp_state()
+
+        self.assertEqual(
+            state["turn_plan"]["free_actions"],
+            [{"action": "clean_tents", "params": {"tent_ids": [3]}}],
+        )
+        self.assertEqual(state["turn_plan"]["decision_actions"], [])
+
+    def test_does_not_expose_raw_plan(self):
+        self.engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 3,
+            "free_actions": [
+                {"action": "clean_tents", "tent_ids": [1], "secret": "SENSITIVE"},
+            ],
+            "actions": [],
+        }
+
+        state = game_api.mcp_state()
+
+        self.assertNotIn("pending_turn_plan", state)
+        self.assertNotIn("free_actions", state)
+        self.assertNotIn("actions", state)
+        dumped = json.dumps(state, ensure_ascii=False)
+        self.assertNotIn("SENSITIVE", dumped)
+        self.assertNotIn("secret", dumped)
+
+    def test_no_shared_mutable_reference(self):
+        self.engine.state.pending_turn_plan = {
+            "target_day": 1,
+            "target_turn": 3,
+            "free_actions": [
+                {"action": "clean_tents", "tent_ids": [1, 2]},
+            ],
+            "actions": [],
+        }
+
+        summary = game_api.mcp_state()["turn_plan"]
+        summary["free_actions"][0]["params"]["tent_ids"].append(99)
+
+        self.assertEqual(
+            self.engine.state.pending_turn_plan["free_actions"][0]["tent_ids"],
+            [1, 2],
+        )
+
+    def test_turn_plan_read_only(self):
+        plan_before = {
+            "target_day": 1,
+            "target_turn": 3,
+            "free_actions": [
+                {"action": "clean_tents", "tent_ids": [1]},
+            ],
+            "actions": [],
+        }
+        self.engine.state.pending_turn_plan = dict(plan_before)
+        day_before = self.engine.state.day
+        turn_before = self.engine.state.turn
+        balance_before = self.engine.state.balance
+        decisions_before = self.engine.state.decisions_left
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            with mock.patch.object(
+                game_api, "_normalize_turn_plan_actions"
+            ) as normalize_mock, mock.patch.object(
+                self.engine, "submit_turn_plan"
+            ) as submit_mock, mock.patch.object(
+                self.engine, "advance_turn"
+            ) as advance_mock, mock.patch.object(
+                self.engine, "_execute_pending_turn_plan"
+            ) as execute_mock:
+                game_api.mcp_state()
+                save_mock.assert_not_called()
+                normalize_mock.assert_not_called()
+                submit_mock.assert_not_called()
+                advance_mock.assert_not_called()
+                execute_mock.assert_not_called()
+
+        self.assertEqual(self.engine.state.pending_turn_plan, plan_before)
+        self.assertEqual(self.engine.state.day, day_before)
+        self.assertEqual(self.engine.state.turn, turn_before)
+        self.assertEqual(self.engine.state.balance, balance_before)
+        self.assertEqual(self.engine.state.decisions_left, decisions_before)
+
+
 if __name__ == "__main__":
     unittest.main()
