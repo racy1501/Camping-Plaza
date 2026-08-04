@@ -268,14 +268,6 @@ def do_action(req: ActionRequest):
         ]
         result = {"success": message not in failure_messages, "message": message}
 
-    elif req.action == "accept_reservation":
-        if not req.params or "group_size" not in req.params:
-            raise HTTPException(400, "缺少group_size参数")
-        result = eng.accept_reservation(int(req.params["group_size"]))
-
-    elif req.action == "reject_reservation":
-        result = eng.reject_reservation()
-
     elif req.action == "improve_service":
         result = eng.improve_service()
 
@@ -397,26 +389,6 @@ def mcp_available_actions():
                 "action": "advance_turn",
                 "description": "执行已提交的下一营业Turn计划并推进回合"
             })
-
-        # 修复：仅 pending 状态的预定显示接受/拒绝，accepted 不显示
-        if state["reservation"] and state["reservation"]["status"] == "pending":
-            group_size = state["reservation"]["group_size"]
-            # 修复：能否接受只检查是否存在容量足够的帐篷，不要求当前为 available
-            has_capacity = any(
-                t["unlocked"] and t["capacity"] >= group_size
-                for t in state["tents"].values()
-            )
-            if has_capacity:
-                actions.append({
-                    "action": "accept_reservation",
-                    "params": {"group_size": group_size},
-                    "description": f"接受预定（{group_size}人）"
-                })
-            actions.append({
-                "action": "reject_reservation",
-                "description": "拒绝预定"
-            })
-
     else:
         actions = []
         for tid, t in state["tents"].items():

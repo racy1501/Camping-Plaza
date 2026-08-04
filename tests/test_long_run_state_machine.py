@@ -203,15 +203,6 @@ class MultiDayOperationTests(LongRunTestCase):
             self._action("clean_tents", by_name["clean_tents"][0]["params"])
             return False
 
-        # 3. pending 预定随机接受或拒绝
-        if "accept_reservation" in by_name and rng.random() < 0.5:
-            a = by_name["accept_reservation"][0]
-            self._action("accept_reservation", a["params"])
-            return False
-        if "reject_reservation" in by_name and rng.random() < 0.5:
-            self._action("reject_reservation")
-            return False
-
         # 4. 推进类操作（防停滞时强制）
         advance_like = []
         for name in ("advance_turn", "new_day"):
@@ -431,56 +422,6 @@ class DeterministicScenarioTests(LongRunTestCase):
             self.assertIn(event, result["events"])
         self.assertEqual(self.engine.state.day_to_overnight_cache, [])
         self._check_invariants("cache-restart")
-
-    def test_accept_reservation_restart_no_double_charge(self):
-        """接受预定收款后立刻重启，次日入住不重复收费"""
-        self._disable_breakdowns()
-        eng = self.engine
-        eng.state.day = 1
-        eng.state.turn = 2
-        eng.state.reservation = {
-            "group_size": 1, "economic_level": 1,
-            "spending_habit": 1, "temperament": 1
-        }
-        balance_before = eng.state.balance
-
-        result = self._action("accept_reservation", {"group_size": 1})
-        self.assertTrue(result["success"])
-        payment = result["payment"]
-        balance_after_pay = eng.state.balance
-        self.assertEqual(balance_after_pay, balance_before + payment)
-
-        # 立刻重启
-        self._restart()
-        eng = self.engine
-        self.assertEqual(eng.state.balance, balance_after_pay)
-        self.assertEqual(eng.state.reserved_tent_day, 2)
-
-        # 屏蔽新客生成，隔离次日收入
-        def no_guests(*args, **kwargs):
-            return []
-
-        # 推进到次日 Turn 2（预定客入住点）
-        with mock.patch.object(CampingPlazaEngine, "_generate_overnight_guests", no_guests), \
-             mock.patch.object(CampingPlazaEngine, "_generate_day_guests", no_guests), \
-             mock.patch("game_engine.random.random", return_value=0.99):
-            # 今日 Turn 2→3→4→5→6→次日 Turn 1→2
-            for _ in range(6):
-                game_api.advance_turn()
-                if eng.state.day == 2 and eng.state.turn == 2:
-                    break
-            game_api.advance_turn()  # 次日 Turn 2：预定客入住
-
-        self.assertEqual(eng.state.day, 2)
-        # 无新客且预定客 charge=False：余额不得再增
-        self.assertEqual(eng.state.balance, balance_after_pay)
-        self.assertEqual(eng.state.today_income["accommodation"], 0)
-        self.assertEqual(eng.state.today_income["campsite"], 0)
-        # 预定客已入住且已付款标记保持
-        reserved_npcs = [n for n in eng.npc_pool if n.is_reserved]
-        self.assertEqual(len(reserved_npcs), 1)
-        self.assertTrue(reserved_npcs[0].paid)
-        self._check_invariants("no-double-charge")
 
     def test_clean_then_restart_not_back_to_cleaning(self):
         """批量清洁后立刻重启，状态不得回到 cleaning"""

@@ -100,31 +100,6 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             self._action("clean_tents", {"tent_ids": [1, 2]})
             save_mock.assert_called_once()
 
-    def test_accept_reservation_success_saves(self):
-        self.engine.state.turn = 2
-        self.engine.state.decisions_left = 3
-        self.engine.state.reservation = {
-            "group_size": 1,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("accept_reservation", {"group_size": 1})
-            save_mock.assert_called_once()
-
-    def test_reject_reservation_saves(self):
-        self.engine.state.turn = 2
-        self.engine.state.reservation = {
-            "group_size": 2,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("reject_reservation")
-            save_mock.assert_called_once()
-
     def test_upgrade_facility_saves(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
@@ -172,23 +147,6 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
         with mock.patch.object(self.engine, "save_state") as save_mock:
             game_api.advance_turn()
             save_mock.assert_called_once()
-
-    def test_accept_reservation_capacity_fail_with_complaint_saves(self):
-        """容量不足失败但命中抱怨事件后仍保存"""
-        self.engine.state.turn = 2
-        self.engine.state.decisions_left = 3
-        self.engine.state.reservation = {
-            "group_size": 6,  # 超过所有帐篷最大容量 5
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        with mock.patch.object(self.engine, "save_state") as save_mock:
-            with mock.patch("game_engine.random.random", return_value=0.1):
-                result = self._action("accept_reservation", {"group_size": 6})
-                self.assertFalse(result["success"])
-                save_mock.assert_called_once()
-
 
 class DatabaseRecoveryTests(ApiPersistenceTestCase):
     """验证真实数据库恢复后的副作用一致性"""
@@ -254,28 +212,6 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         restored = self._new_engine_from_db()
         self.assertEqual(restored.tents[1].status, "available")
         self.assertEqual(restored.tents[3].status, "available")
-
-    def test_capacity_fail_complaint_recovery(self):
-        """容量不足抱怨事件保存后恢复，reservation 与 today_events 保留"""
-        self.engine.state.turn = 2
-        self.engine.state.reservation = {
-            "group_size": 6,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        initial_balance = self.engine.state.balance
-
-        with mock.patch("game_engine.random.random", return_value=0.1):
-            result = self._action("accept_reservation", {"group_size": 6})
-        self.assertFalse(result["success"])
-
-        restored = self._new_engine_from_db()
-        self.assertIsNotNone(restored.state.reservation)
-        self.assertEqual(restored.state.reservation["group_size"], 6)
-        self.assertIn("不太满意的帖子", "".join(restored.state.today_events))
-        self.assertEqual(restored.state.balance, initial_balance)
-        self.assertEqual(restored.state.today_income["accommodation"], 0)
 
     def test_upgrade_facility_recovery(self):
         """升级设施后恢复，等级和余额变化仍存在"""
@@ -515,30 +451,6 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
             self.engine.state.food_stock,
             opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
         )
-
-    def test_reservation_actions_still_work(self):
-        self.engine.state.turn = 2
-        self.engine.state.reservation = {
-            "group_size": 1,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-
-        accept_result = self._action("accept_reservation", {"group_size": 1})
-        self.assertTrue(accept_result["success"])
-        self.assertIsNotNone(self.engine.state.reserved_tent_id)
-
-        self.engine.state.reservation = {
-            "group_size": 1,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        reject_result = self._action("reject_reservation")
-        self.assertTrue(reject_result["success"])
-        self.assertIsNone(self.engine.state.reservation)
-
 
 class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_mcp_state_exposes_food_stock(self):

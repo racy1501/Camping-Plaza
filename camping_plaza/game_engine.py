@@ -2012,85 +2012,6 @@ class CampingPlazaEngine:
             result["events"].append(f"预定客人到达，入住{tent_id}号帐篷")
             plan_entry["arrival_status"] = "arrived"
 
-    def accept_reservation(self, group_size: int) -> dict:
-        """接受预定"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一回合"}
-        # 修复：存在故障帐篷时禁止经营操作
-        if self._get_broken_tents():
-            return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
-        # 修复：预定操作仅限营业回合
-        if self.state.turn < 1 or self.state.turn > 5:
-            return {"success": False, "message": "预定操作只能在营业回合（Turn 1-5）进行"}
-        # 修复 #3：没有待处理请求时返回失败
-        if self.state.reservation is None:
-            return {"success": False, "message": "当前没有待处理的预定请求"}
-
-        # 修复 #2：如果已有未完成入住的预定，不接受新预定
-        if self.state.reserved_tent_id is not None:
-            return {"success": False, "message": "已有预定的帐篷尚未完成入住"}
-
-        # 修复 #3：使用当前 reservation 中保存的资料，不重新随机生成
-        reserved_group_size = self.state.reservation["group_size"]
-        economic_level = self.state.reservation.get("economic_level", 1)
-        suitable_tents = [
-            tent for tent in self._get_unlocked_tents()
-            if tent.capacity >= reserved_group_size
-        ]
-        if not suitable_tents:
-            # 策划确认：无法接受预定与主动拒绝统一进行抱怨判定
-            self._record_reservation_rejection_event()
-            return {"success": False, "message": "没有容量合适的帐篷可预留"}
-
-        tent_id = min(suitable_tents, key=lambda tent: (tent.capacity, tent.id)).id
-
-        payment = self.TENT_PRICES[tent_id]
-        self.state.balance += payment
-        self.state.today_income["accommodation"] += payment
-
-        # 修复 #3：保留 reservation 到预定客真正入住，只补充 tent_id 和 economic_level
-        self.state.reservation["tent_id"] = tent_id
-        self.state.reservation["economic_level"] = economic_level
-        self.state.reserved_tent_id = tent_id
-        self.state.reserved_tent_day = self.state.day + 1
-
-        return {
-            "success": True,
-            "message": f"预定成功，{tent_id}号帐篷已预留给明天{reserved_group_size}人",
-            "payment": payment
-        }
-
-    def reject_reservation(self) -> dict:
-        """拒绝预定"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一回合"}
-        # 修复：存在故障帐篷时禁止经营操作
-        if self._get_broken_tents():
-            return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
-        # 修复：预定操作仅限营业回合
-        if self.state.turn < 1 or self.state.turn > 5:
-            return {"success": False, "message": "预定操作只能在营业回合（Turn 1-5）进行"}
-        # 修复：没有待处理请求或已接受预定时返回失败，不进行随机抱怨判定
-        if self.state.reservation is None:
-            return {"success": False, "message": "当前没有待处理的预定请求"}
-        # 修复：已接受并分配帐篷的预定不能拒绝
-        if self.state.reserved_tent_id is not None:
-            return {"success": False, "message": "预定已接受，无法拒绝"}
-        self.state.reservation = None  # 清空待处理请求
-        self._record_reservation_rejection_event()
-        return {"success": True, "message": "已拒绝预定"}
-
-    def _record_reservation_rejection_event(self):
-        """记录无法接受或拒绝预定导致的客人抱怨事件"""
-        if random.random() < 0.3:
-            self.state.today_events.append("被拒绝的客人发了条不太满意的帖子")
-
-    # -------------------------------------------------------------------------
-    # 日间客转过夜
-    # -------------------------------------------------------------------------
-
     def _leave_day_guest(self, npc: NPCGroup, result: dict):
         """日间游客离场并触发评价。"""
         npc.has_left = True
@@ -2820,25 +2741,6 @@ class CampingPlazaEngine:
         return before, facility.greenery_satisfaction
 
     def _generate_daily_reservation(self):
-        """生成每日预定。修复 #2 #3：有待处理请求或已确认预定时不生成"""
-        if self.state.reservation is not None:
-            return
-
-        if random.random() < 0.3:
-            group_size = random.randint(1, 5)
-            # 修复：预定时保存三个隐藏标签，入住时恢复
-            self.state.reservation = {
-                "group_size": group_size,
-                "economic_level": random.randint(0, 2),
-                "spending_habit": random.randint(0, 2),
-                "temperament": random.randint(0, 2)
-            }
-
-    # -------------------------------------------------------------------------
-    # 状态查询
-    # -------------------------------------------------------------------------
-
-    def _generate_daily_reservation(self):
         profile = self._ensure_daily_demand_profile()
         if profile.get("reservation_processed"):
             return
@@ -2904,14 +2806,6 @@ class CampingPlazaEngine:
         )
         profile["reservation_processed"] = True
         profile["reservation_result"] = "accepted_overnight"
-
-    def accept_reservation(self, group_size: int) -> dict:
-        """兼容旧手动预约入口，当前仅返回自动结算提示。"""
-        return {"success": True, "message": "预约已改为自动结算，无需手动处理"}
-
-    def reject_reservation(self) -> dict:
-        """兼容旧手动预约入口，当前仅返回自动结算提示。"""
-        return {"success": True, "message": "预约已改为自动结算，无需手动处理"}
 
     def get_full_state(self) -> dict:
         # 修复：对外隐藏NPC隐藏标签，引擎内部数据不变

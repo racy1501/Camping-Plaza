@@ -1389,183 +1389,6 @@ class RepairStateRecoveryTests(unittest.TestCase):
         self.assertEqual(engine.state.decisions_left, decisions_before)
 
 
-class ReservationProtectionTests(unittest.TestCase):
-    """预定系统保护规则"""
-
-    def _make_pending_reservation(self, engine):
-        engine.state.reservation = {
-            "group_size": 2,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-
-    def test_broken_tent_blocks_accept(self):
-        """broken 帐篷存在时不能接受预定"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        self._make_pending_reservation(engine)
-
-        result = engine.accept_reservation(2)
-
-        self.assertFalse(result["success"])
-        self.assertIn("故障", result["message"])
-
-    def test_broken_tent_blocks_reject(self):
-        """broken 帐篷存在时不能拒绝预定"""
-        engine = make_engine()
-        engine.tents[1].status = "broken"
-        self._make_pending_reservation(engine)
-
-        result = engine.reject_reservation()
-
-        self.assertFalse(result["success"])
-        self.assertIn("故障", result["message"])
-
-    def test_turn6_blocks_accept(self):
-        """Turn 6 不能接受预定"""
-        engine = make_engine()
-        engine.state.turn = 6
-        self._make_pending_reservation(engine)
-
-        result = engine.accept_reservation(2)
-
-        self.assertFalse(result["success"])
-        self.assertIn("营业回合", result["message"])
-
-    def test_turn6_blocks_reject(self):
-        """Turn 6 不能拒绝预定"""
-        engine = make_engine()
-        engine.state.turn = 6
-        self._make_pending_reservation(engine)
-
-        result = engine.reject_reservation()
-
-        self.assertFalse(result["success"])
-        self.assertIn("营业回合", result["message"])
-
-    def test_accepted_reservation_cannot_reject(self):
-        """已接受预定不能再次拒绝"""
-        engine = make_engine()
-        self._make_pending_reservation(engine)
-        engine.accept_reservation(2)
-
-        result = engine.reject_reservation()
-
-        self.assertFalse(result["success"])
-        self.assertIn("已接受", result["message"])
-
-    def test_reject_without_reservation_no_complaint(self):
-        """没有预定请求时拒绝不会触发随机抱怨"""
-        engine = make_engine()
-        engine.state.reservation = None
-        # 即使 random < 0.3 也不应抱怨
-        with mock.patch("game_engine.random.random", return_value=0.1):
-            result = engine.reject_reservation()
-
-        self.assertFalse(result["success"])
-        complaint_events = [
-            event for event in engine.state.today_events
-            if "不太满意" in event
-        ]
-        self.assertEqual(complaint_events, [])
-
-    def test_accept_no_suitable_tent_records_complaint(self):
-        """容量不足且随机值小于0.3时，接受预定失败并写入抱怨"""
-        engine = make_engine()
-        self._make_pending_reservation(engine)
-        # 让所有帐篷容量都不足
-        for t in engine.tents.values():
-            t.capacity = 1
-        balance_before = engine.state.balance
-        accommodation_before = engine.state.today_income["accommodation"]
-        reserved_id_before = engine.state.reserved_tent_id
-        reserved_day_before = engine.state.reserved_tent_day
-
-        with mock.patch("game_engine.random.random", return_value=0.1):
-            result = engine.accept_reservation(2)
-
-        self.assertFalse(result["success"])
-        self.assertIn("没有容量合适的帐篷", result["message"])
-        complaint_events = [
-            event for event in engine.state.today_events
-            if "不太满意" in event
-        ]
-        self.assertEqual(len(complaint_events), 1)
-        self.assertIn("不太满意的帖子", complaint_events[0])
-        self.assertIsNotNone(engine.state.reservation)
-        self.assertEqual(engine.state.balance, balance_before)
-        self.assertEqual(engine.state.today_income["accommodation"], accommodation_before)
-        self.assertEqual(engine.state.reserved_tent_id, reserved_id_before)
-        self.assertEqual(engine.state.reserved_tent_day, reserved_day_before)
-
-    def test_accept_no_suitable_tent_no_complaint(self):
-        """容量不足且随机值大于等于0.3时，不写抱怨事件"""
-        engine = make_engine()
-        self._make_pending_reservation(engine)
-        for t in engine.tents.values():
-            t.capacity = 1
-
-        with mock.patch("game_engine.random.random", return_value=0.5):
-            result = engine.accept_reservation(2)
-
-        self.assertFalse(result["success"])
-        complaint_events = [
-            event for event in engine.state.today_events
-            if "不太满意" in event
-        ]
-        self.assertEqual(complaint_events, [])
-        self.assertIsNotNone(engine.state.reservation)
-
-    def test_reject_reservation_uses_shared_recorder(self):
-        """主动拒绝预定使用同一抱怨判定并清空待处理请求"""
-        engine = make_engine()
-        self._make_pending_reservation(engine)
-
-        with mock.patch("game_engine.random.random", return_value=0.1):
-            result = engine.reject_reservation()
-
-        self.assertTrue(result["success"])
-        self.assertIsNone(engine.state.reservation)
-        complaint_events = [
-            event for event in engine.state.today_events
-            if "不太满意" in event
-        ]
-        self.assertEqual(len(complaint_events), 1)
-        self.assertIn("不太满意的帖子", complaint_events[0])
-
-    def test_accept_charges_once(self):
-        """接受预定立即收取住宿费，入住时不重复收费"""
-        engine = make_engine()
-        self._make_pending_reservation(engine)
-        balance_before = engine.state.balance
-        accommodation_before = engine.state.today_income["accommodation"]
-
-        result = engine.accept_reservation(2)
-
-        self.assertTrue(result["success"])
-        payment = result["payment"]
-        self.assertEqual(engine.state.balance, balance_before + payment)
-        self.assertEqual(
-            engine.state.today_income["accommodation"],
-            accommodation_before + payment,
-        )
-
-        # 模拟第二天预定客入住
-        engine.state.day = 2
-        engine.state.reserved_tent_day = 2
-        engine.tents[engine.state.reserved_tent_id].status = "reserved"
-        result_checkin = {"events": []}
-        engine._process_reservations(result_checkin)
-
-        # 余额和住宿收入不应再次增加
-        self.assertEqual(engine.state.balance, balance_before + payment)
-        self.assertEqual(
-            engine.state.today_income["accommodation"],
-            accommodation_before + payment,
-        )
-
-
 class HiddenInfoTests(unittest.TestCase):
     """对外状态隐藏内部字段"""
 
@@ -2760,40 +2583,6 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         self.assertEqual(len(guests), 1)
         self.assertEqual(guests[0].visit_type, "overnight")
 
-    def test_accept_reservation_fails_when_only_locked_tent_has_capacity(self):
-        engine = make_engine()
-        engine.state.reservation = {
-            "group_size": 3,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-        balance_before = engine.state.balance
-        decisions_before = engine.state.decisions_left
-
-        with mock.patch("game_engine.random.random", return_value=0.9):
-            result = engine.accept_reservation(3)
-
-        self.assertFalse(result["success"])
-        self.assertEqual(engine.state.balance, balance_before)
-        self.assertEqual(engine.state.decisions_left, decisions_before)
-        self.assertIsNone(engine.state.reserved_tent_id)
-        self.assertIsNotNone(engine.state.reservation)
-
-    def test_accept_reservation_uses_unlocked_tent(self):
-        engine = make_engine()
-        engine.state.reservation = {
-            "group_size": 2,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-
-        result = engine.accept_reservation(2)
-
-        self.assertTrue(result["success"])
-        self.assertEqual(engine.state.reserved_tent_id, 1)
-
     def test_day_to_overnight_does_not_use_locked_tent(self):
         engine = make_engine()
         engine.tents[1].status = "occupied"
@@ -2901,21 +2690,11 @@ class McpLockingStateTests(unittest.TestCase):
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertTrue(all(action["action"] != "upgrade_tent" for action in actions))
 
-    def test_mcp_actions_reservation_capacity_ignores_locked_tents(self):
-        self.engine.state.turn = 3
-        self.engine.state.reservation = {
-            "group_size": 3,
-            "economic_level": 1,
-            "spending_habit": 1,
-            "temperament": 1,
-        }
-
+    def test_mcp_actions_do_not_expose_manual_reservation_actions(self):
         actions = game_api.mcp_available_actions()["available_actions"]
         action_names = [action["action"] for action in actions]
-
         self.assertNotIn("accept_reservation", action_names)
-        self.assertIn("reject_reservation", action_names)
-
+        self.assertNotIn("reject_reservation", action_names)
 
 if __name__ == "__main__":
     unittest.main()
