@@ -148,6 +148,82 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             game_api.advance_turn()
             save_mock.assert_called_once()
 
+class GrowthProjectActionTests(ApiPersistenceTestCase):
+    def _qualify_hot_spring(self):
+        self.engine.state.turn = 6
+        self.engine.state.total_served_groups = 150
+        self.engine.state.balance = 10000
+        for tent_id in range(2, 6):
+            self.engine.tents[tent_id].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+
+    def test_purchase_growth_project_success_dispatches_and_saves_once(self):
+        self._qualify_hot_spring()
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            result = self._action(
+                "purchase_growth_project",
+                {"project_id": "hot_spring"},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["project_id"], "hot_spring")
+        self.assertEqual(result["price"], 8000)
+        self.assertEqual(result["balance_after"], 2000)
+        save_mock.assert_called_once()
+
+    def test_purchase_growth_project_failure_does_not_save(self):
+        self.engine.state.turn = 2
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            result = self._action(
+                "purchase_growth_project",
+                {"project_id": "hot_spring"},
+            )
+
+        self.assertFalse(result["success"])
+        save_mock.assert_not_called()
+
+    def test_duplicate_purchase_does_not_charge_or_save(self):
+        self._qualify_hot_spring()
+        with mock.patch.object(self.engine, "save_state"):
+            first = self._action(
+                "purchase_growth_project",
+                {"project_id": "hot_spring"},
+            )
+        balance_after_first = self.engine.state.balance
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            second = self._action(
+                "purchase_growth_project",
+                {"project_id": "hot_spring"},
+            )
+
+        self.assertTrue(first["success"])
+        self.assertFalse(second["success"])
+        self.assertEqual(self.engine.state.balance, balance_after_first)
+        save_mock.assert_not_called()
+
+    def test_unknown_growth_project_does_not_save(self):
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            result = self._action(
+                "purchase_growth_project",
+                {"project_id": "unknown_project"},
+            )
+
+        self.assertFalse(result["success"])
+        save_mock.assert_not_called()
+
+    def test_invalid_project_id_does_not_call_engine_or_save(self):
+        for params in (None, {}, {"project_id": 12}, {"project_id": ""}):
+            with self.subTest(params=params):
+                with mock.patch.object(self.engine, "purchase_growth_project") as purchase_mock:
+                    with mock.patch.object(self.engine, "save_state") as save_mock:
+                        with self.assertRaises(game_api.HTTPException):
+                            self._action("purchase_growth_project", params)
+                purchase_mock.assert_not_called()
+                save_mock.assert_not_called()
+
+
 class DatabaseRecoveryTests(ApiPersistenceTestCase):
     """验证真实数据库恢复后的副作用一致性"""
 

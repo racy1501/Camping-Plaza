@@ -285,6 +285,14 @@ def do_action(req: ActionRequest):
             raise HTTPException(400, "缺少package_key参数")
         result = eng.buy_food_package(str(package_key))
 
+    elif req.action == "purchase_growth_project":
+        project_id = req.params.get("project_id") if req.params else None
+        if not isinstance(project_id, str) or not project_id:
+            raise HTTPException(400, "缺少有效的project_id参数")
+        result = eng.purchase_growth_project(project_id)
+        if not result.get("success"):
+            return result
+
     elif req.action == "advance_turn":
         result = eng.advance_turn()
 
