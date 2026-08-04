@@ -1222,7 +1222,7 @@ class CampingPlazaEngine:
         )
 
     def get_growth_project_catalog(self) -> list:
-        """只读返回预温泉阶段的成长项目及其当前购买资格。"""
+        """只读返回成长项目及其当前购买资格。"""
         facility_levels = {
             name: self._get_valid_growth_facility_level(name)
             for name in ("dining", "entertainment", "greenery")

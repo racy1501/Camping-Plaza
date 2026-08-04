@@ -228,6 +228,69 @@ class HotSpringExecutionTests(unittest.TestCase):
         self.assertIsNone(tent.occupied_by)
         self.assertEqual(tent.status, "cleaning")
 
+    def test_hot_spring_purchase_reload_and_activity_lifecycle(self):
+        self.engine.state.hot_spring_built = False
+        self.engine.state.turn = 6
+        self.engine.state.balance = 8080
+        self.engine.state.total_served_groups = 150
+        for tent_id in range(2, 6):
+            self.engine.tents[tent_id].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+
+        purchase = self.engine.purchase_growth_project("hot_spring")
+        self.assertTrue(purchase["success"])
+        self.assertEqual(purchase["balance_after"], 80)
+        self.assertTrue(self.engine.state.hot_spring_built)
+        self.assertTrue(self.engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertTrue(restored.state.hot_spring_built)
+
+        with mock.patch.object(
+            restored,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 0, "overnight_guest_count": 1},
+        ), mock.patch.object(restored, "_generate_daily_reservation"), mock.patch.object(
+            restored, "_roll_arrival_turn", return_value=2
+        ), mock.patch.object(
+            restored, "_build_dining_planned_action", return_value=None
+        ), mock.patch.object(
+            restored, "_build_paid_entertainment_planned_action", return_value=None
+        ), mock.patch.object(
+            restored, "_build_free_entertainment_planned_action", return_value=None
+        ), mock.patch("game_engine.random.random", return_value=0.0), mock.patch(
+            "game_engine.random.randint", return_value=1
+        ), mock.patch(
+            "game_engine.random.shuffle"
+        ), mock.patch("game_engine.random.sample", return_value=[2]):
+            restored._new_day({"events": []})
+
+        entry = restored.state.today_arrival_plan[0]
+        self.assertEqual(entry["source"], "natural_overnight")
+        action = entry["planned_actions"][0]
+        self.assertEqual(action["action"], "hot_spring")
+        self.assertEqual(action["planned_turn"], 2)
+
+        restored.state.turn = 2
+        restored._process_planned_arrivals({"events": []})
+        self.assertEqual(entry["arrival_status"], "arrived")
+        npc = restored._find_npc(entry["npc_id"])
+        self.assertIsNotNone(npc)
+        satisfaction_before = npc.total_satisfaction
+        restored._process_hot_spring({"events": []})
+
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(action["charged_amount"], 80)
+        self.assertEqual(npc.total_satisfaction, satisfaction_before + 6)
+        self.assertEqual(restored.state.today_income["hot_spring"], 80)
+        self.assertEqual(restored.state.hot_spring_people_served_today, 1)
+
+        restored._new_day({"events": []})
+        self.assertTrue(restored.state.hot_spring_built)
+        self.assertEqual(restored.state.hot_spring_people_served_today, 0)
+        self.assertEqual(restored.state.today_income["hot_spring"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

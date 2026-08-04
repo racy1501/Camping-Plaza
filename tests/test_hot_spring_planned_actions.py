@@ -108,7 +108,10 @@ class HotSpringPlannedActionsTests(unittest.TestCase):
                      mock.patch("game_engine.random.sample", return_value=[arrival_turn]):
                     self.engine._append_planned_actions(entry)
                 self.assertEqual(entry["planned_actions"][0]["planned_turn"], arrival_turn)
-                self.assertTrue(expected_turns)
+                self.assertIn(
+                    entry["planned_actions"][0]["planned_turn"],
+                    expected_turns,
+                )
 
     def test_natural_and_reservation_sources_share_the_same_builder(self):
         self.engine.state.hot_spring_built = True
