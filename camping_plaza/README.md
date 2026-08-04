@@ -36,7 +36,7 @@ camping_plaza/
 
 - **类型**：经营游戏，无限模式
 - **核心循环**：接待客人 → 获得收入 → 升级设施 → 提升好评率 → 吸引更多客人
-- **AI决策**：维修帐篷、升级设施、接受/拒绝预定、管理绿化
+- **AI决策**：维修帐篷、购买成长项目、管理绿化（预约由代码自动生成和结算，无需人工或 AI 接受/拒绝）
 - **每回合**：3个经营决策点，清洁帐篷不占决策点
 
 ## 本地运行
@@ -53,18 +53,63 @@ python game_api.py
 
 ## API接口
 
+> 说明：`/mcp/state` 与 `/mcp/actions` 是普通 FastAPI HTTP 端点，采用适合 MCP 封装层消费的结构；本仓库本身不是原生 MCP 协议服务器。
+
 ### 状态查询
 - `GET /api/state` — 完整游戏状态
 - `GET /api/state/display` — 展示用文本+数据
 - `GET /api/map` — 地图位置数据（帐篷、设施、NPC坐标）
 
 ### MCP专用
-- `GET /mcp/state` — AI决策需要的精简状态
+- `GET /mcp/state` — AI 决策需要的精简状态
 - `GET /mcp/actions` — 当前可用操作列表
+
+`/mcp/state` 主要字段（按经营、设施、预约/客流、Turn Plan 分组）：
+
+- **经营状态**：`day`、`turn`、`balance`、`reputation_rate`、`decisions_left`、`food_stock`、`today_income`
+- **设施/帐篷**：`tents`（含 status/unlocked/capacity）、`facilities`（含 level）、`greenery`、`hot_spring`、`day_campsite`
+- **预约/客流**：`active_guests_count`、`reservation`、`arrival_plan`
+- **Turn Plan**：`planning_available`、`plan_submitted`、`plan_target_turn`、`turn_plan`、`next_turn_checkout_tents`
+
+`turn_plan` 说明：
+
+- 只存在于 `/mcp/state`；
+- 无已提交计划时为 `null`；
+- 有计划时包含：`target_day`、`target_turn`、`free_actions`、`decision_actions`；
+- 只暴露动作名和白名单参数摘要，不暴露原始 `pending_turn_plan`。
+
+`/mcp/actions` 说明：
+
+- 只暴露代码判定 `can_purchase_now == true` 的成长项目；
+- 成长购买动作为 `purchase_growth_project`，参数为 `project_id`；
+- 旧 `upgrade_facility` 不再由 `/mcp/actions` 推荐；
+- 旧 `upgrade_facility` 仍作为 `/api/action` 的兼容执行入口保留，但不建议新接入使用。
 
 ### 游戏操作
 - `POST /api/turn/advance` — 推进回合
-- `POST /api/action` — 执行操作（维修/升级/接受预定等）
+- `POST /api/action` — 执行经营操作（维修帐篷、购买成长项目、管理绿化等）
+
+#### 预约机制
+
+- 预约由代码自动生成、接下、错失和结算；
+- 不存在 `accept_reservation` / `reject_reservation` 动作；
+- 玩家和 AI 无需手动接受或拒绝预约；
+- 对外安全 `reservation` 字段为：`group_size`、`visit_type`、`arrival_day`、`status`。
+
+#### `/api/action` 错误语义
+
+- **请求语义错误**：HTTP 400，结构 `{"detail": {"error_code": "...", "message": "..."}}`，当前错误码：`missing_tent_id`、`missing_facility_name`、`missing_package_key`、`invalid_project_id`、`unknown_action`。
+- **请求体 schema 校验错误**：HTTP 422，由 FastAPI/Pydantic 返回。
+- **合法业务动作被拒绝**：仍可能返回 HTTP 200 + `success: false` + `message`（此时部分失败动作可能已写入状态）。
+
+不要把所有失败都当作 HTTP 400 处理。
+
+### 前端调用行为（doAction）
+
+- 检查 `response.ok`；
+- HTTP 错误优先显示 `detail.message`；
+- HTTP 非成功响应不刷新状态；
+- HTTP 200 + `success: false` 仍刷新状态，因为部分业务失败可能已写入状态。
 
 ## 存档
 
