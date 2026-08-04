@@ -1493,6 +1493,8 @@ class CampingPlazaEngine:
             self._process_business_turn(result)
             self._process_dining(result)
             self._process_entertainment(result)
+            if self.state.turn == 5:
+                self._process_day_guest_departures(result)
             if self.state.turn == 4:
                 self._process_day_to_overnight(result)
             self._handle_breakdowns(result)
@@ -2056,11 +2058,6 @@ class CampingPlazaEngine:
             self.state.balance += income
             self.state.today_income["accommodation"] += income
 
-        for guest in day_guests:
-            if guest.visit_type == "day":
-                self._leave_day_guest(guest, result)
-        self._cleanup_left_npcs()
-
         if not candidate_guests:
             return
         matched_tent_ids = [matches[guest.id] for guest in candidate_guests if guest.id in matches]
@@ -2079,21 +2076,28 @@ class CampingPlazaEngine:
         elif successful_count:
             failed_count = total_count - successful_count
             failed_text = (
-                "另一组因没有合适的空帐篷，只能按原计划离开。"
+                "另一组未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
                 if failed_count == 1
-                else f"另外{failed_count}组因没有合适的空帐篷，只能按原计划离开。"
+                else f"另外{failed_count}组未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
             )
             result["events"].append(
                 f"傍晚，有{total_count}组日间客决定留下过夜，其中{successful_count}组入住了{tent_text}帐篷；{failed_text}"
             )
         else:
             result["events"].append(
-                f"傍晚，有{total_count}组日间客决定留下过夜，但没有合适的空帐篷，只能按原计划离开。"
+                f"傍晚，有{total_count}组日间客决定留下过夜，但未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
             )
 
     # -------------------------------------------------------------------------
     # 帐篷故障
     # -------------------------------------------------------------------------
+
+    def _process_day_guest_departures(self, result: dict):
+        """Turn 5 普通计划活动完成后，统一处理仍为日间客的离场。"""
+        for guest in self.npc_pool:
+            if guest.visit_type == "day" and not guest.has_left:
+                self._leave_day_guest(guest, result)
+        self._cleanup_left_npcs()
 
     def _handle_breakdowns(self, result: dict):
         """处理帐篷故障"""
