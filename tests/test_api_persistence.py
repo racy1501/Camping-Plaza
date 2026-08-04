@@ -301,6 +301,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         """升级设施后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
+        self.engine.state.successful_dining_groups = 8
         initial_level = self.engine.facilities["dining"].level
         initial_balance = self.engine.state.balance
 
@@ -313,6 +314,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
     def test_entertainment_upgrade_recovery(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
+        self.engine.state.successful_paid_entertainment_groups = 8
         initial_level = self.engine.facilities["entertainment"].level
         initial_balance = self.engine.state.balance
 
@@ -604,6 +606,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_dining_upgrade_reaches_lv2_and_then_stops_without_charge(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
+        self.engine.state.successful_dining_groups = 36
 
         first = self._action("upgrade_facility", {"facility_name": "dining"})
         second = self._action("upgrade_facility", {"facility_name": "dining"})
@@ -614,12 +617,13 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertTrue(second["success"])
         self.assertFalse(third["success"])
         self.assertEqual(self.engine.facilities["dining"].level, 2)
-        self.assertEqual(self.engine.state.balance, 99999 - 400 - 1000)
+        self.assertEqual(self.engine.state.balance, 99999 - 700 - 1800)
         self.assertEqual(self.engine.state.balance, balance_before_third)
 
     def test_entertainment_upgrade_reaches_lv2_and_then_stops_without_charge(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
+        self.engine.state.successful_paid_entertainment_groups = 32
 
         first = self._action("upgrade_facility", {"facility_name": "entertainment"})
         second = self._action("upgrade_facility", {"facility_name": "entertainment"})
@@ -630,7 +634,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertTrue(second["success"])
         self.assertFalse(third["success"])
         self.assertEqual(self.engine.facilities["entertainment"].level, 2)
-        self.assertEqual(self.engine.state.balance, 99999 - 400 - 1000)
+        self.assertEqual(self.engine.state.balance, 99999 - 600 - 1600)
         self.assertEqual(self.engine.state.balance, balance_before_third)
 
     def test_greenery_lv2_upgrade_still_fails_without_charge(self):

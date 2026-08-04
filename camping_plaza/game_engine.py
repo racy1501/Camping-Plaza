@@ -2374,56 +2374,21 @@ class CampingPlazaEngine:
         return {"success": True, "message": f"{tent_id}号帐篷升级到Lv.{tent.level}"}
 
     def upgrade_facility(self, facility_name: str) -> dict:
-        """升级设施"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一回合"}
-        # 修复：阶段保护，升级仅限日终管理阶段
-        if self.state.turn != 6:
-            return {"success": False, "message": "升级设施只能在日终管理阶段（Turn 6）进行"}
-        # 修复：引擎内部故障保护
-        if self._get_broken_tents():
-            return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
+        """兼容旧设施升级入口，转发至成长项目购买。"""
         facility = self.facilities.get(facility_name)
         if not facility:
             return {"success": False, "message": "设施不存在"}
 
-        # 餐饮/娱乐/绿化统一最高 Lv2
-        max_level = 2
-        if facility.level >= max_level:
+        if facility.level >= 2:
             return {"success": False, "message": "无法升级"}
 
-        # 修复：绿化升级使用 GREENERY_UPGRADE_COST
-        if facility_name == "greenery":
-            cost = self.GREENERY_UPGRADE_COST[facility.level + 1]
-        else:
-            cost = self.FACILITY_UPGRADE_COST[facility.level + 1]
-        if self.state.balance < cost:
-            return {"success": False, "message": f"余额不足，需要{cost}金币"}
-
-        self.state.balance -= cost
-        facility.level += 1
-
-        if facility_name == "dining":
-            facility.dining_spend_probability = min(0.9, facility.dining_spend_probability + 0.1)
-            facility.dining_income_multiplier += 0.2
-            facility.dining_satisfaction += 2
-        elif facility_name == "entertainment":
-            facility.entertainment_satisfaction += 3
-            facility.entertainment_income_multiplier += 0.2
-        elif facility_name == "greenery":
-            facility.greenery_satisfaction = round(
-                min(
-                    self.GREENERY_LEVEL_MAX.get(facility.level, 10.0),
-                    facility.greenery_satisfaction + 2.0,
-                ),
-                1,
-            )
-            self.state.greenery_processed_today = True
-            if facility.level >= 2:
-                facility.greenery_decay_rate = 0
-
-        return {"success": True, "message": f"{facility_name}升级到Lv.{facility.level}"}
+        project_id = f"{facility_name}_lv{facility.level + 1}"
+        result = self.purchase_growth_project(project_id)
+        if result["success"]:
+            result["message"] = f"{facility_name}升级到Lv.{result['target_level']}"
+        elif "message" not in result:
+            result["message"] = "当前无法升级该设施"
+        return result
 
     def improve_service(self, *, consume_decision: bool = True) -> dict:
         """提升服务"""

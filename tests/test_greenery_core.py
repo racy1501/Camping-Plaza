@@ -179,6 +179,7 @@ class GreeneryCoreTests(unittest.TestCase):
         greenery = engine.facilities["greenery"]
         engine.state.turn = 6
         engine.state.balance = 1000
+        engine.state.successful_greenery_maintenance_count = 4
         greenery.level = 0
         greenery.greenery_satisfaction = 4.0
 
