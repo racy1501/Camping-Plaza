@@ -1485,20 +1485,99 @@ class HiddenInfoTests(unittest.TestCase):
             self.assertNotIn("next_breakdown_turn", tent)
 
     def test_reservation_hides_hidden_tags(self):
-        """reservation 不暴露三个隐藏标签"""
+        """reservation 不暴露内部字段，且对外 status 使用真实内部状态"""
         engine = make_engine()
         engine.state.reservation = {
             "group_size": 2,
+            "visit_type": "day",
+            "arrival_day": engine.state.day + 1,
+            "status": "accepted",
+            "paid": True,
+            "npc_id": 5,
             "economic_level": 1,
             "spending_habit": 2,
             "temperament": 0,
+            "total_satisfaction": 70,
         }
         state = engine.get_full_state()
 
         self.assertIsNotNone(state["reservation"])
+        self.assertEqual(state["reservation"]["group_size"], 2)
+        self.assertEqual(state["reservation"]["visit_type"], "day")
+        self.assertEqual(state["reservation"]["arrival_day"], engine.state.day + 1)
+        self.assertEqual(state["reservation"]["status"], "accepted")
+
         self.assertNotIn("economic_level", state["reservation"])
         self.assertNotIn("spending_habit", state["reservation"])
         self.assertNotIn("temperament", state["reservation"])
+        self.assertNotIn("npc_id", state["reservation"])
+        self.assertNotIn("paid", state["reservation"])
+        self.assertNotIn("tent_id", state["reservation"])
+        self.assertNotIn("reserved_tent_id", state["reservation"])
+        self.assertNotIn("reserved_tent_day", state["reservation"])
+
+    def test_day_reservation_shows_accepted_without_reserved_tent(self):
+        """日间预约无 reserved_tent_id，对外仍显示 accepted 而非 pending"""
+        engine = make_engine()
+        self.assertIsNone(engine.state.reserved_tent_id)
+        engine.state.reservation = {
+            "group_size": 4,
+            "visit_type": "day",
+            "arrival_day": engine.state.day + 1,
+            "status": "accepted",
+            "paid": True,
+            "npc_id": 9,
+            "economic_level": 2,
+            "spending_habit": 1,
+            "temperament": 0,
+            "total_satisfaction": 65,
+        }
+
+        state = engine.get_full_state()
+
+        self.assertEqual(state["reservation"]["group_size"], 4)
+        self.assertEqual(state["reservation"]["visit_type"], "day")
+        self.assertEqual(state["reservation"]["arrival_day"], engine.state.day + 1)
+        self.assertEqual(state["reservation"]["status"], "accepted")
+
+    def test_overnight_reservation_shows_accepted_with_reserved_tent(self):
+        """过夜预约带 reserved_tent_id，对外显示真实 accepted"""
+        engine = make_engine()
+        tent_id = next(iter(engine.tents))
+        engine.state.reserved_tent_id = tent_id
+        engine.state.reserved_tent_day = engine.state.day + 1
+        engine.state.reservation = {
+            "group_size": 3,
+            "visit_type": "overnight",
+            "arrival_day": engine.state.day + 1,
+            "status": "accepted",
+            "paid": True,
+            "npc_id": 12,
+            "tent_id": tent_id,
+            "economic_level": 1,
+            "spending_habit": 2,
+            "temperament": 0,
+            "total_satisfaction": 60,
+        }
+
+        state = engine.get_full_state()
+
+        self.assertEqual(state["reservation"]["group_size"], 3)
+        self.assertEqual(state["reservation"]["visit_type"], "overnight")
+        self.assertEqual(state["reservation"]["arrival_day"], engine.state.day + 1)
+        self.assertEqual(state["reservation"]["status"], "accepted")
+        self.assertNotIn("tent_id", state["reservation"])
+        self.assertNotIn("reserved_tent_id", state["reservation"])
+        self.assertNotIn("reserved_tent_day", state["reservation"])
+
+    def test_empty_reservation_returns_none(self):
+        """state.reservation 为 None 时，对外 reservation 为 None"""
+        engine = make_engine()
+        engine.state.reservation = None
+
+        state = engine.get_full_state()
+
+        self.assertIsNone(state["reservation"])
 
     def test_active_npcs_hide_hidden_tags(self):
         """active_npcs 不暴露三个隐藏标签"""

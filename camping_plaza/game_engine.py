@@ -2923,11 +2923,13 @@ class CampingPlazaEngine:
                     "paid": n.paid
                 })
 
-        # 修复：对外预定只保留 group_size 和 status，不暴露隐藏标签
+        # 修复：对外预定只暴露 group_size/visit_type/arrival_day/status，不暴露隐藏标签
         if self.state.reservation is not None:
             safe_reservation = {
                 "group_size": self.state.reservation["group_size"],
-                "status": "accepted" if self.state.reserved_tent_id is not None else "pending"
+                "visit_type": self.state.reservation["visit_type"],
+                "arrival_day": self.state.reservation["arrival_day"],
+                "status": self.state.reservation["status"],
             }
         else:
             safe_reservation = None
