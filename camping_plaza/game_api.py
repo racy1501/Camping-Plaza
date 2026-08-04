@@ -128,6 +128,15 @@ def _get_hot_spring_status(eng: CampingPlazaEngine) -> dict:
     }
 
 
+def _get_day_campsite_status(eng: CampingPlazaEngine) -> dict:
+    """日间营位当天容量状态（只读），供各状态输出统一追加。"""
+    return {
+        "group_capacity_per_day": eng.DAY_CAMPSITE_CAPACITY,
+        "groups_served_today": eng.state.day_campsite_groups_served,
+        "remaining_groups_today": eng.get_day_campsite_remaining(),
+    }
+
+
 # =============================================================================
 # 游戏状态接口
 # =============================================================================
@@ -143,6 +152,7 @@ def get_state():
     eng = get_engine()
     state = eng.get_full_state()
     state["hot_spring"] = _get_hot_spring_status(eng)
+    state["day_campsite"] = _get_day_campsite_status(eng)
     return state
 
 
@@ -163,6 +173,7 @@ def get_display_state():
     eng = get_engine()
     state = eng.get_full_state()
     state["hot_spring"] = _get_hot_spring_status(eng)
+    state["day_campsite"] = _get_day_campsite_status(eng)
     return {
         "text": eng.get_state_for_display(),
         "data": state
@@ -373,6 +384,7 @@ def mcp_state():
         "reservation": state["reservation"],
         "today_income": state["today_income"],
         "hot_spring": _get_hot_spring_status(eng),
+        "day_campsite": _get_day_campsite_status(eng),
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,

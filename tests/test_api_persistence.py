@@ -814,5 +814,71 @@ class HotSpringStateOutputTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.today_income["hot_spring"], 560)
 
 
+class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
+    """三个只读状态输出应统一携带日间营位当天容量状态"""
+
+    def _add_pending_day_reservation(self, npc_id):
+        """在 today_arrival_plan 中加入一条符合现行规则的待到达日间预约。"""
+        self.engine.state.today_arrival_plan.append({
+            "npc_id": npc_id,
+            "planned_day": self.engine.state.day,
+            "source": "reservation",
+            "visit_type": "day",
+            "arrival_status": "pending",
+            "paid": True,
+        })
+
+    def test_default_state(self):
+        state = game_api.get_state()["day_campsite"]
+
+        self.assertEqual(
+            state["group_capacity_per_day"],
+            CampingPlazaEngine.DAY_CAMPSITE_CAPACITY,
+        )
+        self.assertEqual(state["groups_served_today"], 0)
+        self.assertEqual(
+            state["remaining_groups_today"],
+            CampingPlazaEngine.DAY_CAMPSITE_CAPACITY,
+        )
+
+    def test_served_and_reservation_occupancy_state(self):
+        self.engine.state.day_campsite_groups_served = 6
+        self._add_pending_day_reservation(npc_id=9001)
+
+        expected_remaining = (
+            CampingPlazaEngine.DAY_CAMPSITE_CAPACITY - 6 - 1
+        )
+        self.assertEqual(
+            self.engine.get_day_campsite_remaining(),
+            expected_remaining,
+        )
+
+        expected = {
+            "group_capacity_per_day": CampingPlazaEngine.DAY_CAMPSITE_CAPACITY,
+            "groups_served_today": 6,
+            "remaining_groups_today": expected_remaining,
+        }
+
+        self.assertEqual(game_api.get_state()["day_campsite"], expected)
+        self.assertEqual(game_api.get_display_state()["data"]["day_campsite"], expected)
+        self.assertEqual(game_api.mcp_state()["day_campsite"], expected)
+
+    def test_read_only_outputs_do_not_save_or_mutate_and_keep_hot_spring(self):
+        self.engine.state.day_campsite_groups_served = 6
+        self._add_pending_day_reservation(npc_id=9002)
+        plan_before = list(self.engine.state.today_arrival_plan)
+        hot_spring_before = game_api.get_state()["hot_spring"]
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            game_api.get_state()
+            game_api.get_display_state()
+            game_api.mcp_state()
+            save_mock.assert_not_called()
+
+        self.assertEqual(self.engine.state.day_campsite_groups_served, 6)
+        self.assertEqual(self.engine.state.today_arrival_plan, plan_before)
+        self.assertEqual(game_api.get_state()["hot_spring"], hot_spring_before)
+
+
 if __name__ == "__main__":
     unittest.main()
