@@ -117,6 +117,17 @@ def _get_turn_plan_status(eng: CampingPlazaEngine) -> tuple[bool, bool, Optional
     return planning_available, has_current_plan, plan_target_turn
 
 
+def _get_hot_spring_status(eng: CampingPlazaEngine) -> dict:
+    """温泉当前营业状态（只读），供各状态输出统一追加。"""
+    served = eng.state.hot_spring_people_served_today
+    return {
+        "built": eng.state.hot_spring_built,
+        "people_served_today": served,
+        "remaining_capacity_today": eng.HOT_SPRING_DAILY_CAPACITY - served,
+        "today_income": eng.state.today_income["hot_spring"],
+    }
+
+
 # =============================================================================
 # 游戏状态接口
 # =============================================================================
@@ -130,7 +141,9 @@ def root():
 def get_state():
     """获取完整游戏状态（给MCP用）"""
     eng = get_engine()
-    return eng.get_full_state()
+    state = eng.get_full_state()
+    state["hot_spring"] = _get_hot_spring_status(eng)
+    return state
 
 
 @app.get("/api/growth")
@@ -148,9 +161,11 @@ def get_growth():
 def get_display_state():
     """获取展示用文本状态（给围观前端用）"""
     eng = get_engine()
+    state = eng.get_full_state()
+    state["hot_spring"] = _get_hot_spring_status(eng)
     return {
         "text": eng.get_state_for_display(),
-        "data": eng.get_full_state()
+        "data": state
     }
 
 
@@ -357,6 +372,7 @@ def mcp_state():
         },
         "reservation": state["reservation"],
         "today_income": state["today_income"],
+        "hot_spring": _get_hot_spring_status(eng),
         "planning_available": planning_available,
         "plan_submitted": plan_submitted,
         "plan_target_turn": plan_target_turn,

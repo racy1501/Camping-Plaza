@@ -754,5 +754,65 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertIn("buy_food_package", submit_action["description"])
         self.assertIn("package_key", submit_action["description"])
 
+
+class HotSpringStateOutputTests(ApiPersistenceTestCase):
+    """三个只读状态输出应统一携带温泉当前营业状态"""
+
+    def test_three_outputs_share_same_hot_spring_status(self):
+        self.engine.state.hot_spring_built = True
+        self.engine.state.hot_spring_people_served_today = 7
+        self.engine.state.today_income["hot_spring"] = 560
+
+        expected = {
+            "built": True,
+            "people_served_today": 7,
+            "remaining_capacity_today": (
+                CampingPlazaEngine.HOT_SPRING_DAILY_CAPACITY - 7
+            ),
+            "today_income": 560,
+        }
+
+        self.assertEqual(game_api.get_state()["hot_spring"], expected)
+        self.assertEqual(game_api.get_display_state()["data"]["hot_spring"], expected)
+        self.assertEqual(game_api.mcp_state()["hot_spring"], expected)
+
+    def test_remaining_capacity_uses_authoritative_capacity(self):
+        self.engine.state.hot_spring_built = True
+        self.engine.state.hot_spring_people_served_today = 7
+
+        state = game_api.get_state()["hot_spring"]
+
+        self.assertEqual(
+            state["remaining_capacity_today"],
+            CampingPlazaEngine.HOT_SPRING_DAILY_CAPACITY - 7,
+        )
+
+    def test_default_unbuilt_status(self):
+        state = game_api.get_state()["hot_spring"]
+
+        self.assertFalse(state["built"])
+        self.assertEqual(state["people_served_today"], 0)
+        self.assertEqual(
+            state["remaining_capacity_today"],
+            CampingPlazaEngine.HOT_SPRING_DAILY_CAPACITY,
+        )
+        self.assertEqual(state["today_income"], 0)
+
+    def test_read_only_outputs_do_not_save_or_mutate(self):
+        self.engine.state.hot_spring_built = True
+        self.engine.state.hot_spring_people_served_today = 7
+        self.engine.state.today_income["hot_spring"] = 560
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            game_api.get_state()
+            game_api.get_display_state()
+            game_api.mcp_state()
+            save_mock.assert_not_called()
+
+        self.assertEqual(self.engine.state.hot_spring_built, True)
+        self.assertEqual(self.engine.state.hot_spring_people_served_today, 7)
+        self.assertEqual(self.engine.state.today_income["hot_spring"], 560)
+
+
 if __name__ == "__main__":
     unittest.main()
