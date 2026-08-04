@@ -1672,90 +1672,12 @@ class CampingPlazaEngine:
     # 入住与日间客
     # -------------------------------------------------------------------------
 
-    def _process_planned_arrivals(self, result: dict):
-        if self.state.today_arrival_plan_day != self.state.day:
-            self._ensure_today_arrival_plan()
-
-        for entry in self.state.today_arrival_plan:
-            if entry.get("planned_day") != self.state.day:
-                continue
-            if entry.get("arrival_status") != "pending":
-                continue
-            if entry.get("arrival_turn") != self.state.turn:
-                continue
-            if entry.get("source") == "reservation":
-                continue
-
-            if entry.get("source") == "natural_day":
-                if self.get_day_campsite_remaining() <= 0:
-                    entry["arrival_status"] = "turned_away_full"
-                    result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
-                    continue
-
-                guest = NPCGroup(
-                    id=entry["npc_id"],
-                    group_size=entry["group_size"],
-                    visit_type="day",
-                    total_satisfaction=entry["total_satisfaction"],
-                )
-                guest.economic_level = entry["economic_level"]
-                guest.spending_habit = entry["spending_habit"]
-                guest.temperament = entry["temperament"]
-                guest.location = "campsite"
-                guest.arrival_turn = self.state.turn
-                self._apply_greenery_entry_bonus_once(guest)
-                self.npc_pool.append(guest)
-                self.state.day_campsite_groups_served += 1
-                self.state.balance += self.CAMPSITE_FEE
-                self.state.today_income["campsite"] += self.CAMPSITE_FEE
-                entry["arrival_status"] = "arrived"
-                result["events"].append(
-                    f"一组{guest.group_size}人日间游客到达（营位费+{self.CAMPSITE_FEE}）"
-                )
-            elif entry.get("source") == "natural_overnight":
-                guest = NPCGroup(
-                    id=entry["npc_id"],
-                    group_size=entry["group_size"],
-                    visit_type="overnight",
-                    total_satisfaction=entry["total_satisfaction"],
-                )
-                guest.economic_level = entry["economic_level"]
-                guest.spending_habit = entry["spending_habit"]
-                guest.temperament = entry["temperament"]
-                tent_id = self._find_available_tent(guest.group_size)
-                if tent_id is not None:
-                    self._checkin_npc(guest, tent_id, result, charge=True)
-                    entry["arrival_status"] = "arrived"
-                else:
-                    entry["arrival_status"] = "turned_away_full"
-                    result["events"].append("过夜客到达时帐篷已经客满，只能遗憾离开。")
     def _process_checkin(self, result: dict):
         """处理入住"""
         if self.state.turn not in [2, 3, 4]:
             return
         self._process_planned_arrivals(result)
         return
-
-        # 分别生成两类客源
-        day_guests = self._generate_day_guests()
-        overnight_guests = self._generate_overnight_guests()
-
-        # 过夜客入住（修复 #3：普通客不能占用今日预定帐篷）
-        for guest in overnight_guests:
-            tent_id = self._find_available_tent(guest.group_size)
-            if tent_id:
-                self._checkin_npc(guest, tent_id, result, charge=True)
-
-        # 日间客入住
-        for guest in day_guests:
-            guest.location = "dining" if random.random() < 0.5 else "entertainment"
-            self.npc_pool.append(guest)
-            self.state.day_campsite_groups_served += 1
-            self.state.balance += self.CAMPSITE_FEE
-            self.state.today_income["campsite"] += self.CAMPSITE_FEE
-            result["events"].append(
-                f"一组{guest.group_size}人日间游客到达（营位费+{self.CAMPSITE_FEE}）"
-            )
 
     def _checkin_npc(self, npc: NPCGroup, tent_id: int, result: dict, charge: bool = True):
         """NPC入住帐篷"""
