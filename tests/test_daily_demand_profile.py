@@ -430,6 +430,139 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertEqual(engine.npc_pool[0].location, "campsite")
         self.assertTrue(engine.npc_pool[0].paid)
 
+    def test_pending_day_reservation_protects_one_slot_from_natural_guests(self):
+        engine = make_engine()
+        engine.state.today_arrival_plan = [
+            {"npc_id": 11, "planned_day": engine.state.day,
+             "source": "reservation", "visit_type": "day",
+             "arrival_status": "pending", "paid": True,
+             "total_satisfaction": 60, "economic_level": 1,
+             "spending_habit": 1, "temperament": 1}
+        ]
+        for npc_id in range(100, 110):
+            engine.state.today_arrival_plan.append({
+                "npc_id": npc_id, "group_size": 1, "visit_type": "day",
+                "arrival_turn": engine.state.turn, "planned_day": engine.state.day,
+                "source": "natural_day", "arrival_status": "pending",
+                "planned_actions": [], "is_reserved": False, "paid": False,
+                "total_satisfaction": 60, "economic_level": 1,
+                "spending_habit": 1, "temperament": 1,
+            })
+
+        engine._process_planned_arrivals({"events": []})
+
+        natural_entries = [
+            entry for entry in engine.state.today_arrival_plan
+            if entry.get("source") == "natural_day"
+        ]
+        self.assertEqual(
+            sum(entry["arrival_status"] == "arrived" for entry in natural_entries),
+            9,
+        )
+        self.assertEqual(engine.state.day_campsite_groups_served, 9)
+
+    def test_natural_guests_first_do_not_block_day_reservation(self):
+        engine = make_engine()
+        engine.state.today_arrival_plan = []
+        for npc_id in range(100, 110):
+            engine.state.today_arrival_plan.append({
+                "npc_id": npc_id, "group_size": 1, "visit_type": "day",
+                "arrival_turn": engine.state.turn, "planned_day": engine.state.day,
+                "source": "natural_day", "arrival_status": "pending",
+                "planned_actions": [], "is_reserved": False, "paid": False,
+                "total_satisfaction": 60, "economic_level": 1,
+                "spending_habit": 1, "temperament": 1,
+            })
+        engine.state.today_arrival_plan.append({
+            "npc_id": 11, "group_size": 2, "visit_type": "day",
+            "arrival_turn": engine.state.turn, "planned_day": engine.state.day,
+            "source": "reservation", "arrival_status": "pending",
+            "planned_actions": [], "is_reserved": True, "paid": True,
+            "total_satisfaction": 60, "economic_level": 1,
+            "spending_habit": 1, "temperament": 1,
+        })
+
+        engine._process_planned_arrivals({"events": []})
+
+        reservation_entry = engine.state.today_arrival_plan[-1]
+        self.assertEqual(reservation_entry["arrival_status"], "arrived")
+        self.assertEqual(engine.state.day_campsite_groups_served, 10)
+
+    def test_day_reservation_arrival_is_idempotent(self):
+        engine = make_engine()
+        engine.state.today_arrival_plan = [{
+            "npc_id": 12, "group_size": 2, "visit_type": "day",
+            "arrival_turn": engine.state.turn, "planned_day": engine.state.day,
+            "source": "reservation", "arrival_status": "pending",
+            "planned_actions": [], "is_reserved": True, "paid": True,
+            "total_satisfaction": 60, "economic_level": 1,
+            "spending_habit": 1, "temperament": 1,
+        }]
+        result = {"events": []}
+
+        engine._process_planned_arrivals(result)
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(engine.state.day_campsite_groups_served, 1)
+        self.assertEqual(len([npc for npc in engine.npc_pool if npc.id == 12]), 1)
+        self.assertEqual(engine.state.balance, 1000)
+        self.assertEqual(engine.state.today_income["campsite"], 0)
+
+    def test_natural_day_capacity_is_ten_without_reservation(self):
+        engine = make_engine()
+        self.assertEqual(engine._get_pending_day_reservation_count(), 0)
+        self.assertEqual(engine.get_day_campsite_remaining(), 10)
+
+    def test_restored_pending_day_reservation_keeps_slot_and_does_not_recharge(self):
+        engine = make_engine()
+        engine.state.balance = 1070
+        engine.state.today_income["campsite"] = engine.CAMPSITE_FEE
+        engine.state.today_arrival_plan = []
+        engine.state.today_arrival_plan_day = 0
+        engine.state.daily_demand_profile = {
+            "natural_day_group_demand": 0,
+            "natural_overnight_group_demand": 0,
+            "reservation_request_available": False,
+            "reservation_visit_type": None,
+            "reservation_group_size": None,
+            "reservation_processed": True,
+            "reservation_result": "accepted_day",
+        }
+        engine.state.daily_demand_profile_day = engine.state.day
+        engine.state.reservation = {
+            "npc_id": 13, "group_size": 2, "visit_type": "day",
+            "arrival_day": engine.state.day, "status": "accepted", "paid": True,
+            "total_satisfaction": 60, "economic_level": 1,
+            "spending_habit": 1, "temperament": 1,
+        }
+        engine.save_state()
+
+        restored = CampingPlazaEngine(db_path=engine.db_path)
+        restored.state.turn = 4
+        if not restored.state.today_arrival_plan:
+            restored.state.today_arrival_plan_day = 0
+            restored._ensure_today_arrival_plan()
+        restored.state.today_arrival_plan = [{
+            "npc_id": 13, "group_size": 2, "visit_type": "day",
+            "arrival_turn": restored.state.turn, "planned_day": restored.state.day,
+            "source": "reservation", "arrival_status": "pending",
+            "planned_actions": [], "is_reserved": True, "paid": True,
+            "total_satisfaction": 60, "economic_level": 1,
+            "spending_habit": 1, "temperament": 1,
+        }]
+        restored.state.balance = 1070
+        restored.state.today_income["campsite"] = restored.CAMPSITE_FEE
+        balance_before = restored.state.balance
+        campsite_income_before = restored.state.today_income["campsite"]
+        result = {"events": []}
+        restored._process_planned_arrivals(result)
+        restored._process_planned_arrivals(result)
+
+        self.assertEqual(restored.state.day_campsite_groups_served, 1)
+        self.assertEqual(restored.state.balance, balance_before)
+        self.assertEqual(restored.state.today_income["campsite"], campsite_income_before)
+        self.assertEqual(len([npc for npc in restored.npc_pool if npc.id == 13]), 1)
+
     def test_overnight_reservation_moves_to_arrival_plan_on_arrival_day(self):
         engine = make_engine()
         engine.state.day = 2

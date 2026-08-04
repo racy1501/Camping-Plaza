@@ -2406,9 +2406,35 @@ class CampingPlazaEngine:
         npc.spending_habit = random.choices([0, 1, 2], weights=[0.3, 0.5, 0.2])[0]
         npc.temperament = random.choices([0, 1, 2], weights=[0.4, 0.4, 0.2])[0]
 
+    def _get_pending_day_reservation_count(self) -> int:
+        pending_ids = {
+            entry.get("npc_id")
+            for entry in self.state.today_arrival_plan
+            if entry.get("planned_day") == self.state.day
+            and entry.get("source") == "reservation"
+            and entry.get("visit_type") == "day"
+            and entry.get("arrival_status") == "pending"
+            and entry.get("paid") is True
+        }
+        reservation = self.state.reservation
+        if (
+            reservation is not None
+            and reservation.get("visit_type") == "day"
+            and reservation.get("status") == "accepted"
+            and reservation.get("arrival_day") == self.state.day
+            and reservation.get("paid") is True
+        ):
+            pending_ids.add(reservation.get("npc_id"))
+        return len(pending_ids)
+
     def get_day_campsite_remaining(self) -> int:
         """获取当天剩余可接待的日间客组数。"""
-        return max(0, self.DAY_CAMPSITE_CAPACITY - self.state.day_campsite_groups_served)
+        return max(
+            0,
+            self.DAY_CAMPSITE_CAPACITY
+            - self.state.day_campsite_groups_served
+            - self._get_pending_day_reservation_count(),
+        )
 
     # -------------------------------------------------------------------------
     # 评价系统
@@ -2651,7 +2677,7 @@ class CampingPlazaEngine:
                 continue
 
             if entry.get("visit_type") == "day":
-                if self.get_day_campsite_remaining() <= 0:
+                if entry.get("source") != "reservation" and self.get_day_campsite_remaining() <= 0:
                     entry["arrival_status"] = "turned_away_full"
                     result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
                     continue
