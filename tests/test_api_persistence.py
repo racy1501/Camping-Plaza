@@ -1314,5 +1314,88 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.facilities["dining"].level, dining_level_before)
 
 
+class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
+    """POST /api/action 的请求语义错误应返回 400 + 稳定 error_code + 中文 message"""
+
+    def _assert_semantic_error(self, action, params, expected_code, expected_message,
+                               engine_method):
+        with mock.patch.object(self.engine, engine_method) as engine_mock:
+            with mock.patch.object(self.engine, "save_state") as save_mock:
+                with self.assertRaises(game_api.HTTPException) as ctx:
+                    self._action(action, params)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(
+            ctx.exception.detail,
+            {"error_code": expected_code, "message": expected_message},
+        )
+        engine_mock.assert_not_called()
+        save_mock.assert_not_called()
+
+    def test_repair_tent_missing_tent_id(self):
+        self.engine.state.turn = 6  # 日终阶段才走 repair_tent 缺参检查
+        self._assert_semantic_error(
+            "repair_tent", {}, "missing_tent_id", "缺少tent_id参数", "repair_tent"
+        )
+
+    def test_upgrade_facility_missing_name(self):
+        self._assert_semantic_error(
+            "upgrade_facility", {}, "missing_facility_name", "缺少facility_name参数",
+            "upgrade_facility",
+        )
+
+    def test_buy_food_package_missing_package_key(self):
+        self.engine.state.turn = 6  # 日终阶段才走 buy_food_package 缺参检查
+        self._assert_semantic_error(
+            "buy_food_package", {}, "missing_package_key", "缺少package_key参数",
+            "buy_food_package",
+        )
+
+    def test_purchase_growth_project_invalid_project_id(self):
+        for params in (None, {}, {"project_id": 12}, {"project_id": ""}, {"project_id": "  "}):
+            with self.subTest(params=params):
+                with mock.patch.object(
+                    self.engine, "purchase_growth_project"
+                ) as purchase_mock:
+                    with mock.patch.object(self.engine, "save_state") as save_mock:
+                        with self.assertRaises(game_api.HTTPException) as ctx:
+                            self._action("purchase_growth_project", params)
+                self.assertEqual(ctx.exception.status_code, 400)
+                self.assertEqual(
+                    ctx.exception.detail,
+                    {"error_code": "invalid_project_id", "message": "缺少有效的project_id参数"},
+                )
+                purchase_mock.assert_not_called()
+                save_mock.assert_not_called()
+
+    def test_unknown_action(self):
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            with self.assertRaises(game_api.HTTPException) as ctx:
+                self._action("definitely_not_an_action", {})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(
+            ctx.exception.detail,
+            {"error_code": "unknown_action", "message": "未知操作: definitely_not_an_action"},
+        )
+        save_mock.assert_not_called()
+
+    def test_semantic_errors_do_not_mutate_state(self):
+        self.engine.state.turn = 6  # 日终阶段使 repair/buy_food 走缺参检查
+        balance_before = self.engine.state.balance
+        day_before = self.engine.state.day
+        turn_before = self.engine.state.turn
+        for action, params in [
+            ("repair_tent", {}),
+            ("upgrade_facility", {}),
+            ("buy_food_package", {}),
+            ("purchase_growth_project", {"project_id": ""}),
+            ("not_an_action", {}),
+        ]:
+            with self.assertRaises(game_api.HTTPException):
+                self._action(action, params)
+        self.assertEqual(self.engine.state.balance, balance_before)
+        self.assertEqual(self.engine.state.day, day_before)
+        self.assertEqual(self.engine.state.turn, turn_before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,17 @@ def _food_package_plan_description() -> str:
     )
 
 
+def _raise_action_request_error(error_code: str, message: str):
+    """POST /api/action 的请求语义错误：400 + 机器可读 error_code + 中文 message"""
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": error_code,
+            "message": message,
+        },
+    )
+
+
 def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
     normalized = []
     for item in actions:
@@ -324,12 +335,12 @@ def do_action(req: ActionRequest):
     if req.action == "repair_tent":
         tent_id = req.params.get("tent_id") if req.params else None
         if tent_id is None:
-            raise HTTPException(400, "缺少tent_id参数")
+            _raise_action_request_error("missing_tent_id", "缺少tent_id参数")
         result = eng.repair_tent(int(tent_id))
 
     elif req.action == "upgrade_facility":
         if not req.params or "facility_name" not in req.params:
-            raise HTTPException(400, "缺少facility_name参数")
+            _raise_action_request_error("missing_facility_name", "缺少facility_name参数")
         result = eng.upgrade_facility(req.params["facility_name"])
 
     elif req.action == "manage_greenery":
@@ -358,13 +369,13 @@ def do_action(req: ActionRequest):
     elif req.action == "buy_food_package":
         package_key = req.params.get("package_key") if req.params else None
         if package_key is None:
-            raise HTTPException(400, "缺少package_key参数")
+            _raise_action_request_error("missing_package_key", "缺少package_key参数")
         result = eng.buy_food_package(str(package_key))
 
     elif req.action == "purchase_growth_project":
         project_id = req.params.get("project_id") if req.params else None
-        if not isinstance(project_id, str) or not project_id:
-            raise HTTPException(400, "缺少有效的project_id参数")
+        if not isinstance(project_id, str) or not project_id.strip():
+            _raise_action_request_error("invalid_project_id", "缺少有效的project_id参数")
         result = eng.purchase_growth_project(project_id)
         if not result.get("success"):
             return result
@@ -377,7 +388,7 @@ def do_action(req: ActionRequest):
         result = eng.advance_turn()  # 这会推进到 day+1
 
     else:
-        raise HTTPException(400, f"未知操作: {req.action}")
+        _raise_action_request_error("unknown_action", f"未知操作: {req.action}")
 
     # 写操作完成后统一保存（不按 success 过滤：失败操作也可能改变状态，
     # 如容量不足写入抱怨事件、故障阻塞补足决策点等）
