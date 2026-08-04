@@ -1130,5 +1130,147 @@ class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
         self.assertIn("day_campsite", state)
 
 
+class McpGrowthActionTests(ApiPersistenceTestCase):
+    """Turn 6 日终管理应按现有成长目录动态加入可购买成长项目动作"""
+
+    def _growth_purchase_actions(self, actions):
+        return [
+            a for a in actions
+            if a["action"] == "purchase_growth_project"
+        ]
+
+    def test_purchasable_project_appears_in_turn6(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7  # 满足 tent_2 的 fallback_operating_day
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        tent2 = next(
+            a for a in purchases
+            if a["params"]["project_id"] == "tent_2"
+        )
+        self.assertEqual(tent2["params"], {"project_id": "tent_2"})
+        self.assertIn("2号帐篷", tent2["description"])
+        self.assertIn("600金币", tent2["description"])
+
+        purchase_ids = [a["params"]["project_id"] for a in purchases]
+        self.assertEqual(len(purchase_ids), len(set(purchase_ids)))
+
+    def test_insufficient_balance_project_not_offered(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7  # 满足 tent_2 经营条件
+        self.engine.state.balance = 100  # 低于 tent_2 价格 600
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        self.assertTrue(all(
+            a["params"]["project_id"] != "tent_2"
+            for a in purchases
+        ))
+
+    def test_completed_project_not_offered(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7
+        self.engine.state.balance = 10000
+        self.engine.tents[2].is_unlocked = True  # tent_2 已完成
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        self.assertTrue(all(
+            a["params"]["project_id"] != "tent_2"
+            for a in purchases
+        ))
+
+    def test_prerequisite_unmet_project_not_offered(self):
+        # tent_3 前置 tent_2 未解锁，验证前置未满足时不出现
+        self.engine.state.turn = 6
+        self.engine.state.day = 12  # tent_3 经营 fallback 满足，但前置 tent_2 未解锁
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        self.assertTrue(all(
+            a["params"]["project_id"] != "tent_3"
+            for a in purchases
+        ))
+
+    def test_operation_requirement_unmet_project_not_offered(self):
+        # hot_spring 需要 required_growth_nodes=8，默认未满足经营条件
+        self.engine.state.turn = 6
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        self.assertTrue(all(
+            a["params"]["project_id"] != "hot_spring"
+            for a in purchases
+        ))
+
+    def test_non_turn6_does_not_offer_growth_purchase(self):
+        self.engine.state.turn = 2
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        self.assertEqual(purchases, [])
+        self.assertTrue(any(a["action"] == "submit_turn_plan" for a in actions))
+
+    def test_turn6_keeps_existing_actions(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        action_names = [a["action"] for a in actions]
+
+        self.assertIn("manage_greenery", action_names)
+        self.assertIn("new_day", action_names)
+        self.assertIn("upgrade_facility", action_names)
+        self.assertIn("purchase_growth_project", action_names)
+
+    def test_generated_action_matches_execution_entry(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7
+        self.engine.state.balance = 10000
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+        self.assertTrue(purchases)
+
+        entry = purchases[0]
+        request = game_api.ActionRequest(action=entry["action"], params=entry["params"])
+        self.assertEqual(request.action, "purchase_growth_project")
+        self.assertIn("project_id", request.params)
+
+    def test_read_only_does_not_mutate_or_save(self):
+        self.engine.state.turn = 6
+        self.engine.state.day = 7
+        self.engine.state.balance = 10000
+        balance_before = self.engine.state.balance
+        progress_before = self.engine.get_growth_progress()
+        tent2_unlocked_before = self.engine.tents[2].is_unlocked
+        dining_level_before = self.engine.facilities["dining"].level
+
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            with mock.patch.object(
+                self.engine, "purchase_growth_project"
+            ) as purchase_mock:
+                game_api.mcp_available_actions()
+                save_mock.assert_not_called()
+                purchase_mock.assert_not_called()
+
+        self.assertEqual(self.engine.state.balance, balance_before)
+        self.assertEqual(self.engine.get_growth_progress(), progress_before)
+        self.assertEqual(self.engine.tents[2].is_unlocked, tent2_unlocked_before)
+        self.assertEqual(self.engine.facilities["dining"].level, dining_level_before)
+
+
 if __name__ == "__main__":
     unittest.main()

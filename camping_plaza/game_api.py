@@ -517,6 +517,15 @@ def mcp_available_actions():
             "params": {"action": "maintain"},
             "description": "打理绿化"
         })
+        # 日终管理：按现有成长项目目录动态加入当前真正可购买的项目
+        for project in eng.get_growth_project_catalog():
+            if not project.get("can_purchase_now"):
+                continue
+            actions.append({
+                "action": "purchase_growth_project",
+                "params": {"project_id": project["project_id"]},
+                "description": f"购买{project['display_name']}（{project['price']}金币）",
+            })
         if eng.state.last_food_preorder_day != eng.state.day:
             actions.extend(_food_package_action_entries())
         actions.append({"action": "new_day", "description": "结束今天，开始新一天"})
