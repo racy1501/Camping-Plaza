@@ -907,6 +907,7 @@ class DailyDemandHelperTests(unittest.TestCase):
             engine._generate_daily_reservation()
 
         self.assertEqual(engine.state.reservation["visit_type"], "day")
+        self.assertEqual(engine.CAMPSITE_FEE, 70)
         self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
         self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
         self.assertIsNone(engine.state.reserved_tent_id)

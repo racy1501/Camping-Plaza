@@ -385,8 +385,10 @@ class DayCampsiteCapacityTests(unittest.TestCase):
 
         self.assertEqual(engine.state.day_campsite_groups_served, 1)
         self.assertEqual(engine.get_day_campsite_remaining(), 9)
+        self.assertEqual(engine.CAMPSITE_FEE, 70)
         self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
         self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
+        self.assertIn(str(engine.CAMPSITE_FEE), result["events"][0])
         self.assertEqual(len(engine.npc_pool), 1)
 
     def test_day_guest_generation_does_not_shrink_when_slots_run_low(self):
