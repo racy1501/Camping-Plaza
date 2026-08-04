@@ -1232,8 +1232,47 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
 
         self.assertIn("manage_greenery", action_names)
         self.assertIn("new_day", action_names)
-        self.assertIn("upgrade_facility", action_names)
         self.assertIn("purchase_growth_project", action_names)
+        self.assertNotIn("upgrade_facility", action_names)
+
+    def test_turn6_does_not_expose_legacy_upgrade_facility(self):
+        # 即使设施等级低于最高等级，也不能再出现旧的 upgrade_facility 动作
+        self.engine.state.turn = 6
+        self.engine.state.day = 7
+        self.engine.state.balance = 10000
+        self.engine.facilities["dining"].level = 0
+        self.engine.facilities["entertainment"].level = 0
+        self.engine.facilities["greenery"].level = 0
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+
+        self.assertTrue(all(
+            a["action"] != "upgrade_facility"
+            for a in actions
+        ))
+
+    def test_facility_growth_project_exposed_via_purchase_action(self):
+        # 构造一个真实设施成长项目（dining_lv1）满足购买条件，确认通过
+        # purchase_growth_project 暴露，且不同时出现语义重复的 upgrade_facility
+        self.engine.state.turn = 6
+        self.engine.state.balance = 10000
+        self.engine.state.successful_dining_groups = 8  # dining_lv1 经营条件
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        purchases = self._growth_purchase_actions(actions)
+
+        dining1 = next(
+            a for a in purchases
+            if a["params"]["project_id"] == "dining_lv1"
+        )
+        self.assertEqual(dining1["params"], {"project_id": "dining_lv1"})
+        self.assertIn("餐饮", dining1["description"])
+        self.assertIn("700金币", dining1["description"])
+
+        self.assertTrue(all(
+            a["action"] != "upgrade_facility"
+            for a in actions
+        ))
 
     def test_generated_action_matches_execution_entry(self):
         self.engine.state.turn = 6
@@ -1261,10 +1300,13 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         with mock.patch.object(self.engine, "save_state") as save_mock:
             with mock.patch.object(
                 self.engine, "purchase_growth_project"
-            ) as purchase_mock:
+            ) as purchase_mock, mock.patch.object(
+                self.engine, "upgrade_facility"
+            ) as upgrade_mock:
                 game_api.mcp_available_actions()
                 save_mock.assert_not_called()
                 purchase_mock.assert_not_called()
+                upgrade_mock.assert_not_called()
 
         self.assertEqual(self.engine.state.balance, balance_before)
         self.assertEqual(self.engine.get_growth_progress(), progress_before)

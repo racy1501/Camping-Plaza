@@ -501,16 +501,6 @@ def mcp_available_actions():
                 "params": {"tent_ids": cleaning_tent_ids},
                 "description": "批量清洁待清洁帐篷（不消耗决策点）"
             })
-        # 日终管理：为每个可升级设施提供带完整 params 的操作
-        for name, f in state["facilities"].items():
-            # 所有设施统一最高 Lv2
-            max_level = 2
-            if f["level"] < max_level:
-                actions.append({
-                    "action": "upgrade_facility",
-                    "params": {"facility_name": name},
-                    "description": f"升级{name}到Lv.{f['level']+1}"
-                })
 
         actions.append({
             "action": "manage_greenery",
