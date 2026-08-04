@@ -133,6 +133,17 @@ def get_state():
     return eng.get_full_state()
 
 
+@app.get("/api/growth")
+def get_growth():
+    """获取成长进度和成长项目目录。"""
+    eng = get_engine()
+    return {
+        "success": True,
+        "progress": eng.get_growth_progress(),
+        "projects": eng.get_growth_project_catalog(),
+    }
+
+
 @app.get("/api/state/display")
 def get_display_state():
     """获取展示用文本状态（给围观前端用）"""

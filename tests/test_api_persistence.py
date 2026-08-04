@@ -224,6 +224,69 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
                 save_mock.assert_not_called()
 
 
+class GrowthQueryTests(ApiPersistenceTestCase):
+    def _qualify_hot_spring(self):
+        self.engine.state.turn = 6
+        self.engine.state.total_served_groups = 150
+        self.engine.state.balance = 10000
+        for tent_id in range(2, 6):
+            self.engine.tents[tent_id].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+
+    def _hot_spring_project(self, response):
+        return next(
+            project for project in response["projects"]
+            if project["project_id"] == "hot_spring"
+        )
+
+    def test_growth_query_calls_both_engine_readers_and_returns_hot_spring(self):
+        with mock.patch.object(
+            self.engine,
+            "get_growth_progress",
+            wraps=self.engine.get_growth_progress,
+        ) as progress_mock, mock.patch.object(
+            self.engine,
+            "get_growth_project_catalog",
+            wraps=self.engine.get_growth_project_catalog,
+        ) as catalog_mock, mock.patch.object(self.engine, "save_state") as save_mock:
+            response = game_api.get_growth()
+
+        self.assertTrue(response["success"])
+        self.assertIn("progress", response)
+        self.assertIn("projects", response)
+        self.assertEqual(response["progress"]["hot_spring_built"], False)
+        self.assertEqual(self._hot_spring_project(response)["project_id"], "hot_spring")
+        progress_mock.assert_any_call()
+        self.assertGreaterEqual(progress_mock.call_count, 1)
+        catalog_mock.assert_called_once_with()
+        save_mock.assert_not_called()
+
+    def test_growth_query_preserves_unmet_and_qualified_states_without_mutation(self):
+        balance_before = self.engine.state.balance
+        built_before = self.engine.state.hot_spring_built
+        unmet_response = game_api.get_growth()
+        unmet_project = self._hot_spring_project(unmet_response)
+        self.assertFalse(unmet_project["can_purchase_now"])
+        self.assertTrue(unmet_project["unmet_conditions"])
+
+        self._qualify_hot_spring()
+        qualified_response = game_api.get_growth()
+        qualified_project = self._hot_spring_project(qualified_response)
+        self.assertTrue(qualified_project["can_purchase_now"])
+        self.assertEqual(self.engine.state.balance, 10000)
+        self.assertFalse(self.engine.state.hot_spring_built)
+        self.assertEqual(balance_before, 1000)
+        self.assertFalse(built_before)
+
+        self.engine.purchase_growth_project("hot_spring")
+        purchased_response = game_api.get_growth()
+        purchased_project = self._hot_spring_project(purchased_response)
+        self.assertTrue(purchased_project["completed"])
+        self.assertFalse(purchased_project["can_purchase_now"])
+        self.assertEqual(purchased_response["progress"]["hot_spring_built"], True)
+
+
 class DatabaseRecoveryTests(ApiPersistenceTestCase):
     """验证真实数据库恢复后的副作用一致性"""
 
