@@ -1635,5 +1635,105 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.decisions_left, decisions_before)
 
 
+class DayEndApiTests(ApiPersistenceTestCase):
+    """Turn 6 批处理 API 路由：/api/day/end 与 /api/day/start"""
+
+    def _day_end(self, actions=None):
+        """构造 DayEndRequest 并调用 game_api.submit_day_end"""
+        return game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=actions or [])
+        )
+
+    def _make_action(self, action, params=None):
+        return game_api.ActionRequest(action=action, params=params)
+
+    def _reach_turn6(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 1000
+
+    def test_empty_day_end_actions_completes(self):
+        self._reach_turn6()
+        result = self._day_end()
+        self.assertTrue(result["success"])
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertEqual(self.engine.state.day_end_completed, True)
+
+    def test_mixed_success_failure_results_preserved_and_returns_200(self):
+        self._reach_turn6()
+        self.engine.state.food_stock = 0
+        result = self._day_end([
+            self._make_action("buy_food_package", {"package_key": "small"}),
+            self._make_action("repair_tent", {"tent_id": 1}),  # 帐篷未 broken，失败
+            self._make_action("manage_greenery", {"action": "maintain"}),
+        ])
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["results"]), 3)
+        self.assertTrue(result["results"][0]["success"])   # buy_food_package
+        self.assertFalse(result["results"][1]["success"])  # repair_tent 未损坏
+        self.assertTrue(result["results"][2]["success"])   # manage_greenery
+        self.assertTrue(result["day_end_completed"])
+        # 单项业务失败仍保留在 results，整体 200
+
+    def test_non_turn6_rejected(self):
+        self.engine.state.turn = 2
+        result = self._day_end()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_not_available")
+        self.assertFalse(self.engine.state.day_end_completed)
+
+    def test_repeat_submission_rejected(self):
+        self._reach_turn6()
+        first = self._day_end()
+        self.assertTrue(first["success"])
+        second = self._day_end()
+        self.assertFalse(second["success"])
+        self.assertEqual(second["error_code"], "day_end_already_completed")
+
+    def test_start_before_completion_rejected(self):
+        self._reach_turn6()
+        result = game_api.start_next_day()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_not_completed")
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
+
+    def test_start_after_completion_advances(self):
+        self._reach_turn6()
+        self._day_end()
+        result = game_api.start_next_day()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["day"], 2)
+        self.assertEqual(result["turn"], 1)
+        self.assertEqual(self.engine.state.day, 2)
+        self.assertEqual(self.engine.state.turn, 1)
+        self.assertFalse(self.engine.state.day_end_completed)
+
+    def test_save_and_restore_preserves_day_end_pause(self):
+        """提交日终清单后保存，新引擎恢复：day_end_completed 不丢、不能重复提交、可 start_next_day"""
+        self._reach_turn6()
+        self._day_end()
+        self.assertTrue(self.engine.state.day_end_completed)
+
+        restored = self._new_engine_from_db()
+        self.assertEqual(restored.state.day, 1)
+        self.assertEqual(restored.state.turn, 6)
+        self.assertTrue(restored.state.day_end_completed)
+
+        # 恢复后重复提交被拒
+        game_api.engine = restored
+        dup = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[]))
+        self.assertFalse(dup["success"])
+        self.assertEqual(dup["error_code"], "day_end_already_completed")
+
+        # 恢复后可 start_next_day
+        start = game_api.start_next_day()
+        self.assertTrue(start["success"])
+        self.assertEqual(restored.state.day, 2)
+        self.assertEqual(restored.state.turn, 1)
+        self.assertFalse(restored.state.day_end_completed)
+
+
 if __name__ == "__main__":
     unittest.main()

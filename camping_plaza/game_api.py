@@ -54,6 +54,10 @@ class TurnPlanRequest(BaseModel):
     actions: list[ActionRequest] = Field(default_factory=list)
 
 
+class DayEndRequest(BaseModel):
+    day_end_actions: list[ActionRequest] = Field(default_factory=list)
+
+
 TURN_PLAN_IMMEDIATE_ACTIONS = {
     name for name, config in CampingPlazaEngine.TURN_PLAN_ACTIONS.items()
     if config["kind"] in {"free", "decision"}
@@ -106,6 +110,18 @@ def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
         if not isinstance(params, dict):
             raise HTTPException(400, "params必须为对象")
         normalized.append({"action": item.action, **params})
+    return normalized
+
+
+def _normalize_day_end_actions(actions: list[ActionRequest]) -> list[dict]:
+    """把 DayEndRequest.day_end_actions 转为引擎 submit_day_end_actions 期望的
+    [{"action": ..., "params": {...}}, ...] 结构，params 原样透传不新增字段。"""
+    normalized = []
+    for item in actions:
+        params = item.params or {}
+        if not isinstance(params, dict):
+            raise HTTPException(400, "params必须为对象")
+        normalized.append({"action": item.action, "params": params})
     return normalized
 
 
@@ -361,6 +377,27 @@ def submit_turn_plan(req: TurnPlanRequest):
         "free_action_count": result.get("free_actions_count", len(req.free_actions)),
         "action_count": result.get("actions_count", len(req.actions)),
     }
+
+
+@app.post("/api/day/end")
+def submit_day_end(req: DayEndRequest):
+    """日终批处理入口：一次性提交完整日终经营清单（Turn 6）。
+
+    单个动作业务失败保留在 results 中，整体正常返回 200。
+    """
+    eng = get_engine()
+    result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
+    eng.save_state()
+    return result
+
+
+@app.post("/api/day/start")
+def start_next_day():
+    """日终清单完成后开启下一天（确定性跨日推进）。"""
+    eng = get_engine()
+    result = eng.start_next_day()
+    eng.save_state()
+    return result
 
 
 @app.post("/api/action")
