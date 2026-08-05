@@ -146,8 +146,13 @@ class LongRunTestCase(unittest.TestCase):
                 guest = active_by_id.get(tent.occupied_by)
                 self.assertIsNotNone(guest,
                                      f"{tag}帐篷{tid}住客 {tent.occupied_by} 不在场")
-                self.assertEqual(guest.location, f"tent_{tid}",
-                                 f"{tag}帐篷{tid}住客位置不一致")
+                # 住客保留帐篷占用权（occupied_by），当前位置可以是本帐篷或消费点
+                # （dining/entertainment/hot_spring）；gate/campsite/leaving/其他帐篷/非法位置均不允许
+                self.assertIn(
+                    guest.location,
+                    (f"tent_{tid}", "dining", "entertainment", "hot_spring"),
+                    f"{tag}帐篷{tid}住客位置非法: {guest.location}",
+                )
 
         for npc in active:
             if npc.location.startswith("tent_"):
@@ -279,6 +284,9 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.engine.tents[1].status = "broken"
         self.engine.tents[3].status = "broken"
         self.engine.state.decisions_left = 3
+        # 预置当天到达计划为空，避免营业推进时生成新客入住刚修好的帐篷
+        self.engine.state.today_arrival_plan_day = 1
+        self.engine.state.today_arrival_plan = []
 
         # 通过 Turn Plan 提交两顶维修，推进执行（mock 随机抑制客流，确保帐篷不被入住）
         plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
@@ -306,6 +314,9 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.engine.tents[2].status = "broken"
         self.engine.tents[4].status = "cleaning"
         self.engine.state.decisions_left = 3
+        # 预置当天到达计划为空，避免营业推进时生成新客入住帐篷并消费（干扰住客位置不变量）
+        self.engine.state.today_arrival_plan_day = 1
+        self.engine.state.today_arrival_plan = []
 
         # turn_settled：只返回 advance_turn
         actions = game_api.mcp_available_actions()["available_actions"]
@@ -354,9 +365,18 @@ class DeterministicScenarioTests(LongRunTestCase):
         self._unlock_tents(3)
         eng.state.day = 2
         eng.state.turn = 1
+        reserved_npc_id = eng._next_npc_id()
         eng.state.reservation = {
-            "group_size": 1, "economic_level": 1,
-            "spending_habit": 1, "temperament": 1, "tent_id": 3
+            "npc_id": reserved_npc_id,
+            "group_size": 1,
+            "visit_type": "overnight",
+            "arrival_day": 2,
+            "paid": True,
+            "status": "accepted",
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+            "tent_id": 3,
         }
         eng.state.reserved_tent_id = 3
         eng.state.reserved_tent_day = 2
@@ -368,19 +388,22 @@ class DeterministicScenarioTests(LongRunTestCase):
         eng.tents[3].status = "occupied"
         eng.tents[3].occupied_by = guest.id
 
-        # Turn 1：强制退房（random<0.5 退）
+        # Turn 1：强制退房（random<0.5 退），帐篷进入 cleaning
         with mock.patch("game_engine.random.random", return_value=0.1):
             game_api.advance_turn()
         self.assertEqual(eng.tents[3].status, "cleaning")
         self.assertIsNone(eng.tents[3].occupied_by)
 
-        # 批量清洁：今日预定帐篷恢复 reserved
-        result = self._action("clean_tents", {"tent_ids": [3]})
-        self.assertTrue(result["success"])
-        self.assertEqual(eng.tents[3].status, "reserved")
-
-        # Turn 2：预定客入住
-        with mock.patch("game_engine.random.random", return_value=0.99):
+        # Turn 2：通过 Turn Plan 提交清洁（free action），执行后预定帐篷恢复 reserved 并入住预定客
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[
+                game_api.ActionRequest(action="clean_tents", params={"tent_ids": [3]}),
+            ],
+            actions=[],
+        ))
+        self.assertTrue(plan_result["success"])
+        with mock.patch("game_engine.random.random", return_value=0.99), \
+             mock.patch.object(eng, "_roll_arrival_turn", return_value=2):
             game_api.advance_turn()
         self.assertEqual(eng.tents[3].status, "occupied")
         reserved_npcs = [n for n in eng.npc_pool
@@ -394,8 +417,8 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.assertIsNone(eng.state.reserved_tent_day)
         self._check_invariants("reserved-flow")
 
-    def test_day_to_overnight_cache_survives_restart(self):
-        """Turn 4 转过夜缓存保存重启后，Turn 5 仍展示并清空"""
+    def test_day_to_overnight_conversion_survives_restart(self):
+        """Turn 4 日转夜结算后，转夜客状态跨重启保留；后续推进正常"""
         self._disable_breakdowns()
         eng = self.engine
         eng.state.day = 1
@@ -404,24 +427,43 @@ class DeterministicScenarioTests(LongRunTestCase):
                          visit_type="day", location="dining",
                          total_satisfaction=90)
         eng.npc_pool.append(guest)
+        eng.state.today_arrival_plan = [{
+            "npc_id": guest.id, "group_size": 1, "visit_type": "day",
+            "arrival_turn": 1, "planned_day": 1, "arrival_status": "arrived",
+            "day_to_overnight_intent": True,
+        }]
+        eng.state.today_arrival_plan_day = 1
 
+        # Turn 4：提交空计划后推进，日转夜结算
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[], actions=[],
+        ))
+        self.assertTrue(plan_result["success"])
         with mock.patch("game_engine.random.random", return_value=0.99):
             game_api.advance_turn()  # Turn 4 → 5
         self.assertEqual(eng.state.turn, 5)
-        self.assertTrue(len(eng.state.day_to_overnight_cache) > 0)
-        cache_before = list(eng.state.day_to_overnight_cache)
+        self.assertEqual(guest.visit_type, "overnight")
+        self.assertEqual(guest.location, "tent_1")
+        self.assertEqual(eng.tents[1].occupied_by, guest.id)
 
-        # 重启恢复
+        # 重启恢复：转夜客与帐篷占用保留
         self._restart()
-        self.assertEqual(self.engine.state.day_to_overnight_cache, cache_before)
+        restored_guest = next(n for n in self.engine.npc_pool if n.id == guest.id)
+        self.assertEqual(restored_guest.visit_type, "overnight")
+        self.assertEqual(restored_guest.location, "tent_1")
+        self.assertEqual(self.engine.tents[1].occupied_by, guest.id)
 
-        # Turn 5：展示并清空
+        # Turn 5：提交空计划后推进到日终管理，转夜客仍正常在册
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[], actions=[],
+        ))
+        self.assertTrue(plan_result["success"])
         with mock.patch("game_engine.random.random", return_value=0.99):
-            result = game_api.advance_turn()
-        for event in cache_before:
-            self.assertIn(event, result["events"])
-        self.assertEqual(self.engine.state.day_to_overnight_cache, [])
-        self._check_invariants("cache-restart")
+            game_api.advance_turn()  # Turn 5 → 6
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertFalse(restored_guest.has_left)
+        self.assertEqual(self.engine.tents[1].occupied_by, guest.id)
+        self._check_invariants("d2o-restart")
 
     def test_clean_then_restart_not_back_to_cleaning(self):
         """批量清洁后立刻重启，状态不得回到 cleaning"""
@@ -429,9 +471,27 @@ class DeterministicScenarioTests(LongRunTestCase):
         self._unlock_tents(2)
         self.engine.tents[1].status = "cleaning"
         self.engine.tents[2].status = "cleaning"
+        # 预置当天到达计划为空，避免营业推进时生成新客入住待清洁帐篷
+        self.engine.state.today_arrival_plan_day = 1
+        self.engine.state.today_arrival_plan = []
 
-        result = self._action("clean_tents", {"tent_ids": [1, 2]})
-        self.assertTrue(result["success"])
+        # Turn 1 → Turn 2：按正常流程推进到可提交计划的营业回合
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            game_api.advance_turn()
+        self.assertEqual(self.engine.state.turn, 2)
+
+        # 通过 Turn Plan 提交清洁（free action，不消耗决策点）
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[
+                game_api.ActionRequest(action="clean_tents", params={"tent_ids": [1, 2]}),
+            ],
+            actions=[],
+        ))
+        self.assertTrue(plan_result["success"])
+
+        # advance 执行计划中的清洁
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            game_api.advance_turn()
 
         self._restart()
         self.assertEqual(self.engine.tents[1].status, "available")
@@ -460,6 +520,46 @@ class DeterministicScenarioTests(LongRunTestCase):
 
         rows_after = self._snapshot_rows()
         self.assertEqual(rows_before, rows_after)
+
+    def test_check_invariants_accepts_consuming_occupant_locations(self):
+        """住客在消费点（dining）时仍保留帐篷占用权，不变量应通过"""
+        self._disable_breakdowns()
+        eng = self.engine
+        eng.state.today_arrival_plan_day = 1
+        eng.state.today_arrival_plan = []
+        npc = NPCGroup(id=eng._next_npc_id(), group_size=1,
+                       visit_type="overnight", location="dining",
+                       total_satisfaction=70)
+        eng.npc_pool.append(npc)
+        eng.tents[1].status = "occupied"
+        eng.tents[1].occupied_by = npc.id
+        eng.save_state()
+
+        # 消费点 location 不破坏帐篷占用不变量
+        self._check_invariants("dining-occupant")
+
+    def test_check_invariants_rejects_illegal_occupant_locations(self):
+        """住客位置为其他帐篷或 gate 时，不变量应失败"""
+        self._disable_breakdowns()
+        eng = self.engine
+        eng.state.today_arrival_plan_day = 1
+        eng.state.today_arrival_plan = []
+        npc = NPCGroup(id=eng._next_npc_id(), group_size=1,
+                       visit_type="overnight", location="tent_2",
+                       total_satisfaction=70)
+        eng.npc_pool.append(npc)
+        eng.tents[1].status = "occupied"
+        eng.tents[1].occupied_by = npc.id
+        eng.save_state()
+
+        # 其他帐篷位置非法
+        with self.assertRaises(AssertionError):
+            self._check_invariants("bad-other-tent")
+
+        # gate 位置非法
+        npc.location = "gate"
+        with self.assertRaises(AssertionError):
+            self._check_invariants("bad-gate")
 
 
 if __name__ == "__main__":
