@@ -58,6 +58,7 @@ class NPCGroup:
     is_reserved: bool = False  # 是否是预定客
     paid: bool = False  # 是否已付款
     greenery_entry_bonus_applied: bool = False
+    broken_tent_penalty: int = 0
 
     # 成长进度账本的幂等标记：同一到访客组只计入一次。
     growth_served_recorded: bool = False
@@ -144,6 +145,7 @@ class CampingPlazaEngine:
     DAY_TO_OVERNIGHT_INTENT_PROBABILITY = 0.15
     TENT_PRICES = {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500}
     CAMPSITE_FEE = 70
+    REPAIR_COST = 100
     DINING_BASE_PRICE = 30
     DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.40, 1: 0.55, 2: 0.70}
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
@@ -2193,6 +2195,13 @@ class CampingPlazaEngine:
                     and tent.next_breakdown_turn > 0):
                 tent.status = "broken"
                 # 修复：保留 occupied_by，不移动住客
+                if tent.occupied_by is not None:
+                    occupant = next(
+                        (n for n in self.npc_pool
+                         if n.id == tent.occupied_by and not n.has_left),
+                        None,
+                    )
+                    self._apply_broken_penalty(occupant)
                 result["events"].append(f"⚠️ {tent_id}号帐篷出现故障，需要维修")
                 result["next_actions"].append(f"repair_tent_{tent_id}")
 
@@ -2331,6 +2340,22 @@ class CampingPlazaEngine:
     # 经营操作
     # -------------------------------------------------------------------------
 
+    def _apply_broken_penalty(self, npc: NPCGroup) -> None:
+        """对住客应用 broken 临时扣分，同一次故障只扣一次并记录实际扣除值。"""
+        if npc is None or npc.broken_tent_penalty != 0:
+            return
+        actual = min(2, npc.total_satisfaction)
+        if actual > 0:
+            npc.total_satisfaction -= actual
+            npc.broken_tent_penalty = actual
+
+    def _restore_broken_penalty(self, npc: Optional[NPCGroup]) -> None:
+        """维修成功后恢复已记录的 broken 临时扣分并清零。"""
+        if npc is None or npc.broken_tent_penalty <= 0:
+            return
+        npc.total_satisfaction = min(100, npc.total_satisfaction + npc.broken_tent_penalty)
+        npc.broken_tent_penalty = 0
+
     def repair_tent(self, tent_id: int, *, consume_decision: bool = True) -> dict:
         """维修帐篷"""
         # 修复：先确认目标帐篷存在且确实为 broken
@@ -2340,6 +2365,11 @@ class CampingPlazaEngine:
 
         if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
+
+        if self.state.balance < self.REPAIR_COST:
+            return {"success": False, "message": "金币不足"}
+
+        self.state.balance -= self.REPAIR_COST
 
         # 修复：根据住客/预定状态恢复对应状态
         if tent.occupied_by:
@@ -2351,6 +2381,15 @@ class CampingPlazaEngine:
         self._set_next_breakdown(tent)
         if consume_decision:
             self.state.decisions_left -= 1
+
+        if tent.occupied_by:
+            occupant = next(
+                (n for n in self.npc_pool
+                 if n.id == tent.occupied_by and not n.has_left),
+                None,
+            )
+            self._restore_broken_penalty(occupant)
+
         return {"success": True, "message": f"{tent_id}号帐篷已修好"}
 
     def upgrade_facility(self, facility_name: str) -> dict:

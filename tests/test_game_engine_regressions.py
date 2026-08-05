@@ -1473,6 +1473,163 @@ class RepairStateRecoveryTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(engine.state.decisions_left, decisions_before)
 
+    def test_occupied_tent_breakdown_deducts_satisfaction(self):
+        """已入住帐篷损坏时住客满意度 -2，不被赶走"""
+        engine = make_engine()
+        engine.state.turn = 1
+        engine.state.decisions_left = 3
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1  # absolute_turn=1 触发
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=70,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+        occupant.location = "tent_1"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        self.assertEqual(tent.status, "broken")
+        self.assertEqual(tent.occupied_by, occupant.id)
+        self.assertEqual(occupant.total_satisfaction, 68)
+        self.assertEqual(occupant.broken_tent_penalty, 2)
+
+    def test_same_breakdown_does_not_penalize_twice(self):
+        """同一次故障不重复应用扣分"""
+        engine = make_engine()
+        engine.state.turn = 1
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=70,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        self.assertEqual(occupant.total_satisfaction, 68)
+        self.assertEqual(occupant.broken_tent_penalty, 2)
+
+    def test_broken_penalty_caps_at_actual_satisfaction(self):
+        """满意度仅剩 1 时只扣 1 并记录 1"""
+        engine = make_engine()
+        engine.state.turn = 1
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=1,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        self.assertEqual(occupant.total_satisfaction, 0)
+        self.assertEqual(occupant.broken_tent_penalty, 1)
+
+    def test_repair_charges_and_restores_penalty(self):
+        """维修成功扣 100 金币并恢复满意度"""
+        engine = make_engine()
+        engine.state.turn = 1
+        engine.state.decisions_left = 3
+        balance_before = engine.state.balance
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=70,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+        occupant.location = "tent_1"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+        self.assertEqual(occupant.broken_tent_penalty, 2)
+
+        result = engine.repair_tent(1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.balance, balance_before - engine.REPAIR_COST)
+        self.assertEqual(occupant.total_satisfaction, 70)
+        self.assertEqual(occupant.broken_tent_penalty, 0)
+        self.assertEqual(engine.state.decisions_left, 2)
+
+    def test_repair_insufficient_balance_changes_nothing(self):
+        """金币不足时维修失败且不改变任何状态"""
+        engine = make_engine()
+        engine.state.turn = 1
+        engine.state.decisions_left = 3
+        engine.state.balance = 50
+        balance_before = engine.state.balance
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=70,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        result = engine.repair_tent(1)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(tent.status, "broken")
+        self.assertEqual(occupant.broken_tent_penalty, 2)
+        self.assertEqual(occupant.total_satisfaction, 68)
+        self.assertEqual(engine.state.decisions_left, 3)
+
+    def test_turn_plan_repair_charges_but_spares_decision(self):
+        """Turn Plan 维修成功扣款但不额外消耗决策点（consume_decision=False）"""
+        engine = make_engine()
+        engine.state.turn = 1
+        engine.state.decisions_left = 3
+        balance_before = engine.state.balance
+        tent = engine.tents[1]
+        tent.next_breakdown_turn = 1
+        occupant = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=70,
+        )
+        engine.npc_pool.append(occupant)
+        tent.occupied_by = occupant.id
+        tent.status = "occupied"
+        occupant.location = "tent_1"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        result = engine.repair_tent(1, consume_decision=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.balance, balance_before - engine.REPAIR_COST)
+        self.assertEqual(occupant.total_satisfaction, 70)
+        self.assertEqual(occupant.broken_tent_penalty, 0)
+        self.assertEqual(engine.state.decisions_left, 3)
+
 
 class HiddenInfoTests(unittest.TestCase):
     """对外状态隐藏内部字段"""

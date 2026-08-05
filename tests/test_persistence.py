@@ -733,5 +733,28 @@ class TurnPlanPersistenceTests(PersistenceTestCase):
         self.assertEqual(engine.state.turn, 1)
 
 
+class BrokenTentPenaltyPersistenceTests(PersistenceTestCase):
+    """broken 帐篷临时扣分标记的当前版本存档往返"""
+
+    def test_broken_tent_penalty_roundtrip(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=60,
+            broken_tent_penalty=2,
+        )
+        engine.npc_pool.append(npc)
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        restored_npc = restored.npc_pool[0]
+
+        self.assertEqual(restored_npc.id, npc.id)
+        self.assertEqual(restored_npc.broken_tent_penalty, 2)
+        self.assertEqual(restored_npc.total_satisfaction, 60)
+
+
 if __name__ == "__main__":
     unittest.main()
