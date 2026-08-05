@@ -3053,5 +3053,317 @@ class McpLockingStateTests(unittest.TestCase):
         self.assertNotIn("accept_reservation", action_names)
         self.assertNotIn("reject_reservation", action_names)
 
+
+class BrokenTentCheckinTests(unittest.TestCase):
+    """Phase 2A: 允许新客入住 broken 帐篷"""
+
+    def test_checkin_broken_keeps_status_and_penalizes(self):
+        """入住 broken 帐篷保持 status="broken"，扣 2 分"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(npc)
+
+        engine._checkin_npc(npc, 1, {"events": []})
+
+        self.assertEqual(engine.tents[1].status, "broken")
+        self.assertEqual(engine.tents[1].occupied_by, npc.id)
+        # 60 + 10 入住 + 2 绿化 - 2 broken = 70
+        self.assertEqual(npc.total_satisfaction, 70)
+        self.assertEqual(npc.broken_tent_penalty, 2)
+
+    def test_checkin_normal_tent_unaffected(self):
+        """入住正常帐篷仍然 status="occupied"，不扣分"""
+        engine = make_engine()
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(npc)
+
+        engine._checkin_npc(npc, 1, {"events": []})
+
+        self.assertEqual(engine.tents[1].status, "occupied")
+        # 60 + 10 入住 + 2 绿化 = 72, no penalty
+        self.assertEqual(npc.total_satisfaction, 72)
+        self.assertEqual(npc.broken_tent_penalty, 0)
+
+    def test_find_available_or_broken_prefers_available(self):
+        """优先返回 available 帐篷，即使存在 broken"""
+        engine = make_engine()
+        engine.tents[2].is_unlocked = True
+        engine.tents[1].status = "available"
+        engine.tents[2].status = "broken"
+        engine.tents[2].occupied_by = None
+
+        tent_id = engine._find_available_or_broken_tent(2)
+
+        self.assertEqual(tent_id, 1)
+
+    def test_find_available_or_broken_falls_back_to_broken(self):
+        """没有 available 时返回无人占用的 broken"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+
+        tent_id = engine._find_available_or_broken_tent(2)
+
+        self.assertEqual(tent_id, 1)
+
+    def test_occupied_broken_tent_not_assigned(self):
+        """已有人占用的 broken 帐篷不会被分配"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = 99
+
+        tent_id = engine._find_available_or_broken_tent(2)
+
+        self.assertIsNone(tent_id)
+
+    def test_reservation_checks_into_broken_tent(self):
+        """预约客入住已被 broken 的原定帐篷"""
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "available"
+        npc_id = engine._next_npc_id()
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "arrival_status": "pending",
+                "source": "reservation",
+                "tent_id": 1,
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 0,
+                "paid": True,
+            }
+        ]
+
+        engine._process_planned_arrivals({"events": []})
+
+        self.assertEqual(engine.tents[1].status, "broken")
+        self.assertEqual(engine.tents[1].occupied_by, npc_id)
+        arrived = [
+            e for e in engine.state.today_arrival_plan
+            if e["npc_id"] == npc_id
+        ][0]
+        self.assertEqual(arrived["arrival_status"], "arrived")
+
+    def test_natural_overnight_checks_into_broken_tent(self):
+        """自然过夜客只剩 broken 帐篷时仍能入住"""
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "broken"
+        engine.tents[2].occupied_by = None
+        npc_id = engine._next_npc_id()
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "arrival_status": "pending",
+                "source": "natural_overnight",
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 0,
+                "is_reserved": False,
+                "paid": False,
+            }
+        ]
+
+        engine._process_planned_arrivals({"events": []})
+
+        arrived = [
+            e for e in engine.state.today_arrival_plan
+            if e["npc_id"] == npc_id
+        ][0]
+        self.assertEqual(arrived["arrival_status"], "arrived")
+        self.assertTrue(
+            engine.tents[1].occupied_by == npc_id
+            or engine.tents[2].occupied_by == npc_id,
+        )
+
+    def test_checkin_broken_penalty_not_applied_twice(self):
+        """入住 broken 帐篷时 penalty 标记防止重复扣分"""
+        engine = make_engine()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(npc)
+
+        # 第一次入住：扣分生效
+        engine._checkin_npc(npc, 1, {"events": []})
+        self.assertEqual(npc.broken_tent_penalty, 2)
+        satisfaction_after = npc.total_satisfaction
+
+        # 模拟不通过 _checkin_npc 再次扣分（helper 幂等）
+        engine._apply_broken_penalty(npc)
+
+        self.assertEqual(npc.total_satisfaction, satisfaction_after)
+        self.assertEqual(npc.broken_tent_penalty, 2)
+
+    def test_day_to_overnight_uses_broken_tent(self):
+        """日转夜客可用 broken 帐篷，broken 保持、扣 2 分、occupied_by 正确"""
+        engine = make_engine()
+        engine.state.turn = 4
+        npc_id = engine._next_npc_id()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        day_npc = NPCGroup(
+            id=npc_id,
+            group_size=2,
+            visit_type="day",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(day_npc)
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "day",
+                "planned_day": engine.state.day,
+                "day_to_overnight_intent": True,
+            }
+        ]
+
+        engine._process_day_to_overnight({"events": []})
+
+        self.assertEqual(engine.tents[1].status, "broken")
+        self.assertEqual(engine.tents[1].occupied_by, npc_id)
+        self.assertEqual(day_npc.broken_tent_penalty, 2)
+        self.assertEqual(day_npc.total_satisfaction, 58)  # 60 - 2
+
+    def test_day_to_overnight_prefers_available_over_broken(self):
+        """日转夜有 available 帐篷时优先 available"""
+        engine = make_engine()
+        engine.state.turn = 4
+        npc_id = engine._next_npc_id()
+        engine.tents[1].status = "available"
+        engine.tents[1].occupied_by = None
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "broken"
+        engine.tents[2].occupied_by = None
+        day_npc = NPCGroup(
+            id=npc_id,
+            group_size=2,
+            visit_type="day",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(day_npc)
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "day",
+                "planned_day": engine.state.day,
+                "day_to_overnight_intent": True,
+            }
+        ]
+
+        engine._process_day_to_overnight({"events": []})
+
+        self.assertEqual(engine.tents[1].status, "occupied")
+        self.assertEqual(engine.tents[1].occupied_by, npc_id)
+        self.assertEqual(day_npc.broken_tent_penalty, 0)
+
+    def test_reservation_broken_tent_occupied_blocks_double_checkin(self):
+        """预约绑定 broken 帐篷但已有住客时，不得双重入住"""
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = engine.state.day
+        existing_id = engine._next_npc_id()
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = existing_id
+        npc_id = engine._next_npc_id()
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "arrival_status": "pending",
+                "source": "reservation",
+                "tent_id": 1,
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 0,
+                "paid": True,
+            }
+        ]
+
+        engine._process_planned_arrivals({"events": []})
+
+        self.assertEqual(engine.tents[1].occupied_by, existing_id)
+        self.assertEqual(
+            engine.state.today_arrival_plan[0]["arrival_status"],
+            "pending",
+        )
+
+    def test_reservation_broken_tent_empty_still_checks_in(self):
+        """预约绑定 broken 且无人占用时仍正常入住"""
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.tents[1].status = "broken"
+        engine.tents[1].occupied_by = None
+        npc_id = engine._next_npc_id()
+        engine.state.today_arrival_plan = [
+            {
+                "npc_id": npc_id,
+                "group_size": 2,
+                "visit_type": "overnight",
+                "arrival_turn": 2,
+                "planned_day": engine.state.day,
+                "arrival_status": "pending",
+                "source": "reservation",
+                "tent_id": 1,
+                "total_satisfaction": 60,
+                "economic_level": 1,
+                "spending_habit": 1,
+                "temperament": 0,
+                "paid": True,
+            }
+        ]
+
+        engine._process_planned_arrivals({"events": []})
+
+        self.assertEqual(engine.tents[1].occupied_by, npc_id)
+        self.assertEqual(
+            engine.state.today_arrival_plan[0]["arrival_status"],
+            "arrived",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

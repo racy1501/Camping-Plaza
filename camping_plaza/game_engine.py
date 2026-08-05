@@ -1684,7 +1684,9 @@ class CampingPlazaEngine:
     def _checkin_npc(self, npc: NPCGroup, tent_id: int, result: dict, charge: bool = True):
         """NPC入住帐篷"""
         tent = self.tents[tent_id]
-        tent.status = "occupied"
+        was_broken = tent.status == "broken"
+        if not was_broken:
+            tent.status = "occupied"
         tent.occupied_by = npc.id
         npc.location = f"tent_{tent_id}"
         npc.arrival_turn = self.state.turn
@@ -1698,6 +1700,9 @@ class CampingPlazaEngine:
         satisfaction_gain = 10
         npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_gain)
         self._apply_greenery_entry_bonus_once(npc)
+
+        if was_broken:
+            self._apply_broken_penalty(npc)
 
         if npc not in self.npc_pool:
             self.npc_pool.append(npc)
@@ -2123,7 +2128,9 @@ class CampingPlazaEngine:
         ]
         available_tents = [
             tent for tent in self.tents.values()
-            if self._is_tent_unlocked(tent) and tent.status == "available"
+            if self._is_tent_unlocked(tent)
+            and (tent.status == "available"
+                 or (tent.status == "broken" and tent.occupied_by is None))
         ]
         matches = self._match_day_to_overnight_tents(
             candidate_guests, available_tents
@@ -2134,11 +2141,15 @@ class CampingPlazaEngine:
             if tent_id is None:
                 continue
             tent = self.tents[tent_id]
-            tent.status = "occupied"
+            was_broken = tent.status == "broken"
+            if not was_broken:
+                tent.status = "occupied"
             tent.occupied_by = guest.id
             guest.location = f"tent_{tent_id}"
             guest.visit_type = "overnight"
             guest.checkout_turn = 1
+            if was_broken:
+                self._apply_broken_penalty(guest)
             income = self.TENT_PRICES[tent_id]
             self.state.balance += income
             self.state.today_income["accommodation"] += income
@@ -2561,6 +2572,15 @@ class CampingPlazaEngine:
             return tent.id
         return None
 
+    def _find_available_or_broken_tent(self, group_size: int) -> Optional[int]:
+        """优先正常帐篷，无则选无人占用且容量合适的 broken 帐篷。"""
+        for tent in self._get_available_unlocked_tents(group_size):
+            return tent.id
+        for tent in self._get_unlocked_tents():
+            if tent.status == "broken" and tent.occupied_by is None and tent.capacity >= group_size:
+                return tent.id
+        return None
+
     def _match_day_to_overnight_tents(
         self,
         candidate_guests: list[NPCGroup],
@@ -2578,6 +2598,7 @@ class CampingPlazaEngine:
             assignments: dict[int, int],
             capacity_waste: int,
             individual_wastes: list[int],
+            used_broken_count: int,
         ) -> None:
             nonlocal best_score, best_matches
             if tent_index == len(tents):
@@ -2586,6 +2607,7 @@ class CampingPlazaEngine:
                 )
                 score = (
                     len(assignments),
+                    -used_broken_count,
                     -capacity_waste,
                     waste_distribution_score,
                 )
@@ -2603,6 +2625,7 @@ class CampingPlazaEngine:
                 assignments,
                 capacity_waste,
                 individual_wastes,
+                used_broken_count,
             )
             for guest_index, guest in enumerate(candidates):
                 if (
@@ -2616,9 +2639,10 @@ class CampingPlazaEngine:
                     {**assignments, guest.id: tent.id},
                     capacity_waste + tent.capacity - guest.group_size,
                     individual_wastes + [tent.capacity - guest.group_size],
+                    used_broken_count + (1 if tent.status == "broken" else 0),
                 )
 
-        search(0, set(), {}, 0, [])
+        search(0, set(), {}, 0, [], 0)
         if not best_matches:
             return {}
         if len(best_matches) == 1:
@@ -2709,7 +2733,9 @@ class CampingPlazaEngine:
                     self.state.reserved_tent_day = None
                     continue
 
-                if tent.status not in ["available", "reserved"]:
+                if tent.status not in ["available", "reserved", "broken"]:
+                    continue
+                if tent.status == "broken" and tent.occupied_by is not None:
                     continue
 
                 guest = NPCGroup(
@@ -2774,7 +2800,7 @@ class CampingPlazaEngine:
                 guest.economic_level = entry["economic_level"]
                 guest.spending_habit = entry["spending_habit"]
                 guest.temperament = entry["temperament"]
-                tent_id = self._find_available_tent(guest.group_size)
+                tent_id = self._find_available_or_broken_tent(guest.group_size)
                 if tent_id is not None:
                     self._checkin_npc(guest, tent_id, result, charge=True)
                     entry["arrival_status"] = "arrived"
