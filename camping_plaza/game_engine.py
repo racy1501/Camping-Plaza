@@ -2231,12 +2231,6 @@ class CampingPlazaEngine:
                 "message": "本回合已经结算，请进入下一回合",
                 "cleaned_tent_ids": []
             }
-        if self._get_broken_tents():
-            return {
-                "success": False,
-                "message": "存在故障帐篷，必须先完成维修",
-                "cleaned_tent_ids": []
-            }
 
         if tent_ids is None:
             target_ids = [
@@ -2322,9 +2316,6 @@ class CampingPlazaEngine:
         # 修复：阶段保护，绿化管理仅限日终管理阶段
         if self.state.turn != 6:
             return "绿化管理只能在日终管理阶段（Turn 6）进行"
-        # 修复：引擎内部故障保护
-        if self._get_broken_tents():
-            return "存在故障帐篷，必须先完成维修"
         if self.state.greenery_processed_today:
             return "今天已经处理过绿化了"
 
@@ -2428,9 +2419,6 @@ class CampingPlazaEngine:
         # 修复：阶段保护，提升服务仅限营业回合
         if self.state.turn > 5:
             return {"success": False, "message": "提升服务只能在营业回合（Turn 1-5）进行"}
-        # 修复：故障优先，存在故障帐篷时必须先把决策点留给维修
-        if self._get_broken_tents():
-            return {"success": False, "message": "存在故障帐篷，必须先完成维修"}
         if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
 

@@ -793,6 +793,96 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertIn("buy_food_package", submit_action["description"])
         self.assertIn("package_key", submit_action["description"])
 
+    def test_turn2_submit_plan_includes_repair_candidates_when_broken(self):
+        self.engine.state.turn = 2
+        self.engine.tents[1].status = "broken"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+
+        self.assertIn("repair_candidates", submit_action)
+        candidates = submit_action["repair_candidates"]
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["action"], "repair_tent")
+        self.assertEqual(candidates[0]["params"], {"tent_id": 1})
+        self.assertIn("100", candidates[0]["description"])
+
+    def test_turn2_no_repair_candidates_without_broken(self):
+        self.engine.state.turn = 2
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+
+        self.assertNotIn("repair_candidates", submit_action)
+
+    def test_turn2_multiple_broken_has_multiple_repair_candidates(self):
+        self.engine.state.turn = 2
+        self.engine.tents[1].status = "broken"
+        self.engine.tents[3].is_unlocked = True
+        self.engine.tents[3].status = "broken"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+
+        candidates = submit_action["repair_candidates"]
+        self.assertEqual(len(candidates), 2)
+        tent_ids = sorted(c["params"]["tent_id"] for c in candidates)
+        self.assertEqual(tent_ids, [1, 3])
+
+    def test_turn6_repair_tent_still_direct_action(self):
+        self.engine.state.turn = 6
+        self.engine.tents[1].status = "broken"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        action_names = [item["action"] for item in actions]
+
+        self.assertIn("repair_tent", action_names)
+
+    def test_turn2_repair_candidates_present_even_when_balance_zero(self):
+        """余额不足时维修候选仍出现，执行时才会失败"""
+        self.engine.state.turn = 2
+        self.engine.state.balance = 0
+        self.engine.tents[1].status = "broken"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+
+        self.assertIn("repair_candidates", submit_action)
+        self.assertEqual(
+            submit_action["repair_candidates"][0]["params"], {"tent_id": 1}
+        )
+
+    def test_turn2_repair_candidates_disappear_after_all_repaired(self):
+        """修好全部 broken 后维修候选消失"""
+        self.engine.state.turn = 2
+        self.engine.tents[1].status = "broken"
+        self.engine.tents[3].is_unlocked = True
+        self.engine.tents[3].status = "broken"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+        self.assertEqual(len(submit_action["repair_candidates"]), 2)
+
+        # 修好全部 broken
+        self.engine.tents[1].status = "available"
+        self.engine.tents[3].status = "available"
+
+        actions = game_api.mcp_available_actions()["available_actions"]
+        submit_action = next(
+            item for item in actions if item["action"] == "submit_turn_plan"
+        )
+        self.assertNotIn("repair_candidates", submit_action)
+
 
 class HotSpringStateOutputTests(ApiPersistenceTestCase):
     """三个只读状态输出应统一携带温泉当前营业状态"""

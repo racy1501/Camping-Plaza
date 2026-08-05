@@ -394,7 +394,6 @@ def do_action(req: ActionRequest):
         failure_messages = [
             "本回合已经结算，请进入下一回合",
             "绿化管理只能在日终管理阶段（Turn 6）进行",
-            "存在故障帐篷，必须先完成维修",
             "今天已经处理过绿化了"
         ]
         result = {"success": message not in failure_messages, "message": message}
@@ -523,11 +522,23 @@ def mcp_available_actions():
     if state["turn"] <= 5:
         actions = []
         if planning_available:
-            actions.append({
+            submit_entry = {
                 "action": "submit_turn_plan",
                 "params": {"free_actions": [], "actions": []},
-                "description": _food_package_plan_description()
-            })
+                "description": _food_package_plan_description(),
+            }
+            broken_candidates = [
+                {
+                    "action": "repair_tent",
+                    "params": {"tent_id": int(tid)},
+                    "description": f"维修{tid}号帐篷（{CampingPlazaEngine.REPAIR_COST}金币）",
+                }
+                for tid, t in state["tents"].items()
+                if t["unlocked"] and t["status"] == "broken"
+            ]
+            if broken_candidates:
+                submit_entry["repair_candidates"] = broken_candidates
+            actions.append(submit_entry)
         if plan_submitted:
             actions.append({
                 "action": "advance_turn",

@@ -2794,8 +2794,8 @@ class TentCleaningTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["cleaned_tent_ids"], [])
 
-    def test_clean_tents_blocked_by_broken(self):
-        """存在 broken 帐篷时不能清洁"""
+    def test_clean_tents_not_blocked_by_broken(self):
+        """存在 broken 帐篷时仍可清洁（Phase 2B 解除封锁）"""
         engine = make_engine()
         engine.tents[1].status = "cleaning"
         engine.tents[2].is_unlocked = True
@@ -2803,9 +2803,33 @@ class TentCleaningTests(unittest.TestCase):
 
         result = engine.clean_tents()
 
-        self.assertFalse(result["success"])
-        self.assertIn("故障", result["message"])
-        self.assertEqual(engine.tents[1].status, "cleaning")
+        self.assertTrue(result["success"])
+        self.assertIn(1, result["cleaned_tent_ids"])
+        self.assertEqual(engine.tents[1].status, "available")
+
+    def test_improve_service_not_blocked_by_broken(self):
+        """存在 broken 帐篷时仍可提升服务，决策点与效果不变（Phase 2B 解除封锁）"""
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.decisions_left = 3
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "broken"
+        npc = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="day",
+            total_satisfaction=60,
+        )
+        engine.npc_pool.append(npc)
+        decisions_before = engine.state.decisions_left
+        satisfaction_before = npc.total_satisfaction
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            result = engine.improve_service()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.decisions_left, decisions_before - 1)
+        self.assertEqual(npc.total_satisfaction, min(100, satisfaction_before + 5))
 
     def test_clean_tents_blocked_when_turn_settled(self):
         """turn_settled 为 True 时不能清洁"""
@@ -2889,6 +2913,22 @@ class GreeneryAndPhaseProtectionTests(unittest.TestCase):
         self.assertIn("绿化已打理，花费50金币", message)
         self.assertEqual(engine.state.balance, balance_before - 50)
         self.assertEqual(engine.facilities["greenery"].greenery_satisfaction, 10.0)
+        self.assertTrue(engine.state.greenery_processed_today)
+
+    def test_greenery_not_blocked_by_broken(self):
+        """存在 broken 帐篷时仍可管理绿化，费用不变（Phase 2B 解除封锁）"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.greenery_processed_today = False
+        engine.state.balance = 1000
+        engine.tents[2].is_unlocked = True
+        engine.tents[2].status = "broken"
+        balance_before = engine.state.balance
+
+        message = engine.manage_greenery("maintain")
+
+        self.assertIn("绿化已打理，花费50金币", message)
+        self.assertEqual(engine.state.balance, balance_before - 50)
         self.assertTrue(engine.state.greenery_processed_today)
 
 class TentLockingAndCapacityTests(unittest.TestCase):

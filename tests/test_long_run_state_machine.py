@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
 import game_api
 from game_engine import CampingPlazaEngine, NPCGroup
 
-EXPECTED_CAPACITY = {1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5}
+EXPECTED_CAPACITY = {1: 2, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 INCOME_KEYS = ("accommodation", "campsite", "dining", "entertainment")
 
 
@@ -272,40 +272,33 @@ class DeterministicScenarioTests(LongRunTestCase):
             t.next_breakdown_turn = 999999 if t.is_unlocked else 0
 
     def test_multiple_broken_same_turn_repair_and_advance(self):
-        """同一回合多顶 broken，逐顶维修后正常推进"""
+        """同一回合多顶 broken，通过 Turn Plan 提交维修后正常推进"""
         self._disable_breakdowns()
         self._unlock_tents(3)
         self.engine.state.turn = 2
         self.engine.tents[1].status = "broken"
         self.engine.tents[3].status = "broken"
-        self.engine.state.decisions_left = 0
+        self.engine.state.decisions_left = 3
 
-        # 阻塞：只返回维修操作
-        actions = game_api.mcp_available_actions()["available_actions"]
-        self.assertTrue(all(a["action"] == "repair_tent" for a in actions))
-        self.assertEqual(len(actions), 2)
-
-        # advance 被阻塞但补足决策点
-        game_api.advance_turn()
-        self.assertEqual(self.engine.state.turn, 2)
-        self.assertGreaterEqual(self.engine.state.decisions_left, 2)
-
-        self._action("repair_tent", {"tent_id": 1})
-        self.assertEqual(self.engine.tents[1].status, "available")
-        # 仍有 broken，仍只返回维修
-        actions = game_api.mcp_available_actions()["available_actions"]
-        self.assertTrue(all(a["action"] == "repair_tent" for a in actions))
-
-        self._action("repair_tent", {"tent_id": 3})
-        self.assertEqual(self.engine.tents[3].status, "available")
+        # 通过 Turn Plan 提交两顶维修，推进执行（mock 随机抑制客流，确保帐篷不被入住）
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[],
+            actions=[
+                game_api.ActionRequest(action="repair_tent", params={"tent_id": 1}),
+                game_api.ActionRequest(action="repair_tent", params={"tent_id": 3}),
+            ],
+        ))
+        self.assertTrue(plan_result["success"])
 
         with mock.patch("game_engine.random.random", return_value=0.99):
             result = game_api.advance_turn()
         self.assertEqual(result["turn"], 3)
+        self.assertEqual(self.engine.tents[1].status, "available")
+        self.assertEqual(self.engine.tents[3].status, "available")
         self._check_invariants("multi-broken")
 
     def test_priority_turn_settled_broken_cleaning(self):
-        """turn_settled + broken + cleaning 同时存在时的操作优先级"""
+        """turn_settled 只返回 advance_turn；broken 不再封锁清洁"""
         self._disable_breakdowns()
         self._unlock_tents(2, 4)
         self.engine.state.turn = 3
@@ -314,35 +307,42 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.engine.tents[4].status = "cleaning"
         self.engine.state.decisions_left = 3
 
-        # broken 最高优先：只返回 repair
-        actions = game_api.mcp_available_actions()["available_actions"]
-        self.assertEqual([a["action"] for a in actions], ["repair_tent"])
-
-        # cleaning 在 broken 存在时不可执行
-        result = self.engine.clean_tents()
-        self.assertFalse(result["success"])
-        self.assertEqual(self.engine.tents[4].status, "cleaning")
-
-        # 修好 broken 后，turn_settled 仍只返回 advance_turn
-        self._action("repair_tent", {"tent_id": 2})
+        # turn_settled：只返回 advance_turn
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual([a["action"] for a in actions], ["advance_turn"])
 
-        # turn_settled 下清洁被保护
+        # turn_settled 下清洁受保护（即使 broken 不再封锁）
         result = self.engine.clean_tents()
         self.assertFalse(result["success"])
+        self.assertEqual(self.engine.tents[4].status, "cleaning")
 
-        # 推进回合不重复结算，cleaning 保留到新回合
+        # broken 不再封锁清洁（Phase 2B），清除 turn_settled 后清洁应成功
+        self.engine.state.turn_settled = False
+        result = self.engine.clean_tents()
+        self.assertTrue(result["success"])
+        self.assertEqual(self.engine.tents[4].status, "available")
+
+        # 未提交计划时 advance 不推进、不重复结算，cleaning 状态保留
+        self.engine.tents[4].status = "cleaning"
         income_before = dict(self.engine.state.today_income)
-        with mock.patch("game_engine.random.random", return_value=0.99):
-            game_api.advance_turn()
-        self.assertEqual(self.engine.state.turn, 4)
-        self.assertFalse(self.engine.state.turn_settled)
+        result = game_api.advance_turn()
+        self.assertEqual(result["turn"], 3)
         self.assertEqual(dict(self.engine.state.today_income), income_before)
         self.assertEqual(self.engine.tents[4].status, "cleaning")
 
-        # 新回合可清洁
-        result = self._action("clean_tents", {"tent_ids": [4]})
+        # 提交空计划推进：cleaning 状态跨回合保留（mock 随机抑制客流）
+        plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
+            free_actions=[], actions=[],
+        ))
+        self.assertTrue(plan_result["success"])
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            result = game_api.advance_turn()
+        self.assertEqual(result["turn"], 4)
+        self.assertFalse(self.engine.state.turn_settled)
+        self.assertEqual(self.engine.tents[4].status, "cleaning")
+
+        # 新回合可完成清洁
+        result = self.engine.clean_tents()
         self.assertTrue(result["success"])
         self.assertEqual(self.engine.tents[4].status, "available")
         self._check_invariants("priority")
