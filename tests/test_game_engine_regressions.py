@@ -702,6 +702,12 @@ class DayToOvernightIntentPlanTests(unittest.TestCase):
             [entry["day_to_overnight_intent"] for entry in entries],
             [True, False, False],
         )
+        # 过夜客的计划包 entry 在生成时同时确定了退房 Turn（v0.8 §2.4），日间客为 None
+        self.assertEqual(
+            [entry["checkout_turn"] for entry in entries],
+            [None, None, entries[2]["checkout_turn"]],
+        )
+        self.assertIn(entries[2]["checkout_turn"], (1, 2))
 
     def test_repeated_plan_read_does_not_reroll_intent(self):
         engine = make_engine()
@@ -2070,6 +2076,145 @@ class CheckoutTurnTests(unittest.TestCase):
         engine.tents[1].occupied_by = npc.id
 
         self.assertEqual(engine.get_next_turn_checkout_tents(), [1])
+
+
+class CheckoutTurnInArrivalPlanTests(unittest.TestCase):
+    """checkout_turn 在到达计划 entry 生成时一次性确定（v0.8 §2.4）。"""
+
+    def _overnight_guest(self, engine) -> NPCGroup:
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+            total_satisfaction=50,
+        )
+        guest.economic_level = 1
+        guest.spending_habit = 1
+        guest.temperament = 1
+        return guest
+
+    def _natural_overnight_entry(self, engine, guest, arrival_turn=2):
+        entry = engine._build_arrival_plan_entry(guest, arrival_turn, "natural_overnight")
+        return entry
+
+    def test_reserved_overnight_entry_has_checkout_turn_at_creation(self):
+        engine = make_engine()
+        guest = self._overnight_guest(engine)
+        guest.is_reserved = True
+        entry = engine._build_arrival_plan_entry(
+            guest, 2, "reservation", tent_id=1
+        )
+        self.assertIn("checkout_turn", entry)
+        self.assertIn(entry["checkout_turn"], (1, 2))
+
+    def test_natural_overnight_entry_has_checkout_turn_at_creation(self):
+        engine = make_engine()
+        entry = self._natural_overnight_entry(engine, self._overnight_guest(engine))
+        self.assertIn("checkout_turn", entry)
+        self.assertIn(entry["checkout_turn"], (1, 2))
+
+    def test_day_entry_checkout_turn_is_none(self):
+        engine = make_engine()
+        day_guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="day",
+            total_satisfaction=50,
+        )
+        entry = engine._build_arrival_plan_entry(day_guest, 2, "natural_day")
+        self.assertIn("checkout_turn", entry)
+        self.assertIsNone(entry["checkout_turn"])
+
+    def test_entry_checkout_turn_rolls_once_per_entry(self):
+        engine = make_engine()
+        with mock.patch("game_engine.random.choice", side_effect=[1]) as choice_mock:
+            entry = self._natural_overnight_entry(engine, self._overnight_guest(engine))
+        self.assertEqual(entry["checkout_turn"], 1)
+        # 一次 entry 只消费一次随机数用于退房 Turn
+        self.assertEqual(choice_mock.call_count, 1)
+
+    def test_natural_overnight_checkin_uses_entry_value_even_when_random_opposes(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = 2
+        guest = self._overnight_guest(engine)
+        entry = engine._build_arrival_plan_entry(guest, 2, "natural_overnight")
+        # 强制计划值 = 1，但入住时 random 返回相反结果 0.8（若走随机兜底会得到 2）
+        entry["checkout_turn"] = 1
+        engine.state.today_arrival_plan = [entry]
+
+        with mock.patch("game_engine.random.random", return_value=0.8):
+            with mock.patch.object(
+                CampingPlazaEngine, "_ensure_checkout_turn"
+            ) as fallback_mock:
+                engine._process_planned_arrivals({"events": []})
+
+        guest = [n for n in engine.npc_pool if n.id == entry["npc_id"]][0]
+        self.assertEqual(guest.checkout_turn, 1)
+        fallback_mock.assert_not_called()
+
+    def test_reserved_overnight_checkin_uses_entry_value(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = 2
+        guest = self._overnight_guest(engine)
+        guest.is_reserved = True
+        entry = engine._build_arrival_plan_entry(
+            guest, 2, "reservation", tent_id=1
+        )
+        entry["checkout_turn"] = 2
+        engine.state.today_arrival_plan = [entry]
+        engine.tents[1].status = "available"
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            with mock.patch.object(
+                CampingPlazaEngine, "_ensure_checkout_turn"
+            ) as fallback_mock:
+                engine._process_planned_arrivals({"events": []})
+
+        guest = [n for n in engine.npc_pool if n.id == entry["npc_id"]][0]
+        self.assertEqual(guest.checkout_turn, 2)
+        fallback_mock.assert_not_called()
+
+    def test_checkin_without_entry_uses_fallback(self):
+        # 非正常链路（无到达计划 entry 的测试直接构造）保留防御兜底
+        engine = make_engine()
+        engine.state.turn = 2
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=1,
+            visit_type="overnight",
+        )
+        with mock.patch("game_engine.random.random", return_value=0.2):
+            engine._checkin_npc(guest, 1, {"events": []})
+        self.assertEqual(guest.checkout_turn, 1)
+
+    def test_entry_and_npc_checkout_turn_survive_save_restore(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = 2
+        guest = self._overnight_guest(engine)
+        entry = engine._build_arrival_plan_entry(guest, 2, "natural_overnight")
+        entry["checkout_turn"] = 2
+        engine.state.today_arrival_plan = [entry]
+
+        with mock.patch("game_engine.random.random", return_value=0.9):
+            engine._process_planned_arrivals({"events": []})
+
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=engine.db_path)
+        self.assertEqual(restored.load_state(), "loaded")
+        restored_entry = [
+            e for e in restored.state.today_arrival_plan
+            if e.get("npc_id") == entry["npc_id"]
+        ][0]
+        self.assertEqual(restored_entry["checkout_turn"], 2)
+        restored_npc = [n for n in restored.npc_pool if n.id == entry["npc_id"]][0]
+        self.assertEqual(restored_npc.checkout_turn, 2)
 
 
 class IncomeAndSpendingTagTests(unittest.TestCase):

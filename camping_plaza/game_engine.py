@@ -365,6 +365,14 @@ class CampingPlazaEngine:
                 if npc.visit_type == "day"
                 else False
             ),
+            # 过夜客（含预约过夜客与自然过夜客）的退房 Turn 在计划包生成时一次性确定。
+            # 用 random.choice 而非 random.random，避免扰动现有按 random.random 序列
+            # 断言计划生成的测试；日间客不消费随机数，固定为 None。
+            "checkout_turn": (
+                random.choice((1, 2))
+                if npc.visit_type == "overnight"
+                else None
+            ),
         }
 
     def _roll_arrival_turn(self) -> int:
@@ -1690,7 +1698,13 @@ class CampingPlazaEngine:
         tent.occupied_by = npc.id
         npc.location = f"tent_{tent_id}"
         npc.arrival_turn = self.state.turn
-        self._ensure_checkout_turn(npc)
+        # 正常计划客：直接采用到达计划 entry 中已确定的退房 Turn，不得重新随机。
+        planned_checkout_turn = self._get_planned_checkout_turn(npc.id)
+        if planned_checkout_turn is not None:
+            npc.checkout_turn = planned_checkout_turn
+        else:
+            # 仅对无到达计划 entry 的非正常链路（如测试直接构造）保留防御兜底。
+            self._ensure_checkout_turn(npc)
 
         if charge:
             income = self.TENT_PRICES[tent_id]
@@ -2659,6 +2673,16 @@ class CampingPlazaEngine:
             and not npc.has_left
             and self._find_occupied_tent_for_npc(npc.id) is not None
         ]
+
+    def _get_planned_checkout_turn(self, npc_id: int) -> Optional[int]:
+        """从当天到达计划 entry 读取已确定的退房 Turn（仅合法值 1/2）。"""
+        for entry in self.state.today_arrival_plan:
+            if entry.get("npc_id") == npc_id:
+                value = entry.get("checkout_turn")
+                if value in (1, 2):
+                    return value
+                return None
+        return None
 
     def _ensure_checkout_turn(self, npc: NPCGroup) -> Optional[int]:
         if (
