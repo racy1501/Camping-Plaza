@@ -90,7 +90,7 @@ def _food_package_plan_description() -> str:
         )
     package_text = "，".join(package_bits)
     return (
-        "提交下一营业Turn计划（free_actions支持clean_tents，"
+        "提交本轮营业计划（free_actions支持clean_tents，"
         "actions支持repair_tent、improve_service、buy_food_package，"
         "buy_food_package使用package_key，"
         f"可选包：{package_text}，actions最多3项）"
@@ -181,6 +181,158 @@ def _get_turn_plan_summary(eng: CampingPlazaEngine) -> Optional[dict]:
             s for s in (_safe_turn_plan_action(a) for a in plan.get("actions", []))
             if s is not None
         ],
+    }
+
+
+def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
+    """把引擎状态整理为适合人类网页读取的动作目录。只读，不修改状态。"""
+    state = eng.get_full_state()
+    planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
+    turn = eng.state.turn
+    balance = eng.state.balance
+    turn_settled = eng.state.turn_settled
+    day_end_completed = eng.state.day_end_completed
+
+    # Turn 1：迎客准备
+    if turn == 1:
+        return {
+            "success": True,
+            "day": state["day"],
+            "turn": turn,
+            "mode": "opening",
+            "panel_title": "迎客准备",
+            "planning_available": False,
+            "plan_submitted": False,
+            "max_decision_actions": 3,
+            "turn_plan": None,
+            "free_action_candidates": [],
+            "decision_action_candidates": [],
+            "primary_action": {
+                "action": "advance_turn",
+                "label": "开始营业",
+                "enabled": True,
+                "reason": "",
+            },
+        }
+
+    # Turn 6：日终阶段，本轮只返回阶段标识
+    if turn == 6:
+        if day_end_completed:
+            mode = "day_end_completed"
+            panel_title = "日终管理"
+        else:
+            mode = "day_end_pending"
+            panel_title = "日终管理"
+        return {
+            "success": True,
+            "day": state["day"],
+            "turn": turn,
+            "mode": mode,
+            "panel_title": panel_title,
+            "planning_available": False,
+            "plan_submitted": False,
+            "max_decision_actions": 3,
+            "turn_plan": None,
+            "free_action_candidates": [],
+            "decision_action_candidates": [],
+            "primary_action": None,
+        }
+
+    # Turn 2~5
+    if turn_settled or plan_submitted:
+        return {
+            "success": True,
+            "day": state["day"],
+            "turn": turn,
+            "mode": "ready_to_advance",
+            "panel_title": "营业经营",
+            "planning_available": False,
+            "plan_submitted": True,
+            "max_decision_actions": 3,
+            "turn_plan": _get_turn_plan_summary(eng),
+            "free_action_candidates": [],
+            "decision_action_candidates": [],
+            "primary_action": {
+                "action": "advance_turn",
+                "label": "推进经营轮次",
+                "enabled": True,
+                "reason": "",
+            },
+        }
+
+    # Turn 2~5 尚未提交计划
+    cleaning_tent_ids = [
+        int(tid) for tid, t in state["tents"].items()
+        if t["unlocked"] and t["status"] == "cleaning"
+    ]
+    has_cleaning = bool(cleaning_tent_ids)
+    free_action_candidates = [{
+        "action": "clean_tents",
+        "params": {"tent_ids": cleaning_tent_ids},
+        "label": "清洁待清洁帐篷",
+        "kind": "free",
+        "category": "cleaning",
+        "repeatable": False,
+        "enabled": has_cleaning,
+        "reason": "" if has_cleaning else "暂无待清洁帐篷",
+    }]
+
+    decision_action_candidates = []
+
+    # 维修候选：每个损坏帐篷独立一张卡
+    for tid, t in state["tents"].items():
+        if not (t["unlocked"] and t["status"] == "broken"):
+            continue
+        tent_id = int(tid)
+        can_afford = balance >= CampingPlazaEngine.REPAIR_COST
+        decision_action_candidates.append({
+            "action": "repair_tent",
+            "params": {"tent_id": tent_id},
+            "label": f"维修{tent_id}号帐篷",
+            "kind": "decision",
+            "category": "repair",
+            "repeatable": False,
+            "price": CampingPlazaEngine.REPAIR_COST,
+            "enabled": can_afford,
+            "reason": "金币不足" if not can_afford else "",
+        })
+
+    # 补充食材候选：从 FOOD_PACKAGES 动态生成
+    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
+        can_afford = balance >= package["price"]
+        decision_action_candidates.append({
+            "action": "buy_food_package",
+            "params": {"package_key": package_key},
+            "label": f"补充{package['name']}",
+            "detail": f"{package['portions']}份 · {package['price']}金币",
+            "price": package["price"],
+            "portions": package["portions"],
+            "kind": "decision",
+            "category": "food",
+            "repeatable": True,
+            "max_quantity": 3,
+            "enabled": can_afford,
+            "reason": "金币不足" if not can_afford else "",
+        })
+
+    return {
+        "success": True,
+        "day": state["day"],
+        "turn": turn,
+        "mode": "planning",
+        "panel_title": "营业经营",
+        "planning_available": True,
+        "plan_submitted": False,
+        "max_decision_actions": 3,
+        "turn_plan": None,
+        "free_action_candidates": free_action_candidates,
+        "decision_action_candidates": decision_action_candidates,
+        "primary_action": {
+            "action": "submit_turn_plan",
+            "label": "提交本轮计划",
+            "enabled": True,
+            "reason": "",
+        },
     }
 
 
@@ -289,6 +441,13 @@ def get_growth():
     }
 
 
+@app.get("/api/actions")
+def get_human_actions():
+    """人类网页专用只读动作目录。不执行操作，不修改存档。"""
+    eng = get_engine()
+    return _build_human_action_catalog(eng)
+
+
 @app.get("/api/state/display")
 def get_display_state():
     """获取展示用文本状态（给围观前端用）"""
@@ -376,7 +535,7 @@ def advance_turn():
 
 @app.post("/api/turn/plan")
 def submit_turn_plan(req: TurnPlanRequest):
-    """提交下一营业Turn行动计划"""
+    """提交本轮营业计划"""
     eng = get_engine()
     result = eng.submit_turn_plan(
         _normalize_turn_plan_actions(req.free_actions),
@@ -438,7 +597,7 @@ def do_action(req: ActionRequest):
     if req.action in TURN_PLAN_IMMEDIATE_ACTIONS and eng.state.turn <= 5:
         result = {
             "success": False,
-            "message": "请通过 /api/turn/plan 安排下一营业Turn行动。"
+            "message": "请通过 /api/turn/plan 安排本轮行动。"
         }
         eng.save_state()
         return result
@@ -611,7 +770,7 @@ def mcp_available_actions():
         if plan_submitted:
             actions.append({
                 "action": "advance_turn",
-                "description": "执行已提交的下一营业Turn计划并推进回合"
+                "description": "执行已提交的本轮计划并推进回合"
             })
     else:
         # Turn 6 日终批处理模式
