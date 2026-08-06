@@ -405,6 +405,22 @@ def do_action(req: ActionRequest):
     """执行经营操作"""
     eng = get_engine()
 
+    # Turn 6 日终阶段：禁止逐项直接调用，统一走 /api/day/end 批处理
+    _TURN6_DAY_END_ONLY = {
+        "repair_tent",
+        "clean_tents",
+        "manage_greenery",
+        "buy_food_package",
+        "purchase_growth_project",
+        "upgrade_facility",
+        "new_day",
+    }
+    if eng.state.turn == 6 and req.action in _TURN6_DAY_END_ONLY:
+        _raise_action_request_error(
+            "day_end_batch_required",
+            f"Turn 6 日终阶段请使用 /api/day/end 统一提交经营清单，不再支持逐项调用 {req.action}",
+        )
+
     if req.action in TURN_PLAN_IMMEDIATE_ACTIONS and eng.state.turn <= 5:
         result = {
             "success": False,
@@ -522,6 +538,7 @@ def mcp_state():
         "plan_target_turn": plan_target_turn,
         "turn_plan": _get_turn_plan_summary(eng),
         "next_turn_checkout_tents": eng.get_next_turn_checkout_tents(),
+        "day_end_completed": eng.state.day_end_completed,
     }
 
 
@@ -582,38 +599,64 @@ def mcp_available_actions():
                 "description": "执行已提交的下一营业Turn计划并推进回合"
             })
     else:
-        actions = []
-        for tid, t in state["tents"].items():
-            if t["unlocked"] and t["status"] == "broken":
-                actions.append({
+        # Turn 6 日终批处理模式
+        if eng.state.day_end_completed:
+            actions = [{
+                "action": "start_next_day",
+                "description": "日终清单已完成，开启下一天",
+            }]
+        else:
+            entry = {
+                "action": "submit_day_end_actions",
+                "params": {"day_end_actions": []},
+                "description": "提交日终经营清单（维修、清洁、绿化、食材、成长购买等，数量不限）",
+            }
+            # 紧凑候选信息，复用现有生成逻辑
+            broken_candidates = [
+                {
                     "action": "repair_tent",
                     "params": {"tent_id": int(tid)},
-                    "description": f"维修{tid}号帐篷"
-                })
-        if cleaning_tent_ids:
-            actions.append({
-                "action": "clean_tents",
-                "params": {"tent_ids": cleaning_tent_ids},
-                "description": "批量清洁待清洁帐篷（不消耗决策点）"
-            })
-
-        actions.append({
-            "action": "manage_greenery",
-            "params": {"action": "maintain"},
-            "description": "打理绿化"
-        })
-        # 日终管理：按现有成长项目目录动态加入当前真正可购买的项目
-        for project in eng.get_growth_project_catalog():
-            if not project.get("can_purchase_now"):
-                continue
-            actions.append({
-                "action": "purchase_growth_project",
-                "params": {"project_id": project["project_id"]},
-                "description": f"购买{project['display_name']}（{project['price']}金币）",
-            })
-        if eng.state.last_food_preorder_day != eng.state.day:
-            actions.extend(_food_package_action_entries())
-        actions.append({"action": "new_day", "description": "结束今天，开始新一天"})
+                    "description": f"维修{tid}号帐篷（{CampingPlazaEngine.REPAIR_COST}金币）",
+                }
+                for tid, t in state["tents"].items()
+                if t["unlocked"] and t["status"] == "broken"
+            ]
+            if broken_candidates:
+                entry["repair_candidates"] = broken_candidates
+            cleaning_tids = [
+                int(tid) for tid, t in state["tents"].items()
+                if t["unlocked"] and t["status"] == "cleaning"
+            ]
+            if cleaning_tids:
+                entry["clean_candidates"] = [{
+                    "action": "clean_tents",
+                    "params": {"tent_ids": cleaning_tids},
+                    "description": "批量清洁待清洁帐篷（不消耗决策点）",
+                }]
+            greenery_value = state.get("greenery", {})
+            if (
+                not eng.state.greenery_processed_today
+                and greenery_value.get("value", 0) > 0
+            ):
+                entry["greenery_candidate"] = {
+                    "action": "manage_greenery",
+                    "params": {"action": "maintain"},
+                    "description": "打理绿化",
+                }
+            growth_candidates = [
+                {
+                    "action": "purchase_growth_project",
+                    "params": {"project_id": project["project_id"]},
+                    "description": f"购买{project['display_name']}（{project['price']}金币）",
+                }
+                for project in eng.get_growth_project_catalog()
+                if project.get("can_purchase_now")
+            ]
+            if growth_candidates:
+                entry["growth_candidates"] = growth_candidates
+            if eng.state.last_food_preorder_day != eng.state.day:
+                entry["food_package_candidates"] = _food_package_action_entries()
+            actions = [entry]
 
     return {"available_actions": actions}
 
