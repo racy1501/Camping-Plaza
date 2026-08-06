@@ -1,318 +1,1079 @@
 /* ========================================
-   露营广场 - 莫兰迪色系 + 像素风
+   露营广场 · 营地总览
+   柔和像素造景 / 低饱和色板 / 桌面横向布局
    ======================================== */
 
-/* 重置 */
+:root {
+    --cream: #f7f3ed;
+    --cream-dark: #ebe4da;
+    --sage: #9eaa97;
+    --sage-dark: #86917f;
+    --sage-light: #b8c4b0;
+    --slate-blue: #8da3b5;
+    --slate-blue-dark: #6f8494;
+    --terracotta: #c98c6f;
+    --terracotta-dark: #a8735a;
+    --sand: #d8d0c6;
+    --path: #d4cec4;
+    --text: #5a5249;
+    --text-light: #8a7e72;
+    --panel: #faf8f5;
+    --locked: #b8a898;
+    --wood: #a6907a;
+    --wood-dark: #8a7663;
+    --stone: #a8a29e;
+    --earth: #c4b8a8;
+
+    --tent-1: #c9a9a0;
+    --tent-2: #9fb4c7;
+    --tent-3: #d4c5a0;
+    --npc-bg: #7a6e62;
+    --player: #c98c6f;
+
+    --radius: 18px;
+    --shadow: 0 14px 38px rgba(90, 82, 73, 0.10);
+    --line: rgba(90, 82, 73, 0.12);
+}
+
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
-/* 莫兰迪色板 */
-:root {
-    --bg-primary: #f5f0eb;
-    --bg-secondary: #e8e2db;
-    --bg-card: #faf8f5;
-    --text-primary: #5a5249;
-    --text-secondary: #8a7e72;
-    --accent-green: #a8b5a0;
-    --accent-blue: #9fb4c7;
-    --accent-warm: #d4b5a0;
-    --accent-rose: #c9a9a0;
-    --accent-yellow: #d4c5a0;
-    --border: #d8d0c6;
-    --tent-available: #a8b5a0;
-    --tent-occupied: #c9a9a0;
-    --tent-cleaning: #d4c5a0;
-    --tent-broken: #b8908a;
-    --tent-reserved: #9fb4c7;
+html {
+    min-width: 980px;
 }
 
 body {
-    font-family: 'Courier New', monospace;
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB", sans-serif;
+    background:
+        radial-gradient(circle at 10% 0%, rgba(255, 255, 255, 0.65), transparent 32%),
+        linear-gradient(135deg, #e8e3d9, #f4eee4 45%, #e1e6da);
+    color: var(--text);
     min-height: 100vh;
-    padding: 12px;
-    image-rendering: pixelated;
+    padding: 16px;
+    line-height: 1.5;
+    overflow-x: auto;
 }
 
-.container {
-    max-width: 640px;
+button {
+    font: inherit;
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+}
+
+.app-shell {
+    min-width: 920px;
+    max-width: 1200px;
     margin: 0 auto;
 }
 
-/* ========================================
-   状态栏
-   ======================================== */
-
-.status-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: var(--bg-card);
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    padding: 10px 12px;
+/* 后端连接断开提示 */
+.connection-lost {
     margin-bottom: 12px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #6b3d34;
+    border: 1px solid rgba(190, 120, 100, 0.25);
+    border-radius: var(--radius);
+    background: linear-gradient(90deg, rgba(255, 232, 220, 0.9), rgba(250, 220, 210, 0.82));
+    box-shadow: 0 6px 18px rgba(90, 82, 73, 0.06);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.connection-lost.hidden {
+    display: none;
+}
+
+.lost-icon {
+    width: 22px;
+    height: 22px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--terracotta);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+/* 顶部概览：独立状态卡 */
+.top-dashboard {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.metric-card {
+    min-height: 86px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: var(--radius);
+    background: rgba(249, 245, 236, 0.82);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+}
+
+.metric-icon {
+    width: 38px;
+    height: 38px;
+    display: inline-grid;
+    place-items: center;
+    font-size: 22px;
+    color: var(--sage-dark);
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 12px;
+}
+
+.metric-card small {
+    display: block;
+    color: var(--text-light);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+}
+
+.metric-card strong {
+    display: block;
+    margin-top: 3px;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.metric-meta {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-light);
+    font-size: 11px;
+}
+
+.day-card {
+    background: linear-gradient(135deg, rgba(255, 250, 223, 0.88), rgba(228, 239, 221, 0.82));
+}
+
+.gold-card .metric-icon {
+    color: var(--terracotta);
+}
+
+.rep-card .metric-icon {
+    color: #c98279;
+}
+
+/* 即时通知 */
+.notice-strip {
+    margin-bottom: 14px;
+    padding: 11px 14px;
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    align-items: center;
+    gap: 10px;
+    color: #415443;
+    border: 1px solid rgba(111, 135, 103, 0.18);
+    border-radius: var(--radius);
+    background: linear-gradient(90deg, rgba(231, 239, 221, 0.88), rgba(255, 249, 231, 0.78));
+    box-shadow: 0 6px 18px rgba(90, 82, 73, 0.06);
+    font-size: 12px;
+}
+
+.notice-bell {
+    font-size: 16px;
+    text-align: center;
+}
+
+.notice-list {
+    display: flex;
     flex-wrap: wrap;
     gap: 8px;
 }
 
-.status-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 13px;
+.notice-chip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.62);
+    color: #415443;
+    border: 1px solid rgba(111, 135, 103, 0.16);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
 }
 
-.status-label {
-    color: var(--text-secondary);
-}
-
-.status-value {
-    font-weight: bold;
-    font-size: 15px;
-    color: var(--text-primary);
-}
-
-/* ========================================
-   营地地图
-   ======================================== */
-
-.map-container {
-    background: var(--bg-card);
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    padding: 8px;
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: center;
-}
-
-#campMap {
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    image-rendering: pixelated;
-    max-width: 100%;
-    height: auto;
-}
-
-/* ========================================
-   收入面板
-   ======================================== */
-
-.income-panel {
-    background: var(--bg-card);
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    padding: 12px;
-    margin-bottom: 12px;
-}
-
-.income-panel h3 {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-}
-
-.income-grid {
+/* 主布局：固定横向，不响应重排 */
+.main-layout {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 14px;
+    align-items: start;
+    margin-bottom: 14px;
+}
+
+.main-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.side-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.panel-card {
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: var(--radius);
+    padding: 16px;
+    background: rgba(249, 245, 236, 0.84);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+}
+
+.panel-card h3 {
+    font-size: 14px;
+    color: var(--text-light);
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+}
+
+/* 右侧卡片 */
+.reminder-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
 }
 
-.income-item {
+.reminder-list li {
+    font-size: 12px;
+    color: var(--text);
+    padding-left: 14px;
+    position: relative;
+    line-height: 1.5;
+}
+
+.reminder-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 5px;
+    height: 5px;
+    background: var(--terracotta);
+    border-radius: 50%;
+}
+
+.overview-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.overview-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px;
+    background: var(--cream);
+    border-radius: 10px;
+}
+
+.overview-label {
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+.overview-value {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.income-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.income-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    padding: 5px 7px;
+    border-radius: 6px;
+}
+
+.income-row:nth-child(odd) {
+    background: var(--cream);
+}
+
+.income-row.total {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--sand);
+    font-weight: 700;
+}
+
+.income-label {
+    color: var(--text-light);
+}
+
+.income-value {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.income-value.income-in {
+    color: var(--sage-dark);
+}
+
+/* 常驻经营操作 */
+.operations-panel {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.operations-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.operations-heading h3 {
+    margin: 0;
+}
+
+.operations-hints {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.hint-chip {
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: rgba(111, 135, 103, 0.10);
+    color: var(--sage-dark);
+    border: 1px solid rgba(111, 135, 103, 0.14);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.action-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.btn-action {
+    background: var(--sage);
+    color: #fff;
+    border: 0;
+    border-radius: 12px;
+    padding: 11px 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    box-shadow: 0 6px 14px rgba(111, 135, 103, 0.18);
+    transition: transform 0.08s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-action:hover:not(:disabled) {
+    background: var(--sage-dark);
+    transform: translateY(-1px);
+}
+
+.btn-action:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.btn-action.primary {
+    background: var(--terracotta);
+    box-shadow: 0 6px 14px rgba(201, 140, 111, 0.20);
+}
+
+.btn-action.primary:hover:not(:disabled) {
+    background: var(--terracotta-dark);
+}
+
+.btn-action:disabled {
+    color: #f4f1eb;
+    background: #b6b5b0;
+    box-shadow: none;
+    filter: grayscale(0.25);
+    opacity: 0.85;
+}
+
+/* 经营日志 */
+.log-panel {
+    margin-bottom: 12px;
+}
+
+.log-list {
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.log-entry {
+    font-size: 12px;
+    color: var(--text);
+    padding: 7px 11px;
+    background: var(--cream);
+    border-left: 3px solid var(--sage);
+    border-radius: 0 9px 9px 0;
+    line-height: 1.5;
+}
+
+.log-entry.income {
+    border-left-color: var(--terracotta);
+}
+
+.log-entry.warning {
+    border-left-color: var(--slate-blue);
+}
+
+/* 滚动条 */
+.log-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.log-list::-webkit-scrollbar-thumb {
+    background: var(--sand);
+    border-radius: 3px;
+}
+
+/* ========================================
+   营地地图：自然环绕式造景（本轮不改内部）
+   ======================================== */
+
+.map-area {
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: rgba(249, 245, 236, 0.84);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+}
+
+.map-title {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+}
+
+.camp-map {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    min-height: 420px;
+    background: var(--cream-dark);
+    border: 2px solid var(--sand);
+    border-radius: 14px;
+    overflow: hidden;
+    image-rendering: pixelated;
+}
+
+/* 草地基底 */
+.map-ground {
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 50% 52%, rgba(247, 243, 237, 0.5) 0%, transparent 55%),
+        radial-gradient(ellipse 75% 65% at 52% 48%, var(--sage) 0%, transparent 72%),
+        radial-gradient(ellipse 55% 50% at 80% 52%, var(--sage-light) 0%, transparent 68%),
+        radial-gradient(ellipse 40% 55% at 18% 38%, var(--sage-light) 0%, transparent 62%);
+}
+
+/* 地形明暗层 */
+.terrain-patch {
+    position: absolute;
+    border-radius: 50%;
+    opacity: 0.32;
+    pointer-events: none;
+}
+
+.patch-north {
+    width: 60%;
+    height: 45%;
+    top: 0;
+    left: 26%;
+    background: var(--sage-dark);
+    filter: blur(14px);
+}
+
+.patch-east {
+    width: 36%;
+    height: 65%;
+    top: 16%;
+    right: 0;
+    background: var(--sage-light);
+    filter: blur(12px);
+}
+
+.patch-west {
+    width: 30%;
+    height: 58%;
+    top: 10%;
+    left: 0;
+    background: var(--sage-light);
+    filter: blur(12px);
+}
+
+.patch-south {
+    width: 72%;
+    height: 30%;
+    bottom: 0;
+    left: 16%;
+    background: var(--sage-dark);
+    filter: blur(14px);
+}
+
+/* 入口：左下道路缺口 */
+.entrance-road {
+    position: absolute;
+    bottom: -2px;
+    left: 4%;
+    width: 26%;
+    height: 30%;
+    background: var(--path);
+    clip-path: polygon(32% 100%, 68% 100%, 88% 0, 12% 0);
+    opacity: 0.7;
+    z-index: 1;
+}
+
+.entrance-road::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 28%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.entrance-sign {
+    position: absolute;
+    bottom: 3%;
+    left: 12%;
+    width: 7px;
+    height: 18px;
+    background: var(--wood);
+    border-radius: 2px;
+    z-index: 2;
+}
+
+.entrance-sign::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 14px;
+    height: 9px;
+    background: var(--wood);
+    border-radius: 2px;
+}
+
+/* 自然小径 */
+.nature-path {
+    position: absolute;
+    background: var(--path);
+    border-radius: 999px;
+    opacity: 0.5;
+    z-index: 1;
+}
+
+.path-1 {
+    width: 26%;
+    height: 10px;
+    top: 52%;
+    left: 18%;
+    border-radius: 60% 40% 50% 50%;
+    transform: rotate(-18deg);
+}
+
+.path-2 {
+    width: 22%;
+    height: 9px;
+    top: 58%;
+    left: 50%;
+    border-radius: 50% 60% 40% 50%;
+    transform: rotate(22deg);
+}
+
+.path-3 {
+    width: 18%;
+    height: 8px;
+    top: 74%;
+    left: 36%;
+    border-radius: 50% 50% 60% 40%;
+    transform: rotate(-30deg);
+}
+
+/* 少量造景 */
+.scenery {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.tree {
+    position: absolute;
+    width: 8px;
+    height: 12px;
+    background: var(--wood-dark);
+    border-radius: 2px;
+}
+
+.tree::before {
+    content: "";
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 18px;
+    height: 18px;
+    background: var(--sage-dark);
+    border-radius: 50% 50% 45% 45%;
+}
+
+.tree::after {
+    content: "";
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 13px;
+    height: 12px;
+    background: var(--sage);
+    border-radius: 50% 50% 45% 45%;
+}
+
+.tree-1 { left: 4%; top: 10%; transform: scale(1.1); }
+.tree-2 { left: 10%; top: 4%; transform: scale(0.95); }
+.tree-3 { left: 1%; top: 34%; transform: scale(1); }
+.tree-4 { left: 6%; top: 62%; transform: scale(1.15); }
+.tree-5 { right: 4%; top: 8%; transform: scale(1.05); }
+.tree-6 { right: 2%; top: 30%; transform: scale(0.9); }
+.tree-7 { right: 5%; top: 72%; transform: scale(1.1); }
+.tree-8 { left: 48%; top: 2%; transform: scale(0.95); }
+
+.bush {
+    position: absolute;
+    width: 12px;
+    height: 9px;
+    background: var(--sage-dark);
+    border-radius: 50%;
+}
+
+.bush::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: 2px;
+    width: 10px;
+    height: 8px;
+    background: var(--sage);
+    border-radius: 50%;
+}
+
+.bush::after {
+    content: "";
+    position: absolute;
+    right: -5px;
+    top: 2px;
+    width: 10px;
+    height: 8px;
+    background: var(--sage);
+    border-radius: 50%;
+}
+
+.bush-1 { left: 24%; top: 8%; }
+.bush-2 { right: 26%; top: 6%; }
+.bush-3 { right: 8%; top: 50%; }
+.bush-4 { left: 4%; top: 78%; }
+
+.rock {
+    position: absolute;
+    width: 9px;
+    height: 7px;
+    background: var(--stone);
+    border-radius: 40% 60% 50% 50%;
+    opacity: 0.8;
+}
+
+.rock-1 { left: 34%; top: 42%; transform: scale(1.1); }
+.rock-2 { left: 60%; top: 50%; transform: scale(0.9); }
+.rock-3 { right: 18%; top: 36%; transform: scale(1); }
+
+/* 日间营位：10 个独立露营空地 */
+.campsite-slots {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.campsite-slot {
+    position: absolute;
+    width: 22px;
+    height: 16px;
+    background: var(--earth);
+    border: 2px solid rgba(90, 82, 73, 0.22);
+    border-radius: 6px;
+    transform: translate(-50%, -50%);
+    box-shadow: inset 0 0 0 2px rgba(247, 243, 237, 0.25);
+}
+
+.campsite-slot::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 3px;
+    width: 3px;
+    height: 6px;
+    background: var(--wood);
+    border-radius: 1px;
+}
+
+.campsite-slot::after {
+    content: "";
+    position: absolute;
+    top: -5px;
+    right: 3px;
+    width: 3px;
+    height: 6px;
+    background: var(--wood);
+    border-radius: 1px;
+}
+
+.campsite-slot[data-slot="1"] { left: 66%; top: 40%; transform: translate(-50%, -50%) rotate(-8deg); }
+.campsite-slot[data-slot="2"] { left: 76%; top: 34%; transform: translate(-50%, -50%) rotate(5deg); }
+.campsite-slot[data-slot="3"] { left: 88%; top: 38%; transform: translate(-50%, -50%) rotate(-3deg); }
+.campsite-slot[data-slot="4"] { left: 70%; top: 50%; transform: translate(-50%, -50%) rotate(6deg); }
+.campsite-slot[data-slot="5"] { left: 82%; top: 48%; transform: translate(-50%, -50%) rotate(-5deg); }
+.campsite-slot[data-slot="6"] { left: 92%; top: 52%; transform: translate(-50%, -50%) rotate(4deg); }
+.campsite-slot[data-slot="7"] { left: 68%; top: 62%; transform: translate(-50%, -50%) rotate(-4deg); }
+.campsite-slot[data-slot="8"] { left: 80%; top: 64%; transform: translate(-50%, -50%) rotate(7deg); }
+.campsite-slot[data-slot="9"] { left: 90%; top: 68%; transform: translate(-50%, -50%) rotate(-6deg); }
+.campsite-slot[data-slot="10"] { left: 74%; top: 72%; transform: translate(-50%, -50%) rotate(3deg); }
+
+/* 地图锚点 */
+.anchor {
+    position: absolute;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 8px;
-    background: var(--bg-secondary);
+    transform: translate(-50%, -50%);
+    cursor: default;
+    z-index: 5;
+}
+
+.anchor-label {
+    font-size: 9px;
+    color: var(--text);
+    background: rgba(247, 243, 237, 0.88);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    border: 1px solid var(--sand);
+    box-shadow: 1px 1px 0 rgba(90, 82, 73, 0.08);
+    opacity: 0.85;
+}
+
+/* 入口与营位锚点（透明占位，供瞬移使用） */
+.anchor-entrance { left: 14%; top: 92%; }
+.entrance-shape,
+.campsite-shape {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: transparent;
+    border: 2px solid rgba(90, 82, 73, 0.18);
+}
+
+.anchor-campsite { left: 95%; top: 45%; }
+
+/* 帐篷区：6 个固定锚点，视觉体自然错落 */
+.anchor-tent1 { left: 46%; top: 18%; }
+.anchor-tent2 { left: 54%; top: 18%; }
+.anchor-tent3 { left: 62%; top: 18%; }
+.anchor-tent4 { left: 46%; top: 34%; }
+.anchor-tent5 { left: 54%; top: 34%; }
+.anchor-tent6 { left: 62%; top: 34%; }
+
+.tent-shape {
+    display: block;
+    width: 34px;
+    height: 28px;
+    position: relative;
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    border-radius: 2px 2px 0 0;
+    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.12);
+}
+
+.tent-shape::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%);
+}
+
+.tent-shape::after {
+    content: "";
+    position: absolute;
+    bottom: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 38px;
+    height: 6px;
+    background: rgba(90, 82, 73, 0.12);
+    border-radius: 50%;
+}
+
+.tent-color-1 { background: var(--tent-1); }
+.tent-color-2 { background: var(--tent-2); }
+.tent-color-3 { background: var(--tent-3); }
+
+/* 帐篷视觉偏移：形成从左到右的弧形自然分布 */
+.anchor-tent1 .tent-shape { transform: translate(-28px, 16px); }
+.anchor-tent1 .anchor-label { transform: translate(-28px, 16px); }
+
+.anchor-tent2 .tent-shape { transform: translate(-24px, -22px); }
+.anchor-tent2 .anchor-label { transform: translate(-24px, -22px); }
+
+.anchor-tent3 .tent-shape { transform: translate(-4px, -24px); }
+.anchor-tent3 .anchor-label { transform: translate(-4px, -24px); }
+
+.anchor-tent4 .tent-shape { transform: translate(26px, -20px); }
+.anchor-tent4 .anchor-label { transform: translate(26px, -20px); }
+
+.anchor-tent5 .tent-shape { transform: translate(32px, -8px); }
+.anchor-tent5 .anchor-label { transform: translate(32px, -8px); }
+
+.anchor-tent6 .tent-shape { transform: translate(22px, 24px); }
+.anchor-tent6 .anchor-label { transform: translate(22px, 24px); }
+
+/* 篝火：视觉中心，无动画 */
+.anchor-bonfire { left: 50%; top: 48%; z-index: 6; }
+
+.bonfire-shape {
+    display: block;
+    width: 34px;
+    height: 26px;
+    position: relative;
+}
+
+.bonfire-shape::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 38px;
+    height: 11px;
+    background: var(--wood-dark);
     border-radius: 4px;
 }
 
-.income-icon {
-    font-size: 20px;
+.bonfire-shape::after {
+    content: "";
+    position: absolute;
+    bottom: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 22px;
+    background: var(--terracotta);
+    clip-path: polygon(50% 0, 70% 40%, 100% 60%, 50% 100%, 0 60%, 30% 40%);
 }
 
-.income-label {
+.anchor-bonfire .anchor-label {
+    color: var(--terracotta-dark);
+}
+
+/* 温泉：锁定建设区 */
+.anchor-onsen-locked { left: 14%; top: 30%; }
+
+.onsen-shape {
+    display: block;
+    width: 54px;
+    height: 42px;
+    border: 2px dashed var(--locked);
+    border-radius: 30% 30% 40% 40%;
+    background: rgba(141, 163, 181, 0.1);
+    position: relative;
+}
+
+.onsen-shape::before {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border: 2px dashed rgba(184, 168, 152, 0.5);
+    border-radius: 40%;
+}
+
+.onsen-shape::after {
+    content: "";
+    position: absolute;
+    top: -7px;
+    right: 5px;
+    width: 7px;
+    height: 10px;
+    background: var(--stone);
+    border-radius: 50%;
+}
+
+.anchor-onsen-locked .anchor-label {
+    color: var(--locked);
+}
+
+/* 功能建筑 */
+.anchor-entertainment { left: 28%; top: 82%; }
+.anchor-dining { left: 72%; top: 82%; }
+
+.cabin-shape {
+    display: block;
+    width: 42px;
+    height: 32px;
+    position: relative;
+    border-radius: 3px;
+    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.12);
+}
+
+.cabin-shape::before {
+    content: "";
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 50px;
+    height: 16px;
+    background: var(--wood-dark);
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    border-radius: 2px;
+}
+
+.cabin-shape::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 11px;
+    height: 14px;
+    background: rgba(247, 243, 237, 0.65);
+    border-radius: 2px;
+}
+
+.cabin-entertainment { background: var(--tent-2); }
+.cabin-dining { background: var(--tent-1); }
+
+/* 建筑微微错落，不贴同一水平线 */
+.anchor-entertainment .cabin-shape { transform: translateY(4px); }
+.anchor-entertainment .anchor-label { transform: translateY(4px); }
+.anchor-dining .cabin-shape { transform: translateY(-6px); }
+.anchor-dining .anchor-label { transform: translateY(-6px); }
+
+/* 玩家标记 */
+.player-marker {
+    position: absolute;
+    left: 14%;
+    top: 92%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    z-index: 10;
+    transition: left 0.05s step-end, top 0.05s step-end, bottom 0.05s step-end, right 0.05s step-end;
+    pointer-events: none;
+}
+
+.player-avatar {
+    width: 16px;
+    height: 20px;
+    background: var(--player);
+    border: 2px solid var(--terracotta-dark);
+    border-radius: 7px 7px 3px 3px;
+    position: relative;
+    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.2);
+}
+
+.player-avatar::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 12px;
+    height: 9px;
+    background: var(--terracotta-dark);
+    border-radius: 50% 50% 40% 40%;
+}
+
+.player-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text);
+    background: rgba(247, 243, 237, 0.95);
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid var(--sand);
+}
+
+/* NPC 客组标记层 */
+.npc-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9;
+}
+
+.npc-marker {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    transition: left 0.05s step-end, top 0.05s step-end, bottom 0.05s step-end, right 0.05s step-end;
+}
+
+.npc-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 5px;
+    background: var(--npc-bg);
+    border: 2px solid rgba(90, 82, 73, 0.4);
+    border-radius: 8px;
+    color: var(--cream);
     font-size: 11px;
-    color: var(--text-secondary);
-}
-
-.income-value {
-    font-size: 16px;
-    font-weight: bold;
-    color: var(--text-primary);
-}
-
-/* ========================================
-   帐篷状态面板
-   ======================================== */
-
-.tents-panel {
-    background: var(--bg-card);
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    padding: 12px;
-    margin-bottom: 12px;
-}
-
-.tents-panel h3 {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-}
-
-.tents-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-}
-
-.tent-card {
-    background: var(--bg-secondary);
-    border-radius: 4px;
-    padding: 10px 8px;
-    text-align: center;
-    border-left: 4px solid var(--tent-available);
-    transition: border-color 0.3s;
-}
-
-.tent-card.occupied {
-    border-left-color: var(--tent-occupied);
-}
-
-.tent-card.cleaning {
-    border-left-color: var(--tent-cleaning);
-}
-
-.tent-card.broken {
-    border-left-color: var(--tent-broken);
-    opacity: 0.7;
-}
-
-.tent-card.reserved {
-    border-left-color: var(--tent-reserved);
-}
-
-.tent-id {
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
-}
-
-.tent-status-icon {
-    font-size: 18px;
-    margin-bottom: 2px;
-}
-
-.tent-info {
-    font-size: 11px;
-    color: var(--text-secondary);
-}
-
-/* ========================================
-   回合日志
-   ======================================== */
-
-.log-panel {
-    background: var(--bg-card);
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    padding: 12px;
-    margin-bottom: 12px;
-}
-
-.log-panel h3 {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-}
-
-.log-list {
-    max-height: 200px;
-    overflow-y: auto;
-    font-size: 13px;
-    line-height: 1.6;
-}
-
-.log-empty {
-    color: var(--text-secondary);
-    font-style: italic;
-    text-align: center;
-    padding: 20px;
-}
-
-.log-entry {
-    padding: 4px 8px;
-    border-left: 3px solid var(--accent-green);
-    margin-bottom: 6px;
-    background: var(--bg-secondary);
-    border-radius: 0 2px 2px 0;
-}
-
-.log-entry.warning {
-    border-left-color: var(--tent-broken);
-}
-
-.log-entry.income {
-    border-left-color: var(--accent-yellow);
-}
-
-/* ========================================
-   操作按钮
-   ======================================== */
-
-.action-panel {
-    text-align: center;
-    padding: 12px;
-}
-
-.btn-action {
-    background: var(--accent-green);
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 12px 32px;
-    font-size: 15px;
-    font-family: inherit;
-    cursor: pointer;
-    letter-spacing: 1px;
-    transition: background 0.2s;
-}
-
-.btn-action:hover {
-    background: #8fa087;
-}
-
-.btn-action:active {
-    transform: translateY(1px);
-}
-
-/* ========================================
-   响应式
-   ======================================== */
-
-@media (max-width: 480px) {
-    .status-bar {
-        padding: 8px;
-    }
-
-    .status-item {
-        font-size: 11px;
-    }
-
-    .tents-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .income-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+    font-weight: 700;
+    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.15);
 }

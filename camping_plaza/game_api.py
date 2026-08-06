@@ -7,7 +7,8 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
@@ -19,6 +20,10 @@ app = FastAPI(title="露营广场 API", version="0.1.0")
 
 # 正式存档路径固定在本文件所在目录，不依赖启动时当前工作目录
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camping_plaza.db")
+
+# 前端资源目录，同样基于本文件所在目录计算
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 # CORS 配置（允许合集站前端访问）
 app.add_middleware(
@@ -251,6 +256,13 @@ def _get_arrival_plan_summary(eng: CampingPlazaEngine) -> dict:
 
 @app.get("/")
 def root():
+    """网页入口：返回营地总览页面"""
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+
+@app.get("/api/health")
+def health():
+    """服务状态检查"""
     return {"game": "露营广场", "version": "0.1.0", "status": "running"}
 
 
@@ -262,6 +274,7 @@ def get_state():
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
     state["arrival_plan"] = _get_arrival_plan_summary(eng)
+    state["today_events"] = list(eng.state.today_events)
     return state
 
 
@@ -284,6 +297,7 @@ def get_display_state():
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
     state["arrival_plan"] = _get_arrival_plan_summary(eng)
+    state["today_events"] = list(eng.state.today_events)
     return {
         "text": eng.get_state_for_display(),
         "data": state
@@ -539,6 +553,7 @@ def mcp_state():
         "turn_plan": _get_turn_plan_summary(eng),
         "next_turn_checkout_tents": eng.get_next_turn_checkout_tents(),
         "day_end_completed": eng.state.day_end_completed,
+        "today_events": list(eng.state.today_events),
     }
 
 
@@ -659,6 +674,13 @@ def mcp_available_actions():
             actions = [entry]
 
     return {"available_actions": actions}
+
+
+# =============================================================================
+# 静态资源挂载（放在路由注册之后，避免覆盖 API 路径）
+# =============================================================================
+app.mount("/styles", StaticFiles(directory=os.path.join(FRONTEND_DIR, "styles")), name="styles")
+app.mount("/scripts", StaticFiles(directory=os.path.join(FRONTEND_DIR, "scripts")), name="scripts")
 
 
 # =============================================================================

@@ -3,95 +3,271 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>露营广场 · CEDAR TOY</title>
+    <title>露营广场 · 营地总览</title>
     <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
-    <div class="container">
-        <!-- 顶部状态栏 -->
-        <header class="status-bar">
-            <div class="status-item">
-                <span class="status-label">📅 第</span>
-                <span class="status-value" id="day">1</span>
-                <span class="status-label">天</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">🔄 回合</span>
-                <span class="status-value" id="turn">1</span>
-                <span class="status-label">/ 5</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">💰</span>
-                <span class="status-value" id="balance">1000</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">⭐</span>
-                <span class="status-value" id="reputation">60</span>
-                <span class="status-label">%</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">🎯 决策点</span>
-                <span class="status-value" id="decisions">3</span>
-            </div>
+    <div class="app-shell">
+        <div class="connection-lost hidden" id="connectionBanner">
+            <span class="lost-icon" aria-hidden="true">!</span>
+            <span>未连接游戏后端</span>
+        </div>
+
+        <!-- 顶部概览：独立状态卡 -->
+        <header class="top-dashboard" aria-label="营地概览">
+            <article class="metric-card day-card">
+                <span class="metric-icon" aria-hidden="true">☀</span>
+                <div>
+                    <small>Day</small>
+                    <strong id="day">--</strong>
+                    <span class="metric-meta" id="phase">--</span>
+                </div>
+            </article>
+            <article class="metric-card turn-card">
+                <span class="metric-icon" aria-hidden="true">◎</span>
+                <div>
+                    <small>经营轮次</small>
+                    <strong><span id="turn">--</span> / --</strong>
+                </div>
+            </article>
+            <article class="metric-card gold-card">
+                <span class="metric-icon" aria-hidden="true">◆</span>
+                <div>
+                    <small>当前金币</small>
+                    <strong id="balance">--</strong>
+                </div>
+            </article>
+            <article class="metric-card rep-card">
+                <span class="metric-icon" aria-hidden="true">♥</span>
+                <div>
+                    <small>好评率</small>
+                    <strong id="reputation">--%</strong>
+                </div>
+            </article>
         </header>
 
-        <!-- 营地地图 -->
-        <div class="map-container">
-            <canvas id="campMap" width="600" height="800"></canvas>
-        </div>
-
-        <!-- 今日收入面板 -->
-        <div class="income-panel">
-            <h3>今日收入</h3>
-            <div class="income-grid">
-                <div class="income-item">
-                    <span class="income-icon">🏕️</span>
-                    <span class="income-label">住宿</span>
-                    <span class="income-value" id="income-accommodation">0</span>
-                </div>
-                <div class="income-item">
-                    <span class="income-icon">⛺</span>
-                    <span class="income-label">营位</span>
-                    <span class="income-value" id="income-campsite">0</span>
-                </div>
-                <div class="income-item">
-                    <span class="income-icon">🍖</span>
-                    <span class="income-label">餐饮</span>
-                    <span class="income-value" id="income-dining">0</span>
-                </div>
-                <div class="income-item">
-                    <span class="income-icon">🎮</span>
-                    <span class="income-label">娱乐</span>
-                    <span class="income-value" id="income-entertainment">0</span>
-                </div>
+        <!-- 即时通知 -->
+        <section class="notice-strip" aria-label="即时通知">
+            <span class="notice-bell" aria-hidden="true">🔔</span>
+            <div class="notice-list" id="noticeList">
+                <span class="notice-placeholder">等待后端连接…</span>
             </div>
-        </div>
+        </section>
 
-        <!-- 帐篷状态面板 -->
-        <div class="tents-panel">
-            <h3>帐篷状态</h3>
-            <div class="tents-grid" id="tentsGrid">
-                <!-- 动态生成 -->
+        <!-- 主内容：左侧地图+操作 / 右侧信息 -->
+        <main class="main-layout">
+            <div class="main-column">
+                <!-- 营地地图 -->
+                <section class="map-area" aria-label="营地地图">
+                    <div class="map-title">营地总览</div>
+                    <div class="camp-map" id="campMap">
+                        <!-- 地形基底 -->
+                        <div class="map-ground"></div>
+                        <div class="terrain-patch patch-north"></div>
+                        <div class="terrain-patch patch-east"></div>
+                        <div class="terrain-patch patch-west"></div>
+                        <div class="terrain-patch patch-south"></div>
+
+                        <!-- 入口：左下道路缺口 -->
+                        <div class="entrance-road"></div>
+                        <div class="entrance-sign"></div>
+
+                        <!-- 自然小径 -->
+                        <div class="nature-path path-1"></div>
+                        <div class="nature-path path-2"></div>
+                        <div class="nature-path path-3"></div>
+
+                        <!-- 少量造景 -->
+                        <div class="scenery">
+                            <div class="tree tree-1"></div>
+                            <div class="tree tree-2"></div>
+                            <div class="tree tree-3"></div>
+                            <div class="tree tree-4"></div>
+                            <div class="tree tree-5"></div>
+                            <div class="tree tree-6"></div>
+                            <div class="tree tree-7"></div>
+                            <div class="tree tree-8"></div>
+                            <div class="bush bush-1"></div>
+                            <div class="bush bush-2"></div>
+                            <div class="bush bush-3"></div>
+                            <div class="bush bush-4"></div>
+                            <div class="rock rock-1"></div>
+                            <div class="rock rock-2"></div>
+                            <div class="rock rock-3"></div>
+                        </div>
+
+                        <!-- 帐篷区：6 个自然错落锚点 -->
+                        <div class="anchor anchor-tent1" data-anchor="tent1" title="1号帐篷">
+                            <span class="tent-shape tent-color-1"></span>
+                            <span class="anchor-label">1号</span>
+                        </div>
+                        <div class="anchor anchor-tent2" data-anchor="tent2" title="2号帐篷">
+                            <span class="tent-shape tent-color-2"></span>
+                            <span class="anchor-label">2号</span>
+                        </div>
+                        <div class="anchor anchor-tent3" data-anchor="tent3" title="3号帐篷">
+                            <span class="tent-shape tent-color-3"></span>
+                            <span class="anchor-label">3号</span>
+                        </div>
+                        <div class="anchor anchor-tent4" data-anchor="tent4" title="4号帐篷">
+                            <span class="tent-shape tent-color-1"></span>
+                            <span class="anchor-label">4号</span>
+                        </div>
+                        <div class="anchor anchor-tent5" data-anchor="tent5" title="5号帐篷">
+                            <span class="tent-shape tent-color-2"></span>
+                            <span class="anchor-label">5号</span>
+                        </div>
+                        <div class="anchor anchor-tent6" data-anchor="tent6" title="6号帐篷">
+                            <span class="tent-shape tent-color-3"></span>
+                            <span class="anchor-label">6号</span>
+                        </div>
+
+                        <!-- 日间营位：10 个独立露营空地 -->
+                        <div class="campsite-slots">
+                            <div class="campsite-slot" data-slot="1"></div>
+                            <div class="campsite-slot" data-slot="2"></div>
+                            <div class="campsite-slot" data-slot="3"></div>
+                            <div class="campsite-slot" data-slot="4"></div>
+                            <div class="campsite-slot" data-slot="5"></div>
+                            <div class="campsite-slot" data-slot="6"></div>
+                            <div class="campsite-slot" data-slot="7"></div>
+                            <div class="campsite-slot" data-slot="8"></div>
+                            <div class="campsite-slot" data-slot="9"></div>
+                            <div class="campsite-slot" data-slot="10"></div>
+                        </div>
+
+                        <!-- 入口锚点（供瞬移使用） -->
+                        <div class="anchor anchor-entrance" data-anchor="entrance" title="入口">
+                            <span class="anchor-shape entrance-shape"></span>
+                            <span class="anchor-label">入口</span>
+                        </div>
+
+                        <!-- 营位锚点（供瞬移使用） -->
+                        <div class="anchor anchor-campsite" data-anchor="campsite" title="营位">
+                            <span class="anchor-shape campsite-shape"></span>
+                            <span class="anchor-label">营位</span>
+                        </div>
+
+                        <!-- 篝火：视觉中心 -->
+                        <div class="anchor anchor-bonfire" data-anchor="bonfire" title="篝火">
+                            <span class="bonfire-shape"></span>
+                            <span class="anchor-label">篝火</span>
+                        </div>
+
+                        <!-- 温泉：锁定建设区 -->
+                        <div class="anchor anchor-onsen-locked" data-anchor="onsenLocked" title="温泉建设中">
+                            <span class="onsen-shape"></span>
+                            <span class="anchor-label">温泉建设中</span>
+                        </div>
+
+                        <!-- 娱乐：林间游戏屋 -->
+                        <div class="anchor anchor-entertainment" data-anchor="entertainment" title="林间游戏屋">
+                            <span class="cabin-shape cabin-entertainment"></span>
+                            <span class="anchor-label">林间游戏屋</span>
+                        </div>
+
+                        <!-- 餐饮：松果小馆 -->
+                        <div class="anchor anchor-dining" data-anchor="dining" title="松果小馆">
+                            <span class="cabin-shape cabin-dining"></span>
+                            <span class="anchor-label">松果小馆</span>
+                        </div>
+
+                        <!-- 玩家标记 -->
+                        <div class="player-marker" id="playerMarker" title="小克 待命">
+                            <span class="player-avatar"></span>
+                            <span class="player-label" id="playerLabel">小克 待命</span>
+                        </div>
+
+                        <!-- NPC 客组标记 -->
+                        <div class="npc-layer" id="npcLayer" aria-live="polite"></div>
+                    </div>
+                </section>
+
+                <!-- 常驻经营操作 -->
+                <section class="operations-panel" aria-label="经营操作">
+                    <div class="operations-heading">
+                        <h3>经营操作</h3>
+                        <div class="operations-hints">
+                            <span class="hint-chip" id="turnHint">等待后端…</span>
+                            <span class="hint-chip" id="dayEndHint">等待后端…</span>
+                        </div>
+                    </div>
+                    <div class="action-grid" id="actionGrid">
+                        <button class="btn-action" type="button" data-action="clean_tent" disabled title="真实操作尚未接入">清洁帐篷</button>
+                        <button class="btn-action" type="button" data-action="buy_food" disabled title="真实操作尚未接入">购买食材</button>
+                        <button class="btn-action" type="button" data-action="repair_tent" disabled title="真实操作尚未接入">维修帐篷</button>
+                        <button class="btn-action" type="button" data-action="maintain_green" disabled title="真实操作尚未接入">维护绿化</button>
+                        <button class="btn-action" type="button" data-action="grow_build" disabled title="真实操作尚未接入">成长建设</button>
+                        <button class="btn-action" type="button" data-action="submit_plan" disabled title="真实操作尚未接入">提交本轮计划</button>
+                        <button class="btn-action primary" type="button" data-action="new_day" disabled title="真实操作尚未接入">开始新的一天</button>
+                    </div>
+                </section>
             </div>
-        </div>
 
-        <!-- 回合日志 -->
-        <div class="log-panel">
-            <h3>回合动态</h3>
-            <div class="log-list" id="logList">
-                <div class="log-empty">等待游戏开始...</div>
-            </div>
-        </div>
+            <!-- 右侧经营面板 -->
+            <aside class="side-column">
+                <div class="panel-card reminders">
+                    <h3>经营提醒</h3>
+                    <ul class="reminder-list" id="reminderList"></ul>
+                </div>
 
-        <!-- 操作按钮（围观模式下隐藏） -->
-        <div class="action-panel" id="actionPanel" style="display:none;">
-            <button class="btn-action" id="btnAdvance" onclick="advanceTurn()">
-                推进回合 ▶
-            </button>
-        </div>
+                <div class="panel-card overview">
+                    <h3>营地概况</h3>
+                    <div class="overview-grid">
+                        <div class="overview-item">
+                            <span class="overview-label">已开放营位</span>
+                            <span class="overview-value" id="openSlots">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">在营客组</span>
+                            <span class="overview-value" id="activeGroups">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">剩余决策点</span>
+                            <span class="overview-value" id="todoCount">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">食材库存</span>
+                            <span class="overview-value" id="facilityState">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card income">
+                    <h3>今日收支</h3>
+                    <div class="income-list">
+                        <div class="income-row">
+                            <span class="income-label">住宿</span>
+                            <span class="income-value income-in" id="income-accommodation">--</span>
+                        </div>
+                        <div class="income-row">
+                            <span class="income-label">营位</span>
+                            <span class="income-value income-in" id="income-campsite">--</span>
+                        </div>
+                        <div class="income-row">
+                            <span class="income-label">餐饮</span>
+                            <span class="income-value income-in" id="income-dining">--</span>
+                        </div>
+                        <div class="income-row">
+                            <span class="income-label">娱乐</span>
+                            <span class="income-value income-in" id="income-entertainment">--</span>
+                        </div>
+                        <div class="income-row total">
+                            <span class="income-label">合计</span>
+                            <span class="income-value" id="income-total">--</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- 经营日志 -->
+        <section class="panel-card log-panel" aria-label="经营日志">
+            <h3>经营日志</h3>
+            <div class="log-list" id="logList"></div>
+        </section>
     </div>
 
-    <script src="scripts/map.js"></script>
-    <script src="scripts/app.js"></script>
+    <script src="scripts/overview.js"></script>
 </body>
 </html>
