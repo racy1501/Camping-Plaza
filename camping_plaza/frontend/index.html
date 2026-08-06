@@ -26,8 +26,8 @@
             <article class="metric-card turn-card">
                 <span class="metric-icon" aria-hidden="true">◎</span>
                 <div>
-                    <small>经营轮次</small>
-                    <strong><span id="turn">--</span> / --</strong>
+                    <small id="turnLabel">经营轮次</small>
+                    <strong id="turnDisplay"><span id="turn">--</span><span id="turnTotal"> / 5</span></strong>
                 </div>
             </article>
             <article class="metric-card gold-card">
@@ -136,10 +136,10 @@
                             <div class="campsite-slot" data-slot="10"></div>
                         </div>
 
-                        <!-- 入口锚点（供瞬移使用） -->
-                        <div class="anchor anchor-entrance" data-anchor="entrance" title="入口">
-                            <span class="anchor-shape entrance-shape"></span>
-                            <span class="anchor-label">入口</span>
+                        <!-- 入口/营地服务站：复用 entrance 锚点，后端 gate 仍映射到这里 -->
+                        <div class="anchor anchor-entrance" data-anchor="entrance" title="营地服务站">
+                            <span class="service-station-shape"></span>
+                            <span class="anchor-label">营地服务站</span>
                         </div>
 
                         <!-- 营位锚点（供瞬移使用） -->
@@ -160,16 +160,16 @@
                             <span class="anchor-label">温泉建设中</span>
                         </div>
 
-                        <!-- 娱乐：林间游戏屋 -->
-                        <div class="anchor anchor-entertainment" data-anchor="entertainment" title="林间游戏屋">
+                        <!-- 娱乐：星野游戏屋 -->
+                        <div class="anchor anchor-entertainment" data-anchor="entertainment" title="星野游戏屋">
                             <span class="cabin-shape cabin-entertainment"></span>
-                            <span class="anchor-label">林间游戏屋</span>
+                            <span class="anchor-label">星野游戏屋</span>
                         </div>
 
-                        <!-- 餐饮：松果小馆 -->
-                        <div class="anchor anchor-dining" data-anchor="dining" title="松果小馆">
+                        <!-- 餐饮：篝火厨房 -->
+                        <div class="anchor anchor-dining" data-anchor="dining" title="篝火厨房">
                             <span class="cabin-shape cabin-dining"></span>
-                            <span class="anchor-label">松果小馆</span>
+                            <span class="anchor-label">篝火厨房</span>
                         </div>
 
                         <!-- 玩家标记 -->
@@ -187,20 +187,9 @@
                 <section class="operations-panel" aria-label="经营操作">
                     <div class="operations-heading">
                         <h3>经营操作</h3>
-                        <div class="operations-hints">
-                            <span class="hint-chip" id="turnHint">等待后端…</span>
-                            <span class="hint-chip" id="dayEndHint">等待后端…</span>
-                        </div>
                     </div>
-                    <div class="action-grid" id="actionGrid">
-                        <button class="btn-action" type="button" data-action="clean_tent" disabled title="真实操作尚未接入">清洁帐篷</button>
-                        <button class="btn-action" type="button" data-action="buy_food" disabled title="真实操作尚未接入">购买食材</button>
-                        <button class="btn-action" type="button" data-action="repair_tent" disabled title="真实操作尚未接入">维修帐篷</button>
-                        <button class="btn-action" type="button" data-action="maintain_green" disabled title="真实操作尚未接入">维护绿化</button>
-                        <button class="btn-action" type="button" data-action="grow_build" disabled title="真实操作尚未接入">成长建设</button>
-                        <button class="btn-action" type="button" data-action="submit_plan" disabled title="真实操作尚未接入">提交本轮计划</button>
-                        <button class="btn-action primary" type="button" data-action="new_day" disabled title="真实操作尚未接入">开始新的一天</button>
-                    </div>
+                    <div class="action-message" id="actionMessage"></div>
+                    <div class="action-grid" id="actionGrid"></div>
                 </section>
             </div>
 
@@ -245,11 +234,11 @@
                             <span class="income-value income-in" id="income-campsite">--</span>
                         </div>
                         <div class="income-row">
-                            <span class="income-label">餐饮</span>
+                            <span class="income-label">篝火厨房</span>
                             <span class="income-value income-in" id="income-dining">--</span>
                         </div>
                         <div class="income-row">
-                            <span class="income-label">娱乐</span>
+                            <span class="income-label">星野游戏屋</span>
                             <span class="income-value income-in" id="income-entertainment">--</span>
                         </div>
                         <div class="income-row total">

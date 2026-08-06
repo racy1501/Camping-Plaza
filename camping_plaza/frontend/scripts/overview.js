@@ -1,6 +1,7 @@
 /**
  * 露营广场 · 营地总览
- * 真实只读网页入口：从 /api/state 读取后端状态并渲染，无假数据、无 demo mode。
+ * 真实只读网页入口：从 /api/state 读取后端状态并渲染，
+ * 从 /api/actions 读取人类操作目录。无假数据、无 demo mode。
  */
 
 (function () {
@@ -8,18 +9,18 @@
 
     // 锚点坐标（百分比，以地图左上角为原点）
     const ANCHORS = {
-        entrance: { top: 92, left: 14 },
+        entrance: { top: 82, left: 28 },
         tent1: { top: 18, left: 46 },
         tent2: { top: 18, left: 54 },
         tent3: { top: 18, left: 62 },
         tent4: { top: 34, left: 46 },
         tent5: { top: 34, left: 54 },
         tent6: { top: 34, left: 62 },
-        campsite: { top: 45, left: 95 },
+        campsite: { top: 57, left: 48 },
         bonfire: { top: 48, left: 50 },
         onsenLocked: { top: 30, left: 14 },
-        entertainment: { top: 82, left: 28 },
-        dining: { top: 82, left: 72 }
+        entertainment: { top: 76, left: 45 },
+        dining: { top: 82, left: 70 }
     };
 
     // 后端 NPC location → 前端锚点标识
@@ -37,6 +38,9 @@
 
     const els = {};
     let apiConnected = false;
+    let actionsConnected = false;
+    let isAdvancing = false;
+    let currentMode = null;
 
     function init() {
         cacheElements();
@@ -48,6 +52,9 @@
         els.connectionBanner = document.getElementById('connectionBanner');
         els.day = document.getElementById('day');
         els.turn = document.getElementById('turn');
+        els.turnLabel = document.getElementById('turnLabel');
+        els.turnDisplay = document.getElementById('turnDisplay');
+        els.turnTotal = document.getElementById('turnTotal');
         els.phase = document.getElementById('phase');
         els.balance = document.getElementById('balance');
         els.reputation = document.getElementById('reputation');
@@ -66,9 +73,9 @@
         els.npcLayer = document.getElementById('npcLayer');
         els.playerMarker = document.getElementById('playerMarker');
         els.playerLabel = document.getElementById('playerLabel');
-        els.turnHint = document.getElementById('turnHint');
-        els.dayEndHint = document.getElementById('dayEndHint');
-        els.actionButtons = document.querySelectorAll('.btn-action');
+        els.operationsHeading = document.querySelector('.operations-heading h3');
+        els.actionMessage = document.getElementById('actionMessage');
+        els.actionGrid = document.getElementById('actionGrid');
         els.tentAnchors = {};
         for (let i = 1; i <= 6; i++) {
             els.tentAnchors[i] = document.querySelector(`.anchor-tent${i}`);
@@ -85,10 +92,32 @@
             apiConnected = true;
             renderConnected();
             renderAll(state);
+            fetchActions();
         } catch (err) {
             apiConnected = false;
+            actionsConnected = false;
             console.warn('无法连接游戏后端：', err);
             setDisconnected();
+        }
+    }
+
+    async function fetchActions() {
+        if (!apiConnected) {
+            renderActionsDisconnected();
+            return;
+        }
+        try {
+            const res = await fetch('/api/actions', { method: 'GET' });
+            if (!res.ok) {
+                throw new Error('HTTP ' + res.status);
+            }
+            const actions = await res.json();
+            actionsConnected = true;
+            renderActions(actions);
+        } catch (err) {
+            actionsConnected = false;
+            console.warn('无法读取动作目录：', err);
+            renderActionsDisconnected();
         }
     }
 
@@ -97,9 +126,7 @@
             els.connectionBanner.classList.remove('hidden');
         }
         clearState();
-        disableAllActions();
-        if (els.turnHint) els.turnHint.textContent = '等待后端…';
-        if (els.dayEndHint) els.dayEndHint.textContent = '等待后端…';
+        renderActionsDisconnected();
         if (els.noticeList) {
             els.noticeList.innerHTML = '<span class="notice-chip">等待游戏后端连接</span>';
         }
@@ -131,17 +158,7 @@
             els.playerMarker.style.bottom = 'auto';
             els.playerMarker.style.right = 'auto';
         }
-        if (els.playerLabel) els.playerLabel.textContent = '小克 待命';
-    }
-
-    function disableAllActions() {
-        if (!els.actionButtons) return;
-        els.actionButtons.forEach(btn => {
-            btn.disabled = true;
-            if (!apiConnected) {
-                btn.title = '真实操作尚未接入';
-            }
-        });
+        if (els.playerLabel) els.playerLabel.textContent = '小克';
     }
 
     function renderAll(state) {
@@ -152,29 +169,36 @@
         renderOverview(state);
         renderReminders(state);
         renderEvents(state.today_events || []);
-        renderHints(state);
         showPlayerMarker();
-        disableAllActions();
     }
 
     function renderTopCards(state) {
         if (els.day) els.day.textContent = state.day ?? '--';
-        if (els.turn) els.turn.textContent = state.turn ?? '--';
-        if (els.phase) {
-            els.phase.textContent = getPhaseLabel(state.turn) || '--';
-        }
         if (els.balance) els.balance.textContent = state.balance ?? '--';
         if (els.reputation) {
             const rep = state.reputation_rate;
             els.reputation.textContent = (typeof rep === 'number' ? rep.toFixed(1) : rep) + '%';
+        }
+
+        const turn = state.turn ?? 1;
+        if (els.turn) els.turn.textContent = turn;
+
+        if (turn >= 1 && turn <= 5) {
+            if (els.turnLabel) els.turnLabel.textContent = '经营轮次';
+            if (els.turnTotal) els.turnTotal.textContent = ' / 5';
+            if (els.turnTotal) els.turnTotal.style.display = '';
+            if (els.phase) els.phase.textContent = getPhaseLabel(turn);
+        } else if (turn === 6) {
+            if (els.turnLabel) els.turnLabel.textContent = '当前阶段';
+            if (els.turnTotal) els.turnTotal.style.display = 'none';
+            if (els.phase) els.phase.textContent = '';
         }
     }
 
     function getPhaseLabel(turn) {
         if (turn === 1) return '迎客准备';
         if (turn >= 2 && turn <= 5) return '营业中';
-        if (turn === 6) return '日终管理';
-        return '未知阶段';
+        return '';
     }
 
     function renderMap(state) {
@@ -332,12 +356,106 @@
         }
     }
 
-    function renderHints(state) {
-        if (els.turnHint) {
-            els.turnHint.textContent = `自由行动 + 经营动作 0/${state.decisions_left ?? 3}`;
+    // ========================================================================
+    // 操作面板：基于 /api/actions
+    // ========================================================================
+
+    function renderActionsDisconnected() {
+        if (els.operationsHeading) els.operationsHeading.textContent = '经营操作';
+        if (els.actionMessage) {
+            els.actionMessage.textContent = '暂时无法读取经营操作';
+            els.actionMessage.className = 'action-message action-warning';
         }
-        if (els.dayEndHint) {
-            els.dayEndHint.textContent = state.turn === 6 ? '日终：可提交不限数量' : '日终：等待日终阶段';
+        if (els.actionGrid) els.actionGrid.innerHTML = '';
+    }
+
+    function renderActions(actions) {
+        if (!actions || !actions.success) {
+            renderActionsDisconnected();
+            return;
+        }
+
+        currentMode = actions.mode;
+
+        if (els.operationsHeading) {
+            els.operationsHeading.textContent = actions.panel_title || '经营操作';
+        }
+
+        if (els.actionMessage) {
+            els.actionMessage.textContent = '';
+            els.actionMessage.className = 'action-message';
+        }
+
+        if (els.actionGrid) els.actionGrid.innerHTML = '';
+
+        switch (actions.mode) {
+            case 'opening':
+                renderOpeningAction(actions.primary_action);
+                break;
+            case 'planning':
+            case 'ready_to_advance':
+                renderPlaceholder('营业操作将在下一步接入');
+                break;
+            case 'day_end_pending':
+                renderPlaceholder('日终管理将在后续接入');
+                break;
+            case 'day_end_completed':
+                renderPlaceholder('日终管理将在后续接入');
+                break;
+            default:
+                renderPlaceholder('暂时无法读取经营操作');
+        }
+    }
+
+    function renderOpeningAction(primary) {
+        if (!els.actionGrid) return;
+        const btn = document.createElement('button');
+        btn.className = 'btn-action primary';
+        btn.type = 'button';
+        btn.textContent = primary && primary.label ? primary.label : '开始营业';
+        btn.disabled = !(primary && primary.enabled);
+        btn.addEventListener('click', advanceTurn);
+        els.actionGrid.appendChild(btn);
+    }
+
+    function renderPlaceholder(text) {
+        if (!els.actionMessage) return;
+        els.actionMessage.textContent = text;
+        els.actionMessage.className = 'action-message action-placeholder';
+    }
+
+    function setActionMessage(text, type) {
+        if (!els.actionMessage) return;
+        els.actionMessage.textContent = text;
+        els.actionMessage.className = 'action-message ' + (type || '');
+    }
+
+    async function advanceTurn() {
+        if (isAdvancing) return;
+        isAdvancing = true;
+
+        const btn = els.actionGrid && els.actionGrid.querySelector('button');
+        if (btn) btn.disabled = true;
+        setActionMessage('正在进入营业…');
+
+        try {
+            const res = await fetch('/api/turn/advance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok || result.success === false) {
+                throw new Error(result.message || `请求失败 (${res.status})`);
+            }
+            setActionMessage('已进入营业阶段');
+            await fetchState();
+            await fetchActions();
+        } catch (err) {
+            console.warn('推进回合失败：', err);
+            setActionMessage('进入营业失败：' + err.message, 'action-error');
+            if (btn) btn.disabled = false;
+        } finally {
+            isAdvancing = false;
         }
     }
 
