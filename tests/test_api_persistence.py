@@ -100,12 +100,15 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             self._action("clean_tents", {"tent_ids": [1, 2]})
             save_mock.assert_called_once()
 
-    def test_upgrade_facility_saves(self):
+    def test_turn6_legacy_upgrade_facility_rejected(self):
+        """Turn 6 旧 upgrade_facility 入口返回 day_end_batch_required"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("upgrade_facility", {"facility_name": "dining"})
-            save_mock.assert_called_once()
+            with self.assertRaises(game_api.HTTPException) as ctx:
+                self._action("upgrade_facility", {"facility_name": "dining"})
+        self.assertEqual(ctx.exception.detail["error_code"], "day_end_batch_required")
+        save_mock.assert_not_called()
 
     def test_improve_service_saves(self):
         self.engine.state.turn = 2
@@ -118,14 +121,26 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
         self.engine.state.turn = 6
         self.engine.facilities["greenery"].level = 1
         self.engine.state.balance = 99999
+        # Turn 6 日终批处理路径
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("manage_greenery", {"action": "maintain"})
+            game_api.submit_day_end(
+                game_api.DayEndRequest(day_end_actions=[
+                    game_api.ActionRequest(action="manage_greenery",
+                                           params={"action": "maintain"}),
+                ])
+            )
             save_mock.assert_called_once()
 
     def test_buy_food_package_saves(self):
         self.engine.state.turn = 6
+        # Turn 6 日终批处理路径
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("buy_food_package", {"package_key": "small"})
+            game_api.submit_day_end(
+                game_api.DayEndRequest(day_end_actions=[
+                    game_api.ActionRequest(action="buy_food_package",
+                                           params={"package_key": "small"}),
+                ])
+            )
             save_mock.assert_called_once()
 
     def test_advance_turn_action_saves(self):
@@ -135,8 +150,12 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
 
     def test_new_day_action_saves(self):
         self.engine.state.turn = 6
+        # Turn 6 日终批处理：先提交空清单，再开启下一天
+        game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[])
+        )
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            self._action("new_day")
+            game_api.start_next_day()
             save_mock.assert_called_once()
 
     def test_broken_block_advance_turn_saves(self):
@@ -160,16 +179,23 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
 
     def test_purchase_growth_project_success_dispatches_and_saves_once(self):
         self._qualify_hot_spring()
+        # Turn 6 日终批处理路径
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            result = self._action(
-                "purchase_growth_project",
-                {"project_id": "hot_spring"},
+            result = game_api.submit_day_end(
+                game_api.DayEndRequest(day_end_actions=[
+                    game_api.ActionRequest(action="purchase_growth_project",
+                                           params={"project_id": "hot_spring"}),
+                ])
             )
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["project_id"], "hot_spring")
-        self.assertEqual(result["price"], 8000)
-        self.assertEqual(result["balance_after"], 2000)
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(len(result["results"]), 1)
+        item = result["results"][0]
+        self.assertTrue(item["success"])
+        self.assertEqual(item["project_id"], "hot_spring")
+        self.assertEqual(item["price"], 8000)
+        self.assertEqual(item["balance_after"], 2000)
         save_mock.assert_called_once()
 
     def test_purchase_growth_project_failure_does_not_save(self):
@@ -184,24 +210,38 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
         save_mock.assert_not_called()
 
     def test_duplicate_purchase_does_not_charge_or_save(self):
+        """同一份 /api/day/end 清单中重复购买同一成长项目：首次成功，第二次真实业务失败，金币只扣一次"""
         self._qualify_hot_spring()
-        with mock.patch.object(self.engine, "save_state"):
-            first = self._action(
-                "purchase_growth_project",
-                {"project_id": "hot_spring"},
-            )
-        balance_after_first = self.engine.state.balance
-
+        balance_before = self.engine.state.balance
+        # 同一份清单提交两次相同的真实 purchase_growth_project
         with mock.patch.object(self.engine, "save_state") as save_mock:
-            second = self._action(
-                "purchase_growth_project",
-                {"project_id": "hot_spring"},
+            result = game_api.submit_day_end(
+                game_api.DayEndRequest(day_end_actions=[
+                    game_api.ActionRequest(action="purchase_growth_project",
+                                           params={"project_id": "hot_spring"}),
+                    game_api.ActionRequest(action="purchase_growth_project",
+                                           params={"project_id": "hot_spring"}),
+                ])
             )
 
-        self.assertTrue(first["success"])
-        self.assertFalse(second["success"])
-        self.assertEqual(self.engine.state.balance, balance_after_first)
-        save_mock.assert_not_called()
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["results"]), 2)
+        # 第一次成功
+        self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(result["results"][0]["project_id"], "hot_spring")
+        # 第二次真实业务失败（已购买，不可再购）
+        self.assertFalse(result["results"][1]["success"])
+        self.assertEqual(
+            result["results"][1]["error_code"],
+            "growth_project_not_purchasable",
+        )
+        # 金币只扣一次
+        self.assertEqual(
+            self.engine.state.balance,
+            balance_before - 8000,
+        )
+        # save_state 只调用一次（整个 /api/day/end 一次保存）
+        save_mock.assert_called_once()
 
     def test_unknown_growth_project_does_not_save(self):
         with mock.patch.object(self.engine, "save_state") as save_mock:
@@ -346,34 +386,51 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.engine.tents[1].status = "cleaning"
         self.engine.tents[3].status = "cleaning"
 
-        self._action("clean_tents", {"tent_ids": [1, 3]})
+        # Turn 6 日终批处理路径
+        game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="clean_tents",
+                                       params={"tent_ids": [1, 3]}),
+            ])
+        )
 
         restored = self._new_engine_from_db()
         self.assertEqual(restored.tents[1].status, "available")
         self.assertEqual(restored.tents[3].status, "available")
 
     def test_upgrade_facility_recovery(self):
-        """升级设施后恢复，等级和余额变化仍存在"""
+        """购买餐饮 Lv1 后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
         self.engine.state.successful_dining_groups = 8
         initial_level = self.engine.facilities["dining"].level
         initial_balance = self.engine.state.balance
 
-        self._action("upgrade_facility", {"facility_name": "dining"})
+        game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "dining_lv1"}),
+            ])
+        )
 
         restored = self._new_engine_from_db()
         self.assertEqual(restored.facilities["dining"].level, initial_level + 1)
         self.assertLess(restored.state.balance, initial_balance)
 
     def test_entertainment_upgrade_recovery(self):
+        """购买娱乐 Lv1 后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
         self.engine.state.successful_paid_entertainment_groups = 8
         initial_level = self.engine.facilities["entertainment"].level
         initial_balance = self.engine.state.balance
 
-        self._action("upgrade_facility", {"facility_name": "entertainment"})
+        game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "entertainment_lv1"}),
+            ])
+        )
 
         restored = self._new_engine_from_db()
         self.assertEqual(restored.facilities["entertainment"].level, initial_level + 1)
@@ -408,7 +465,13 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.engine.state.turn = 6
         opening_stock = self.engine.state.food_stock
 
-        result = self._action("buy_food_package", {"package_key": "medium"})
+        # Turn 6 日终批处理路径
+        result = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="buy_food_package",
+                                       params={"package_key": "medium"}),
+            ])
+        )
         self.assertTrue(result["success"])
 
         restored = self._new_engine_from_db()
@@ -567,25 +630,39 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
 
         self.assertFalse(result["success"])
 
-    def test_turn6_immediate_management_actions_still_work(self):
+    def test_turn6_immediate_management_actions_rejected(self):
+        """Turn 6 逐项日终操作返回 day_end_batch_required，不走 /api/day/end"""
         self.engine.state.turn = 6
         self.engine.tents[1].status = "broken"
         self.engine.state.decisions_left = 3
 
-        result = self._action("repair_tent", {"tent_id": 1})
-
-        self.assertTrue(result["success"])
-        self.assertEqual(self.engine.tents[1].status, "available")
+        # Turn 6 逐项 repair_tent 已被拒绝，断言 day_end_batch_required
+        with self.assertRaises(game_api.HTTPException) as ctx:
+            self._action("repair_tent", {"tent_id": 1})
+        self.assertEqual(ctx.exception.detail["error_code"], "day_end_batch_required")
 
     def test_turn6_buy_food_package_works_once(self):
         self.engine.state.turn = 6
         opening_stock = self.engine.state.food_stock
 
-        first = self._action("buy_food_package", {"package_key": "small"})
-        second = self._action("buy_food_package", {"package_key": "medium"})
-
+        # Turn 6 日终批处理：第一次成功，重复提交被拒
+        first = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="buy_food_package",
+                                       params={"package_key": "small"}),
+            ])
+        )
         self.assertTrue(first["success"])
+        self.assertTrue(first["day_end_completed"])
+
+        second = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="buy_food_package",
+                                       params={"package_key": "medium"}),
+            ])
+        )
         self.assertFalse(second["success"])
+        self.assertEqual(second["error_code"], "day_end_already_completed")
         self.assertEqual(
             self.engine.state.food_stock,
             opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
@@ -678,16 +755,45 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.state.balance = 99999
         self.engine.state.successful_dining_groups = 36
 
-        first = self._action("upgrade_facility", {"facility_name": "dining"})
-        second = self._action("upgrade_facility", {"facility_name": "dining"})
-        balance_before_third = self.engine.state.balance
-        third = self._action("upgrade_facility", {"facility_name": "dining"})
-
+        # Turn 6 日终批处理：购买 dining_lv1 再购买 dining_lv2
+        first = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "dining_lv1"}),
+            ])
+        )
         self.assertTrue(first["success"])
+        self.assertEqual(self.engine.facilities["dining"].level, 1)
+
+        # 开启下一天（重置 day_end_completed）然后回 turn 6
+        game_api.start_next_day()
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = False
+
+        second = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "dining_lv2"}),
+            ])
+        )
         self.assertTrue(second["success"])
-        self.assertFalse(third["success"])
         self.assertEqual(self.engine.facilities["dining"].level, 2)
-        self.assertEqual(self.engine.state.balance, 99999 - 700 - 1800)
+
+        # 开启下一天后回 turn 6 尝试第三次升级（dining_lv2 已购买，不可重复）
+        game_api.start_next_day()
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = False
+        balance_before_third = self.engine.state.balance
+
+        third = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "dining_lv2"}),
+            ])
+        )
+        self.assertTrue(third["success"])  # 批处理本身成功
+        self.assertFalse(third["results"][0]["success"])  # 但购买项失败
+        self.assertEqual(self.engine.facilities["dining"].level, 2)
         self.assertEqual(self.engine.state.balance, balance_before_third)
 
     def test_entertainment_upgrade_reaches_lv2_and_then_stops_without_charge(self):
@@ -695,16 +801,44 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.state.balance = 99999
         self.engine.state.successful_paid_entertainment_groups = 32
 
-        first = self._action("upgrade_facility", {"facility_name": "entertainment"})
-        second = self._action("upgrade_facility", {"facility_name": "entertainment"})
-        balance_before_third = self.engine.state.balance
-        third = self._action("upgrade_facility", {"facility_name": "entertainment"})
-
+        # Turn 6 日终批处理：购买 entertainment_lv1 再购买 entertainment_lv2
+        first = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "entertainment_lv1"}),
+            ])
+        )
         self.assertTrue(first["success"])
+        self.assertEqual(self.engine.facilities["entertainment"].level, 1)
+
+        game_api.start_next_day()
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = False
+
+        second = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "entertainment_lv2"}),
+            ])
+        )
         self.assertTrue(second["success"])
-        self.assertFalse(third["success"])
         self.assertEqual(self.engine.facilities["entertainment"].level, 2)
-        self.assertEqual(self.engine.state.balance, 99999 - 600 - 1600)
+
+        # 第三次尝试升级（entertainment_lv2 已购买，不可重复）
+        game_api.start_next_day()
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = False
+        balance_before_third = self.engine.state.balance
+
+        third = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "entertainment_lv2"}),
+            ])
+        )
+        self.assertTrue(third["success"])
+        self.assertFalse(third["results"][0]["success"])
+        self.assertEqual(self.engine.facilities["entertainment"].level, 2)
         self.assertEqual(self.engine.state.balance, balance_before_third)
 
     def test_greenery_lv2_upgrade_still_fails_without_charge(self):
@@ -713,9 +847,17 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.facilities["greenery"].level = 2
         balance_before = self.engine.state.balance
 
-        result = self._action("upgrade_facility", {"facility_name": "greenery"})
+        # Turn 6 日终批处理：greenery_lv2 需要 required_level=1（当前 level=2 不满足）
+        # greenery_lv2 已购买或前置不满足，结果应为失败
+        result = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="purchase_growth_project",
+                                       params={"project_id": "greenery_lv2"}),
+            ])
+        )
 
-        self.assertFalse(result["success"])
+        self.assertTrue(result["success"])  # 批处理整体成功
+        self.assertFalse(result["results"][0]["success"])  # 购买项失败
         self.assertEqual(self.engine.facilities["greenery"].level, 2)
         self.assertEqual(self.engine.state.balance, balance_before)
 
@@ -741,9 +883,11 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.tents[2].status = "cleaning"
         actions = game_api.mcp_available_actions()["available_actions"]
         action_names = [item["action"] for item in actions]
+        self.assertIn("submit_day_end_actions", action_names)
         self.assertNotIn("submit_turn_plan", action_names)
-        self.assertIn("repair_tent", action_names)
-        self.assertIn("clean_tents", action_names)
+        self.assertNotIn("repair_tent", action_names)
+        self.assertNotIn("clean_tents", action_names)
+        self.assertNotIn("new_day", action_names)
 
     def test_mcp_actions_hide_facility_upgrades_at_lv2(self):
         self.engine.state.turn = 6
@@ -762,7 +906,9 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.state.turn = 6
 
         actions = game_api.mcp_available_actions()["available_actions"]
-        food_actions = [item for item in actions if item["action"] == "buy_food_package"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action"], "submit_day_end_actions")
+        food_actions = actions[0].get("food_package_candidates", [])
 
         self.assertEqual(len(food_actions), 3)
         self.assertEqual(
@@ -777,12 +923,17 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
     def test_mcp_actions_hide_turn6_food_preorder_after_success(self):
         self.engine.state.turn = 6
-        self._action("buy_food_package", {"package_key": "small"})
+        # Turn 6 日终批处理路径
+        game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(action="buy_food_package",
+                                       params={"package_key": "small"}),
+            ])
+        )
 
         actions = game_api.mcp_available_actions()["available_actions"]
-        action_names = [item["action"] for item in actions]
-
-        self.assertNotIn("buy_food_package", action_names)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action"], "start_next_day")
 
     def test_mcp_plan_description_mentions_food_purchase_action(self):
         self.engine.state.turn = 2
@@ -840,9 +991,11 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.tents[1].status = "broken"
 
         actions = game_api.mcp_available_actions()["available_actions"]
-        action_names = [item["action"] for item in actions]
-
-        self.assertIn("repair_tent", action_names)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action"], "submit_day_end_actions")
+        self.assertIn("repair_candidates", actions[0])
+        repair_ids = [c["params"]["tent_id"] for c in actions[0]["repair_candidates"]]
+        self.assertIn(1, repair_ids)
 
     def test_turn2_repair_candidates_present_even_when_balance_zero(self):
         """余额不足时维修候选仍出现，执行时才会失败"""
@@ -1221,13 +1374,16 @@ class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
 
 
 class McpGrowthActionTests(ApiPersistenceTestCase):
-    """Turn 6 日终管理应按现有成长目录动态加入可购买成长项目动作"""
+    """Turn 6 日终批处理模式：submit_day_end_actions 携带紧凑候选信息"""
 
     def _growth_purchase_actions(self, actions):
-        return [
-            a for a in actions
-            if a["action"] == "purchase_growth_project"
-        ]
+        """从 submit_day_end_actions 入口中提取 growth_candidates"""
+        entry = next(
+            (a for a in actions if a["action"] == "submit_day_end_actions"), None
+        )
+        if entry is None:
+            return []
+        return entry.get("growth_candidates", [])
 
     def test_purchasable_project_appears_in_turn6(self):
         self.engine.state.turn = 6
@@ -1318,12 +1474,16 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         self.engine.state.balance = 10000
 
         actions = game_api.mcp_available_actions()["available_actions"]
-        action_names = [a["action"] for a in actions]
+        self.assertEqual(len(actions), 1)
+        entry = actions[0]
+        self.assertEqual(entry["action"], "submit_day_end_actions")
 
-        self.assertIn("manage_greenery", action_names)
-        self.assertIn("new_day", action_names)
-        self.assertIn("purchase_growth_project", action_names)
-        self.assertNotIn("upgrade_facility", action_names)
+        # 紧凑候选包含所有日终能力
+        self.assertIn("greenery_candidate", entry)
+        self.assertIn("growth_candidates", entry)
+        purchase_ids = [p["params"]["project_id"] for p in entry.get("growth_candidates", [])]
+        self.assertIn("purchase_growth_project", entry.get("growth_candidates", [{}])[0].get("action", "") if entry.get("growth_candidates") else "")
+        self.assertNotIn("upgrade_facility", entry.get("action", ""))
 
     def test_turn6_does_not_expose_legacy_upgrade_facility(self):
         # 即使设施等级低于最高等级，也不能再出现旧的 upgrade_facility 动作
@@ -1422,9 +1582,11 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
         save_mock.assert_not_called()
 
     def test_repair_tent_missing_tent_id(self):
-        self.engine.state.turn = 6  # 日终阶段才走 repair_tent 缺参检查
+        self.engine.state.turn = 6  # 日终阶段已禁止逐项 repair_tent
         self._assert_semantic_error(
-            "repair_tent", {}, "missing_tent_id", "缺少tent_id参数", "repair_tent"
+            "repair_tent", {}, "day_end_batch_required",
+            "Turn 6 日终阶段请使用 /api/day/end 统一提交经营清单，不再支持逐项调用 repair_tent",
+            "repair_tent"
         )
 
     def test_upgrade_facility_missing_name(self):
@@ -1434,9 +1596,10 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
         )
 
     def test_buy_food_package_missing_package_key(self):
-        self.engine.state.turn = 6  # 日终阶段才走 buy_food_package 缺参检查
+        self.engine.state.turn = 6  # 日终阶段已禁止逐项 buy_food_package
         self._assert_semantic_error(
-            "buy_food_package", {}, "missing_package_key", "缺少package_key参数",
+            "buy_food_package", {}, "day_end_batch_required",
+            "Turn 6 日终阶段请使用 /api/day/end 统一提交经营清单，不再支持逐项调用 buy_food_package",
             "buy_food_package",
         )
 
@@ -1469,7 +1632,7 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
         save_mock.assert_not_called()
 
     def test_semantic_errors_do_not_mutate_state(self):
-        self.engine.state.turn = 6  # 日终阶段使 repair/buy_food 走缺参检查
+        self.engine.state.turn = 6  # Turn 6 逐项 repair/buy_food/upgrade 均被拒绝
         balance_before = self.engine.state.balance
         day_before = self.engine.state.day
         turn_before = self.engine.state.turn
@@ -1633,6 +1796,106 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.turn, turn_before)
         self.assertEqual(self.engine.state.balance, balance_before)
         self.assertEqual(self.engine.state.decisions_left, decisions_before)
+
+
+class DayEndApiTests(ApiPersistenceTestCase):
+    """Turn 6 批处理 API 路由：/api/day/end 与 /api/day/start"""
+
+    def _day_end(self, actions=None):
+        """构造 DayEndRequest 并调用 game_api.submit_day_end"""
+        return game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=actions or [])
+        )
+
+    def _make_action(self, action, params=None):
+        return game_api.ActionRequest(action=action, params=params)
+
+    def _reach_turn6(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 1000
+
+    def test_empty_day_end_actions_completes(self):
+        self._reach_turn6()
+        result = self._day_end()
+        self.assertTrue(result["success"])
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertEqual(self.engine.state.day_end_completed, True)
+
+    def test_mixed_success_failure_results_preserved_and_returns_200(self):
+        self._reach_turn6()
+        self.engine.state.food_stock = 0
+        result = self._day_end([
+            self._make_action("buy_food_package", {"package_key": "small"}),
+            self._make_action("repair_tent", {"tent_id": 1}),  # 帐篷未 broken，失败
+            self._make_action("manage_greenery", {"action": "maintain"}),
+        ])
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["results"]), 3)
+        self.assertTrue(result["results"][0]["success"])   # buy_food_package
+        self.assertFalse(result["results"][1]["success"])  # repair_tent 未损坏
+        self.assertTrue(result["results"][2]["success"])   # manage_greenery
+        self.assertTrue(result["day_end_completed"])
+        # 单项业务失败仍保留在 results，整体 200
+
+    def test_non_turn6_rejected(self):
+        self.engine.state.turn = 2
+        result = self._day_end()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_not_available")
+        self.assertFalse(self.engine.state.day_end_completed)
+
+    def test_repeat_submission_rejected(self):
+        self._reach_turn6()
+        first = self._day_end()
+        self.assertTrue(first["success"])
+        second = self._day_end()
+        self.assertFalse(second["success"])
+        self.assertEqual(second["error_code"], "day_end_already_completed")
+
+    def test_start_before_completion_rejected(self):
+        self._reach_turn6()
+        result = game_api.start_next_day()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_not_completed")
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
+
+    def test_start_after_completion_advances(self):
+        self._reach_turn6()
+        self._day_end()
+        result = game_api.start_next_day()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["day"], 2)
+        self.assertEqual(result["turn"], 1)
+        self.assertEqual(self.engine.state.day, 2)
+        self.assertEqual(self.engine.state.turn, 1)
+        self.assertFalse(self.engine.state.day_end_completed)
+
+    def test_save_and_restore_preserves_day_end_pause(self):
+        """提交日终清单后保存，新引擎恢复：day_end_completed 不丢、不能重复提交、可 start_next_day"""
+        self._reach_turn6()
+        self._day_end()
+        self.assertTrue(self.engine.state.day_end_completed)
+
+        restored = self._new_engine_from_db()
+        self.assertEqual(restored.state.day, 1)
+        self.assertEqual(restored.state.turn, 6)
+        self.assertTrue(restored.state.day_end_completed)
+
+        # 恢复后重复提交被拒
+        game_api.engine = restored
+        dup = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[]))
+        self.assertFalse(dup["success"])
+        self.assertEqual(dup["error_code"], "day_end_already_completed")
+
+        # 恢复后可 start_next_day
+        start = game_api.start_next_day()
+        self.assertTrue(start["success"])
+        self.assertEqual(restored.state.day, 2)
+        self.assertEqual(restored.state.turn, 1)
+        self.assertFalse(restored.state.day_end_completed)
 
 
 if __name__ == "__main__":

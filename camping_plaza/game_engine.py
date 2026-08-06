@@ -127,6 +127,9 @@ class GameState:
     # 修复：营业回合结算后产生故障，标记本回合结算已完成
     turn_settled: bool = False
 
+    # 日终批处理完成标记：Turn 6 清单执行后设为 True，开启下一天后重置
+    day_end_completed: bool = False
+
     daily_demand_profile_day: int = 0
     daily_demand_profile: Optional[dict] = None
 
@@ -1593,14 +1596,12 @@ class CampingPlazaEngine:
             self.state.decisions_left = 3
 
             # 推进到下一回合
-            if self.state.turn < 6:
-                self.state.turn += 1
-            else:
-                self._new_day(result)
+            self.state.turn += 1
         else:
-            self._process_day_end(result)
-            self.state.turn_settled = False
-            self._new_day(result)
+            if self.state.day_end_completed:
+                result["events"].append("日终清单已完成，请调用 start_next_day 开启下一天")
+            else:
+                result["events"].append("请先提交日终经营清单（day_end_actions）")
 
         # 在所有结算完成后，重新获取最新状态
         result["day"] = self.state.day
@@ -2304,7 +2305,7 @@ class CampingPlazaEngine:
     # -------------------------------------------------------------------------
 
     def _process_day_end(self, result: dict):
-        """日终管理阶段"""
+        """日终管理阶段提示事件"""
         result["events"].append("=== 日终管理阶段 ===")
         greenery = self.facilities["greenery"]
         greenery_value = round(greenery.greenery_satisfaction, 1)
@@ -2318,9 +2319,112 @@ class CampingPlazaEngine:
                 f"今日绿化尚未维护，进入下一天后将从 {greenery_value:.1f} 降至 {next_day_value:.1f}。"
             )
         result["phase"] = "management"
-        result["next_actions"] = [
-            "upgrade_facility", "manage_greenery", "next_day"
-        ]
+
+    # 允许出现在日终批处理清单中的动作
+    DAY_END_ACTIONS = {
+        "repair_tent",
+        "clean_tents",
+        "manage_greenery",
+        "buy_food_package",
+        "purchase_growth_project",
+    }
+
+    def submit_day_end_actions(self, actions: Optional[list]) -> dict:
+        """日终批处理入口：一次性执行完整经营清单。
+
+        仅 Day N Turn 6 且未完成时可调用；actions 数量不限，空清单合法。
+        严格按提交顺序执行，单项失败记录结果并继续，已成功项不回滚。
+        全部执行后 day_end_completed=True，仍停留在当前 Day/Turn 6。
+        """
+        if self.state.turn != 6:
+            return {
+                "success": False,
+                "error_code": "day_end_not_available",
+                "message": "日终清单只能在 Turn 6 提交",
+            }
+        if self.state.day_end_completed:
+            return {
+                "success": False,
+                "error_code": "day_end_already_completed",
+                "message": "日终清单已执行完成，请开启下一天",
+            }
+
+        actions = [] if actions is None else list(actions)
+        result = {
+            "success": True,
+            "events": [],
+            "results": [],
+        }
+        self._process_day_end(result)
+
+        for action_data in actions:
+            if not isinstance(action_data, dict):
+                result["results"].append({
+                    "action": None,
+                    "success": False,
+                    "error_code": "invalid_action_data",
+                    "message": "动作必须是对象",
+                })
+                continue
+
+            action_name = action_data.get("action")
+            params = action_data.get("params") or {}
+            item_result = {
+                "action": action_name,
+                "params": dict(params),
+            }
+
+            if action_name not in self.DAY_END_ACTIONS:
+                item_result.update({
+                    "success": False,
+                    "error_code": "day_end_action_not_allowed",
+                    "message": f"动作 {action_name} 不允许出现在日终清单",
+                })
+                result["results"].append(item_result)
+                continue
+
+            if action_name == "repair_tent":
+                action_result = self.repair_tent(
+                    params.get("tent_id"), consume_decision=False
+                )
+            elif action_name == "clean_tents":
+                action_result = self.clean_tents(params.get("tent_ids"))
+            elif action_name == "manage_greenery":
+                msg = self.manage_greenery(params.get("action", "maintain"))
+                action_result = {
+                    "success": msg.startswith("绿化已打理"),
+                    "message": msg,
+                }
+            elif action_name == "buy_food_package":
+                action_result = self.buy_food_package(params.get("package_key"))
+            else:  # purchase_growth_project
+                action_result = self.purchase_growth_project(
+                    params.get("project_id")
+                )
+
+            item_result.update(action_result)
+            result["results"].append(item_result)
+
+        self.state.day_end_completed = True
+        result["day_end_completed"] = True
+        return result
+
+    def start_next_day(self) -> dict:
+        """开启下一天：仅日终清单完成后可调用，确定性跨日推进。"""
+        if not self.state.day_end_completed:
+            return {
+                "success": False,
+                "error_code": "day_end_not_completed",
+                "message": "请先完成日终清单",
+            }
+
+        result = {"events": [], "success": False}
+        self._new_day(result)
+        self.state.day_end_completed = False
+        result["success"] = True
+        result["day"] = self.state.day
+        result["turn"] = self.state.turn
+        return result
 
     def manage_greenery(self, action: str) -> str:
         """绿化管理"""

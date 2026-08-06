@@ -1052,7 +1052,8 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(first["turn"], 6)
         engine.state.food_stock = 7
 
-        second = engine.advance_turn()
+        engine.submit_day_end_actions([])
+        second = engine.start_next_day()
 
         self.assertEqual(second["day"], 2)
         self.assertEqual(second["turn"], 1)
@@ -1073,7 +1074,8 @@ class TurnPlanTests(unittest.TestCase):
         self.assertIn(engine._build_opening_food_gift_event(), first["events"])
         self.assertEqual(first["turn"], 6)
 
-        second = engine.advance_turn()
+        engine.submit_day_end_actions([])
+        second = engine.start_next_day()
 
         self.assertEqual(second["day"], 2)
         self.assertEqual(second["turn"], 1)
@@ -3548,6 +3550,169 @@ class BrokenTentCheckinTests(unittest.TestCase):
             engine.state.today_arrival_plan[0]["arrival_status"],
             "arrived",
         )
+
+
+class DayEndBatchTests(unittest.TestCase):
+    """Turn 6 日终批处理入口测试"""
+
+    def test_empty_day_end_actions_completes(self):
+        """空清单可完成日终，仍停在当前 Day/Turn 6"""
+        engine = make_engine()
+        engine.state.turn = 6
+
+        result = engine.submit_day_end_actions([])
+
+        self.assertTrue(result["success"])
+        self.assertTrue(engine.state.day_end_completed)
+        self.assertEqual(engine.state.day, 1)
+        self.assertEqual(engine.state.turn, 6)
+        self.assertIn("=== 日终管理阶段 ===", result["events"])
+
+    def test_multiple_actions_execute_in_order(self):
+        """多动作严格按提交顺序执行"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 1000
+
+        actions = [
+            {"action": "buy_food_package", "params": {"package_key": "small"}},
+            {"action": "buy_food_package", "params": {"package_key": "medium"}},
+        ]
+        result = engine.submit_day_end_actions(actions)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            [r["action"] for r in result["results"]],
+            ["buy_food_package", "buy_food_package"],
+        )
+        self.assertTrue(result["results"][0]["success"])
+        self.assertFalse(result["results"][1]["success"])
+        self.assertEqual(engine.state.last_food_preorder_day, engine.state.day)
+
+    def test_failure_continues_to_next(self):
+        """单项失败记录结果并继续执行后续动作"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 1000
+
+        actions = [
+            {"action": "repair_tent", "params": {"tent_id": 1}},  # 帐篷未损坏，失败
+            {"action": "manage_greenery", "params": {"action": "maintain"}},
+        ]
+        result = engine.submit_day_end_actions(actions)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["results"][0]["success"])
+        self.assertTrue(result["results"][1]["success"])
+        self.assertTrue(engine.state.greenery_processed_today)
+
+    def test_repeat_submission_rejected(self):
+        """重复提交日终清单被拒绝"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.submit_day_end_actions([])
+
+        result = engine.submit_day_end_actions([])
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_already_completed")
+
+    def test_cannot_start_next_day_before_completion(self):
+        """未完成日终清单前不能开启下一天"""
+        engine = make_engine()
+        engine.state.turn = 6
+
+        result = engine.start_next_day()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "day_end_not_completed")
+        self.assertEqual(engine.state.day, 1)
+        self.assertEqual(engine.state.turn, 6)
+
+    def test_completion_stays_on_turn_6(self):
+        """日终清单执行完成后仍停在 Turn 6"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.submit_day_end_actions([])
+
+        self.assertEqual(engine.state.day, 1)
+        self.assertEqual(engine.state.turn, 6)
+
+    def test_advance_turn_no_longer_auto_advances_on_turn_6(self):
+        """advance_turn 在 Turn 6 不再自动跨日"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.submit_day_end_actions([])
+
+        result = engine.advance_turn()
+
+        self.assertEqual(engine.state.day, 1)
+        self.assertEqual(engine.state.turn, 6)
+        self.assertTrue(any("start_next_day" in e for e in result["events"]))
+
+    def test_start_next_day_advances_and_resets(self):
+        """start_next_day 进入下一天并重置日终完成标记"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.submit_day_end_actions([])
+
+        result = engine.start_next_day()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(engine.state.day, 2)
+        self.assertEqual(engine.state.turn, 1)
+        self.assertFalse(engine.state.day_end_completed)
+
+    def test_save_restore_preserves_day_end_completed(self):
+        """存档恢复后日终暂停状态不丢失"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.submit_day_end_actions([])
+        self.assertTrue(engine.state.day_end_completed)
+        engine.save_state()
+
+        engine2 = CampingPlazaEngine(db_path=engine.db_path)
+
+        self.assertEqual(engine2.load_state(), "loaded")
+        self.assertTrue(engine2.state.day_end_completed)
+        self.assertEqual(engine2.state.day, engine.state.day)
+        self.assertEqual(engine2.state.turn, engine.state.turn)
+
+    def test_clean_tents_does_not_consume_decisions(self):
+        """clean_tents 作为日终动作不消耗决策点"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.tents[1].status = "cleaning"
+        engine.state.decisions_left = 3
+
+        result = engine.submit_day_end_actions([
+            {"action": "clean_tents", "params": {"tent_ids": [1]}},
+        ])
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(engine.tents[1].status, "available")
+        self.assertEqual(engine.state.decisions_left, 3)
+
+    def test_unexpected_program_exception_propagates_without_completing(self):
+        """意料之外的程序异常直接抛出，不伪装为业务失败，也不标记日终完成"""
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 1000
+
+        with mock.patch.object(
+            CampingPlazaEngine,
+            "manage_greenery",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                engine.submit_day_end_actions([
+                    {"action": "manage_greenery", "params": {"action": "maintain"}},
+                ])
+
+        self.assertFalse(engine.state.day_end_completed)
+        self.assertEqual(engine.state.day, 1)
+        self.assertEqual(engine.state.turn, 6)
 
 
 if __name__ == "__main__":
