@@ -20,3 +20,11 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Local frontend archive
+camping_plaza/frontend.zip
