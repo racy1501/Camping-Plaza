@@ -100,16 +100,6 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             self._action("clean_tents", {"tent_ids": [1, 2]})
             save_mock.assert_called_once()
 
-    def test_turn6_legacy_upgrade_facility_rejected(self):
-        """Turn 6 旧 upgrade_facility 入口返回 day_end_batch_required"""
-        self.engine.state.turn = 6
-        self.engine.state.balance = 99999
-        with mock.patch.object(self.engine, "save_state") as save_mock:
-            with self.assertRaises(game_api.HTTPException) as ctx:
-                self._action("upgrade_facility", {"facility_name": "dining"})
-        self.assertEqual(ctx.exception.detail["error_code"], "day_end_batch_required")
-        save_mock.assert_not_called()
-
     def test_improve_service_saves(self):
         self.engine.state.turn = 2
         self.engine.state.decisions_left = 3
@@ -398,7 +388,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertEqual(restored.tents[1].status, "available")
         self.assertEqual(restored.tents[3].status, "available")
 
-    def test_upgrade_facility_recovery(self):
+    def test_growth_project_facility_recovery(self):
         """购买餐饮 Lv1 后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
@@ -1550,13 +1540,10 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         with mock.patch.object(self.engine, "save_state") as save_mock:
             with mock.patch.object(
                 self.engine, "purchase_growth_project"
-            ) as purchase_mock, mock.patch.object(
-                self.engine, "upgrade_facility"
-            ) as upgrade_mock:
+            ) as purchase_mock:
                 game_api.mcp_available_actions()
                 save_mock.assert_not_called()
                 purchase_mock.assert_not_called()
-                upgrade_mock.assert_not_called()
 
         self.assertEqual(self.engine.state.balance, balance_before)
         self.assertEqual(self.engine.get_growth_progress(), progress_before)
@@ -1589,11 +1576,16 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
             "repair_tent"
         )
 
-    def test_upgrade_facility_missing_name(self):
-        self._assert_semantic_error(
-            "upgrade_facility", {}, "missing_facility_name", "缺少facility_name参数",
-            "upgrade_facility",
+    def test_removed_upgrade_facility_is_unknown_action(self):
+        with mock.patch.object(self.engine, "save_state") as save_mock:
+            with self.assertRaises(game_api.HTTPException) as ctx:
+                self._action("upgrade_facility", {"facility_name": "dining"})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(
+            ctx.exception.detail,
+            {"error_code": "unknown_action", "message": "未知操作: upgrade_facility"},
         )
+        save_mock.assert_not_called()
 
     def test_buy_food_package_missing_package_key(self):
         self.engine.state.turn = 6  # 日终阶段已禁止逐项 buy_food_package
@@ -1632,13 +1624,12 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
         save_mock.assert_not_called()
 
     def test_semantic_errors_do_not_mutate_state(self):
-        self.engine.state.turn = 6  # Turn 6 逐项 repair/buy_food/upgrade 均被拒绝
+        self.engine.state.turn = 6  # Turn 6 逐项 repair/buy_food 均被拒绝
         balance_before = self.engine.state.balance
         day_before = self.engine.state.day
         turn_before = self.engine.state.turn
         for action, params in [
             ("repair_tent", {}),
-            ("upgrade_facility", {}),
             ("buy_food_package", {}),
             ("purchase_growth_project", {"project_id": ""}),
             ("not_an_action", {}),
