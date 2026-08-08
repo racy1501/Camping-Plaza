@@ -183,9 +183,10 @@ class GreeneryCoreTests(unittest.TestCase):
         greenery.level = 0
         greenery.greenery_satisfaction = 4.0
 
-        result = engine.upgrade_facility("greenery")
+        result = engine.purchase_growth_project("greenery_lv1")
 
         self.assertTrue(result["success"])
+        self.assertEqual(result["project_id"], "greenery_lv1")
         self.assertEqual(greenery.level, 1)
         self.assertEqual(greenery.greenery_satisfaction, 6.0)
         self.assertTrue(engine.state.greenery_processed_today)

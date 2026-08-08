@@ -585,7 +585,6 @@ def do_action(req: ActionRequest):
         "manage_greenery",
         "buy_food_package",
         "purchase_growth_project",
-        "upgrade_facility",
         "new_day",
     }
     if eng.state.turn == 6 and req.action in _TURN6_DAY_END_ONLY:
@@ -607,11 +606,6 @@ def do_action(req: ActionRequest):
         if tent_id is None:
             _raise_action_request_error("missing_tent_id", "缺少tent_id参数")
         result = eng.repair_tent(int(tent_id))
-
-    elif req.action == "upgrade_facility":
-        if not req.params or "facility_name" not in req.params:
-            _raise_action_request_error("missing_facility_name", "缺少facility_name参数")
-        result = eng.upgrade_facility(req.params["facility_name"])
 
     elif req.action == "manage_greenery":
         action = req.params.get("action", "skip") if req.params else "skip"

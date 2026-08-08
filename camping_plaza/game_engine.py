@@ -2512,23 +2512,6 @@ class CampingPlazaEngine:
 
         return {"success": True, "message": f"{tent_id}号帐篷已修好"}
 
-    def upgrade_facility(self, facility_name: str) -> dict:
-        """兼容旧设施升级入口，转发至成长项目购买。"""
-        facility = self.facilities.get(facility_name)
-        if not facility:
-            return {"success": False, "message": "设施不存在"}
-
-        if facility.level >= 2:
-            return {"success": False, "message": "无法升级"}
-
-        project_id = f"{facility_name}_lv{facility.level + 1}"
-        result = self.purchase_growth_project(project_id)
-        if result["success"]:
-            result["message"] = f"{facility_name}升级到Lv.{result['target_level']}"
-        elif "message" not in result:
-            result["message"] = "当前无法升级该设施"
-        return result
-
     def improve_service(self, *, consume_decision: bool = True) -> dict:
         """提升服务"""
         # 修复：已结算回合不得再次执行经营操作
