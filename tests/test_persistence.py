@@ -137,7 +137,6 @@ class FullSaveRestoreTests(PersistenceTestCase):
         engine.state.reserved_tent_day = 4
         engine.state.greenery_processed_today = True
         engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
-        engine.state.turn_settled = True
         engine.state.day_campsite_groups_served = 7
         engine.state.pending_turn_plan = {
             "target_day": 3,
@@ -209,7 +208,6 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(s.reserved_tent_day, 4)
         self.assertTrue(s.greenery_processed_today)
         self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
-        self.assertTrue(s.turn_settled)
         self.assertEqual(s.day_campsite_groups_served, 7)
         self.assertEqual(s.pending_turn_plan, {
             "target_day": 3,

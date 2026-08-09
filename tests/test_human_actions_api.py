@@ -52,7 +52,6 @@ class HumanActionsApiTestCase(unittest.TestCase):
             "balance": self.engine.state.balance,
             "decisions_left": self.engine.state.decisions_left,
             "pending_turn_plan": self.engine.state.pending_turn_plan,
-            "turn_settled": self.engine.state.turn_settled,
             "day_end_completed": self.engine.state.day_end_completed,
             "tent_status": {
                 tid: t.status for tid, t in self.engine.tents.items()

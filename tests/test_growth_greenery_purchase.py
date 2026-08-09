@@ -36,7 +36,6 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
 
     def _open_management_phase(self, *, balance=5000):
         self.engine.state.turn = 6
-        self.engine.state.turn_settled = False
         self.engine.state.balance = balance
 
     def _snapshot(self):
@@ -72,7 +71,6 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self.assertEqual(greenery.greenery_decay_rate, decay_before)
         self.assertEqual(result["completed_growth_nodes"], nodes_before + 1)
         self.assertEqual(self.engine.state.decisions_left, 3)
-        self.assertFalse(self.engine.state.turn_settled)
 
     def test_lv0_greenery_value_four_becomes_six_not_new_cap(self):
         self._open_management_phase()
@@ -145,11 +143,11 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
                 self.engine.state, "successful_greenery_maintenance_count", 4
             )),
             (
-                "settled_turn_6",
+                "day_end_completed",
                 lambda: (
                     self._open_management_phase(),
                     setattr(self.engine.state, "successful_greenery_maintenance_count", 4),
-                    setattr(self.engine.state, "turn_settled", True),
+                    setattr(self.engine.state, "day_end_completed", True),
                 ),
             ),
             (

@@ -684,7 +684,6 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             set(state["greenery"].keys()),
             {"level", "value", "max", "maintained_today", "decay_next_day"},
         )
-        self.assertNotIn("turn_settled", state)
         self.assertNotIn("phase", state)
         self.assertNotIn("available_actions", state)
 

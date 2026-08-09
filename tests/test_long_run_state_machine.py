@@ -305,12 +305,11 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.assertEqual(self.engine.tents[3].status, "available")
         self._check_invariants("multi-broken")
 
-    def test_priority_turn_settled_broken_cleaning(self):
-        """turn_settled 只返回 advance_turn；broken 不再封锁清洁"""
+    def test_plan_submitted_broken_cleaning(self):
+        """已提交计划时只返回 advance_turn；broken 不再封锁清洁"""
         self._disable_breakdowns()
         self._unlock_tents(2, 4)
         self.engine.state.turn = 3
-        self.engine.state.turn_settled = True
         self.engine.tents[2].status = "broken"
         self.engine.tents[4].status = "cleaning"
         self.engine.state.decisions_left = 3
@@ -318,23 +317,7 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.engine.state.today_arrival_plan_day = 1
         self.engine.state.today_arrival_plan = []
 
-        # turn_settled：只返回 advance_turn
-        actions = game_api.mcp_available_actions()["available_actions"]
-        self.assertEqual([a["action"] for a in actions], ["advance_turn"])
-
-        # turn_settled 下清洁受保护（即使 broken 不再封锁）
-        result = self.engine.clean_tents()
-        self.assertFalse(result["success"])
-        self.assertEqual(self.engine.tents[4].status, "cleaning")
-
-        # broken 不再封锁清洁（Phase 2B），清除 turn_settled 后清洁应成功
-        self.engine.state.turn_settled = False
-        result = self.engine.clean_tents()
-        self.assertTrue(result["success"])
-        self.assertEqual(self.engine.tents[4].status, "available")
-
         # 未提交计划时 advance 不推进、不重复结算，cleaning 状态保留
-        self.engine.tents[4].status = "cleaning"
         income_before = dict(self.engine.state.today_income)
         result = game_api.advance_turn()
         self.assertEqual(result["turn"], 3)
@@ -346,10 +329,11 @@ class DeterministicScenarioTests(LongRunTestCase):
             free_actions=[], actions=[],
         ))
         self.assertTrue(plan_result["success"])
+        actions = game_api.mcp_available_actions()["available_actions"]
+        self.assertEqual([a["action"] for a in actions], ["advance_turn"])
         with mock.patch("game_engine.random.random", return_value=0.99):
             result = game_api.advance_turn()
         self.assertEqual(result["turn"], 4)
-        self.assertFalse(self.engine.state.turn_settled)
         self.assertEqual(self.engine.tents[4].status, "cleaning")
 
         # 新回合可完成清洁

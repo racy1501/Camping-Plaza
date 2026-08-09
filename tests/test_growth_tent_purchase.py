@@ -33,7 +33,6 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
     def _open_management_phase(self, *, balance=20000, day=2):
         self.engine.state.turn = 6
-        self.engine.state.turn_settled = False
         self.engine.state.day = day
         self.engine.state.balance = balance
 
@@ -87,11 +86,11 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
         cases.append(("non_turn_6", lambda: None))
 
-        def settled_turn():
+        def day_end_completed():
             self._open_management_phase()
-            self.engine.state.turn_settled = True
+            self.engine.state.day_end_completed = True
 
-        cases.append(("settled_turn", settled_turn))
+        cases.append(("day_end_completed", day_end_completed))
 
         def insufficient_balance():
             self._open_management_phase(balance=599)
@@ -144,7 +143,6 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertGreater(tent.next_breakdown_turn, absolute_turn)
         self.assertEqual(result["completed_growth_nodes"], nodes_before + 1)
         self.assertEqual(self.engine.state.decisions_left, 3)
-        self.assertFalse(self.engine.state.turn_settled)
 
     def test_repeat_purchase_is_atomic_and_does_not_reset_breakdown(self):
         self._open_management_phase()
@@ -270,12 +268,12 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self._assert_snapshot_unchanged(before)
 
         self.engine.state.turn = 6
-        self.engine.state.turn_settled = True
+        self.engine.state.day_end_completed = True
         before = self._snapshot()
         result = self.engine.purchase_growth_project("hot_spring")
         self.assertFalse(result["success"])
-        self.assertIn("turn_already_settled", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
+
 
     def test_breakdown_setup_failure_restores_partial_changes(self):
         self._open_management_phase()

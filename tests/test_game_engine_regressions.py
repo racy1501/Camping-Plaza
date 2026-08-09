@@ -2978,16 +2978,24 @@ class TentCleaningTests(unittest.TestCase):
         self.assertEqual(engine.state.decisions_left, decisions_before - 1)
         self.assertEqual(npc.total_satisfaction, min(100, satisfaction_before + 5))
 
-    def test_clean_tents_blocked_when_turn_settled(self):
-        """turn_settled 为 True 时不能清洁"""
+    def test_clean_tents_blocked_when_day_end_completed(self):
+        """日终清单完成后不能再次清洁帐篷"""
         engine = make_engine()
-        engine.tents[1].status = "cleaning"
-        engine.state.turn_settled = True
+        tent = engine.tents[1]
+        tent.status = "cleaning"
+        balance_before = engine.state.balance
+        decisions_before = engine.state.decisions_left
+        engine.state.day_end_completed = True
 
-        result = engine.clean_tents()
+        result = engine.clean_tents([1])
 
         self.assertFalse(result["success"])
+        self.assertEqual(result["message"], "日终清单已完成，请开启下一天")
+        self.assertEqual(result["cleaned_tent_ids"], [])
+        self.assertEqual(engine.state.balance, balance_before)
+        self.assertEqual(engine.state.decisions_left, decisions_before)
         self.assertEqual(engine.tents[1].status, "cleaning")
+        self.assertTrue(engine.state.day_end_completed)
 
     def test_clean_tents_preserves_other_fields(self):
         """清洁不改变余额、等级、occupied_by 和 next_breakdown_turn"""

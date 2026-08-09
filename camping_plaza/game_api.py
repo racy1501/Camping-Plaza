@@ -190,7 +190,6 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
     turn = eng.state.turn
     balance = eng.state.balance
-    turn_settled = eng.state.turn_settled
     day_end_completed = eng.state.day_end_completed
 
     # Turn 1：迎客准备
@@ -239,7 +238,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         }
 
     # Turn 2~5
-    if turn_settled or plan_submitted:
+    if plan_submitted:
         return {
             "success": True,
             "day": state["day"],
@@ -719,15 +718,6 @@ def mcp_available_actions():
     state = eng.get_full_state()
     actions = []
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
-
-    # 修复：已结算回合只返回 advance_turn
-    if eng.state.turn_settled:
-        return {
-            "available_actions": [{
-                "action": "advance_turn",
-                "description": "本回合已结算，进入下一回合"
-            }]
-        }
 
     # 存在待清洁帐篷时提供批量清洁操作（营业和日终阶段均可）
     cleaning_tent_ids = [

@@ -125,7 +125,6 @@ class GameState:
     greenery_processed_today: bool = False
 
     # 修复：营业回合结算后产生故障，标记本回合结算已完成
-    turn_settled: bool = False
 
     # 日终批处理完成标记：Turn 6 清单执行后设为 True，开启下一天后重置
     day_end_completed: bool = False
@@ -897,8 +896,8 @@ class CampingPlazaEngine:
         }
 
     def buy_food_package(self, package_key: str) -> dict:
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一个回合"}
+        if self.state.day_end_completed:
+            return {"success": False, "message": "日终清单已完成，请开启下一天"}
         if self.state.turn != 6:
             return {"success": False, "message": "食材预购只能在日终管理阶段（Turn 6）进行"}
         if self.state.last_food_preorder_day == self.state.day:
@@ -1240,7 +1239,9 @@ class CampingPlazaEngine:
             name: self._get_valid_growth_facility_level(name)
             for name in ("dining", "entertainment", "greenery")
         }
-        management_phase_open = self.state.turn == 6 and not self.state.turn_settled
+        management_phase_open = (
+            self.state.turn == 6 and not self.state.day_end_completed
+        )
         catalog = []
         for project in self.GROWTH_PROJECT_CATALOG:
             category = project["category"]
@@ -1290,8 +1291,6 @@ class CampingPlazaEngine:
                     unmet_conditions.append("insufficient_balance")
                 if self.state.turn != 6:
                     unmet_conditions.append("turn_6_required")
-                elif self.state.turn_settled:
-                    unmet_conditions.append("turn_already_settled")
 
             catalog.append(
                 {
@@ -2240,10 +2239,10 @@ class CampingPlazaEngine:
         Returns:
             {"success": bool, "message": str, "cleaned_tent_ids": list[int]}
         """
-        if self.state.turn_settled:
+        if self.state.day_end_completed:
             return {
                 "success": False,
-                "message": "本回合已经结算，请进入下一回合",
+                "message": "日终清单已完成，请开启下一天",
                 "cleaned_tent_ids": []
             }
 
@@ -2428,9 +2427,8 @@ class CampingPlazaEngine:
 
     def manage_greenery(self, action: str) -> str:
         """绿化管理"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return "本回合已经结算，请进入下一回合"
+        if self.state.day_end_completed:
+            return "日终清单已完成，请开启下一天"
         # 修复：阶段保护，绿化管理仅限日终管理阶段
         if self.state.turn != 6:
             return "绿化管理只能在日终管理阶段（Turn 6）进行"
@@ -2514,9 +2512,6 @@ class CampingPlazaEngine:
 
     def improve_service(self, *, consume_decision: bool = True) -> dict:
         """提升服务"""
-        # 修复：已结算回合不得再次执行经营操作
-        if self.state.turn_settled:
-            return {"success": False, "message": "本回合已经结算，请进入下一回合"}
         # 修复：阶段保护，提升服务仅限营业回合
         if self.state.turn > 5:
             return {"success": False, "message": "提升服务只能在营业回合（Turn 1-5）进行"}
@@ -2974,8 +2969,6 @@ class CampingPlazaEngine:
         self.state.today_events = []
         self.state.decisions_left = 3
         self.state.pending_turn_plan = None
-        # 修复：营业回合故障阻塞标记重置
-        self.state.turn_settled = False
         self.state.day_campsite_groups_served = 0
         self.state.hot_spring_people_served_today = 0
         # 重置绿化标记

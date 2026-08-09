@@ -39,7 +39,6 @@ class GrowthProjectCatalogTests(unittest.TestCase):
 
     def _open_management_phase(self):
         self.engine.state.turn = 6
-        self.engine.state.turn_settled = False
         self.engine.state.balance = 100000
 
     def test_catalog_has_fixed_twelve_projects_in_order_with_prices(self):
@@ -129,10 +128,10 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.assertTrue(project["operation_requirement_met"])
         self.assertTrue(project["can_purchase_now"])
 
-        self.engine.state.turn_settled = True
+        self.engine.state.day_end_completed = True
         project = self._catalog()["tent_2"]
         self.assertFalse(project["management_phase_open"])
-        self.assertIn("turn_already_settled", project["unmet_conditions"])
+        self.assertFalse(project["can_purchase_now"])
 
     def test_later_tents_require_previous_tent_but_allow_served_or_day_fallback(self):
         self._open_management_phase()
