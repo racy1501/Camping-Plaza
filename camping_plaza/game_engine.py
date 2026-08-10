@@ -38,10 +38,12 @@ class NPCGroup:
     visit_type: str  # "day" | "overnight"
     arrival_turn: int = 0
     location: str = "gate"  # gate, campsite, tent_1-6, dining, entertainment, leaving
+    campsite_slot: Optional[int] = None
     total_satisfaction: int = 60
     has_left: bool = False
     review_left: bool = False
     review_rating: int = 0
+    review_attempted: bool = False
 
     # 隐藏标签
     economic_level: int = 0  # 0-2: 低/中/高
@@ -59,6 +61,9 @@ class NPCGroup:
     paid: bool = False  # 是否已付款
     greenery_entry_bonus_applied: bool = False
     broken_tent_penalty: int = 0
+    had_food_shortage: bool = False
+    had_tent_problem: bool = False
+    received_service_boost: bool = False
 
     # 成长进度账本的幂等标记：同一到访客组只计入一次。
     growth_served_recorded: bool = False
@@ -89,10 +94,12 @@ class GameState:
     day: int = 1
     turn: int = 1  # 1-5 营业回合, 6 日终管理
     balance: int = 1000
-    reputation_rate: float = 60.0
+    day_start_balance: Optional[int] = None
+    previous_day_summary: Optional[dict] = None
     total_reviews: int = 0
     total_rating_sum: int = 0
     pending_reviews: list = field(default_factory=list)
+    review_history: list = field(default_factory=list)
     pending_turn_plan: Optional[dict] = None
 
     today_income: dict = field(default_factory=lambda: {
@@ -103,7 +110,9 @@ class GameState:
         "hot_spring": 0,
     })
     today_events: list = field(default_factory=list)
+    event_history: list = field(default_factory=list)
     decisions_left: int = 3
+    improve_service_uses_today: int = 0
     day_campsite_groups_served: int = 0
     food_stock: int = 0
     last_food_preorder_day: int = 0
@@ -116,10 +125,8 @@ class GameState:
     successful_paid_entertainment_groups: int = 0
     successful_greenery_maintenance_count: int = 0
 
-    # 预定
-    reservation: Optional[dict] = None  # 待处理的预定请求
-    reserved_tent_id: Optional[int] = None  # 已确认并分配帐篷的预定
-    reserved_tent_day: Optional[int] = None  # 预定入住日期
+    # 尚未转换进当天 arrival plan 的成功预约
+    reservations: list[dict] = field(default_factory=list)
 
     # 绿化每日标记
     greenery_processed_today: bool = False
@@ -144,6 +151,7 @@ class CampingPlazaEngine:
     """露营广场游戏引擎"""
 
     DAY_CAMPSITE_CAPACITY = 10
+    EVENT_HISTORY_LIMIT = 100
     DAY_TO_OVERNIGHT_INTENT_PROBABILITY = 0.15
     TENT_PRICES = {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500}
     CAMPSITE_FEE = 70
@@ -305,6 +313,25 @@ class CampingPlazaEngine:
         },
     }
 
+    REVIEW_COMMENT_PHRASES = {
+        "dining": ("饭菜挺不错", "吃得挺满意", "餐饮比预想中舒服"),
+        "paid_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
+        "free_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
+        "hot_spring": ("温泉泡得很舒服", "泡汤体验不错"),
+        "service_boost": ("工作人员挺贴心", "服务很周到"),
+        "greenery": ("营地环境挺舒服", "绿化让人很放松"),
+        "food_shortage": ("吃饭的时候稍微折腾了一下", "餐饮准备还有提升空间"),
+        "tent_problem": ("帐篷出了点状况", "住宿的小问题有点影响体验"),
+        "hot_spring_full": ("想泡温泉的时候没排上", "温泉有点太抢手了"),
+    }
+    REVIEW_GENERIC_COMMENTS = {
+        5: ("很满意，下次还想再来。", "整体体验很好，待得很舒服。"),
+        4: ("整体不错，是一次挺舒服的体验。", "挺喜欢这里的，下次有机会还会来。"),
+        3: ("整体还可以，还有一些提升空间。", "中规中矩，体验还算顺利。"),
+        2: ("这次体验比较一般，希望之后能更完善。", "有些地方不太顺利，还有改进空间。"),
+        1: ("这次体验不太理想。", "整体没有达到预期。"),
+    }
+
     # 快照版本号，结构变更时递增
     SNAPSHOT_VERSION = 1
 
@@ -317,6 +344,7 @@ class CampingPlazaEngine:
         self.facilities: dict[str, Facility] = {}
         self._npc_id_counter = 0
         self._init_game()
+        self.state.day_start_balance = self.state.balance
         # 持久化：仅在明确新游戏时创建快照表；已有数据库先读后写
         if not os.path.exists(self.db_path):
             self._ensure_snapshot_table()
@@ -519,11 +547,22 @@ class CampingPlazaEngine:
     def _calculate_management_quality(self) -> float:
         greenery = self.facilities["greenery"]
         return (
-            self.state.reputation_rate / 100
+            self._get_average_rating_ratio()
             + (self.facilities["dining"].level + 1) / 3
             + (self.facilities["entertainment"].level + 1) / 3
             + greenery.greenery_satisfaction / 10
         ) / 4
+
+    def get_average_rating(self) -> Optional[float]:
+        """返回已结算评价的真实平均星级；尚无评价时返回 None。"""
+        if self.state.total_reviews <= 0:
+            return None
+        return self.state.total_rating_sum / self.state.total_reviews
+
+    def _get_average_rating_ratio(self) -> float:
+        """客流计算使用平均星级比例；无评价时采用 3.0 星基准。"""
+        average_rating = self.get_average_rating()
+        return (average_rating if average_rating is not None else 3.0) / 5
 
     def _calculate_development_degree(self) -> float:
         unlocked_tent_count = sum(1 for tent in self.tents.values() if tent.is_unlocked)
@@ -556,21 +595,10 @@ class CampingPlazaEngine:
         ):
             return self.state.daily_demand_profile
 
-        reservation_request_available = random.random() < 0.30
-        reservation_visit_type = None
-        reservation_group_size = None
-        if reservation_request_available:
-            reservation_visit_type = "day" if random.random() < 0.5 else "overnight"
-            reservation_group_size = random.randint(1, 6)
-
         profile = {
             "natural_day_group_demand": self._calculate_day_guest_demand(),
             "natural_overnight_group_demand": self._calculate_overnight_guest_demand(),
-            "reservation_request_available": reservation_request_available,
-            "reservation_visit_type": reservation_visit_type,
-            "reservation_group_size": reservation_group_size,
-            "reservation_processed": False,
-            "reservation_result": None,
+            "reservations_processed": False,
         }
         self.state.daily_demand_profile = profile
         self.state.daily_demand_profile_day = self.state.day
@@ -607,9 +635,19 @@ class CampingPlazaEngine:
         }
 
     def _find_reservable_overnight_tent(self, group_size: int) -> Optional[Tent]:
+        target_day = self.state.day + 1
+        reserved_tent_ids = {
+            reservation.get("tent_id")
+            for reservation in self.state.reservations
+            if (
+                reservation.get("arrival_day") == target_day
+                and reservation.get("visit_type") == "overnight"
+                and reservation.get("status") == "accepted"
+            )
+        }
         suitable_tents = [
             tent for tent in self._get_unlocked_tents()
-            if tent.capacity >= group_size
+            if tent.capacity >= group_size and tent.id not in reserved_tent_ids
         ]
         if not suitable_tents:
             return None
@@ -646,60 +684,35 @@ class CampingPlazaEngine:
         demand = self._calculate_daily_visitor_demand()
         planned_entries = []
 
-        if (
-            self.state.reservation is not None
-            and self.state.reservation.get("visit_type") == "day"
-            and self.state.reservation.get("status") == "accepted"
-            and self.state.reservation.get("arrival_day") == self.state.day
-        ):
-            reserved_day_guest = NPCGroup(
-                id=self.state.reservation["npc_id"],
-                group_size=self.state.reservation["group_size"],
-                visit_type="day",
-                total_satisfaction=self.state.reservation.get("total_satisfaction", 60),
-                is_reserved=True,
-                paid=self.state.reservation.get("paid", False),
-            )
-            reserved_day_guest.economic_level = self.state.reservation.get("economic_level", 1)
-            reserved_day_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
-            reserved_day_guest.temperament = self.state.reservation.get("temperament", 1)
-            arrival_turn = self._roll_arrival_turn()
-            entry = self._build_arrival_plan_entry(
-                reserved_day_guest,
-                arrival_turn,
-                "reservation",
-            )
-            self._append_planned_actions(entry)
-            planned_entries.append(entry)
-            self.state.reservation = None
+        remaining_reservations = []
+        for reservation in self.state.reservations:
+            if (
+                reservation.get("status") != "accepted"
+                or reservation.get("arrival_day") != self.state.day
+            ):
+                remaining_reservations.append(reservation)
+                continue
 
-        if (
-            self.state.reservation is not None
-            and self.state.reservation.get("visit_type") == "overnight"
-            and self.state.reservation.get("status") == "accepted"
-            and self.state.reservation.get("arrival_day") == self.state.day
-        ):
             reserved_guest = NPCGroup(
-                id=self.state.reservation["npc_id"],
-                group_size=self.state.reservation["group_size"],
-                visit_type="overnight",
-                total_satisfaction=self.state.reservation.get("total_satisfaction", 60),
+                id=reservation["npc_id"],
+                group_size=reservation["group_size"],
+                visit_type=reservation["visit_type"],
+                total_satisfaction=reservation.get("total_satisfaction", 60),
                 is_reserved=True,
-                paid=self.state.reservation.get("paid", False),
+                paid=reservation.get("paid", False),
             )
-            reserved_guest.economic_level = self.state.reservation.get("economic_level", 1)
-            reserved_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
-            reserved_guest.temperament = self.state.reservation.get("temperament", 1)
-            arrival_turn = self._roll_arrival_turn()
+            reserved_guest.economic_level = reservation.get("economic_level", 1)
+            reserved_guest.spending_habit = reservation.get("spending_habit", 1)
+            reserved_guest.temperament = reservation.get("temperament", 1)
             entry = self._build_arrival_plan_entry(
                 reserved_guest,
-                arrival_turn,
+                self._roll_arrival_turn(),
                 "reservation",
-                tent_id=self.state.reservation.get("tent_id"),
+                tent_id=reservation.get("tent_id"),
             )
             self._append_planned_actions(entry)
             planned_entries.append(entry)
-            self.state.reservation = None
+        self.state.reservations = remaining_reservations
 
         natural_guests = [
             self._create_day_guest()
@@ -716,39 +729,6 @@ class CampingPlazaEngine:
             entry = self._build_arrival_plan_entry(guest, arrival_turn, source)
             self._append_planned_actions(entry)
             planned_entries.append(entry)
-
-        if (
-            self.state.reservation is not None
-            and self.state.reserved_tent_id is not None
-            and self.state.reserved_tent_day == self.state.day
-        ):
-            reservation_npc_id = self.state.reservation.setdefault("npc_id", self._next_npc_id())
-            reserved_guest = NPCGroup(
-                id=reservation_npc_id,
-                group_size=self.state.reservation["group_size"],
-                visit_type="overnight",
-                total_satisfaction=60,
-                is_reserved=True,
-                paid=True,
-            )
-            reserved_guest.economic_level = self.state.reservation.get("economic_level", 1)
-            reserved_guest.spending_habit = self.state.reservation.get("spending_habit", 1)
-            reserved_guest.temperament = self.state.reservation.get("temperament", 1)
-            arrival_turn = self._roll_arrival_turn()
-            entry = self._build_arrival_plan_entry(
-                reserved_guest,
-                arrival_turn,
-                "reservation",
-                tent_id=self.state.reserved_tent_id,
-            )
-            self._append_planned_actions(entry)
-            planned_entries.append(entry)
-            tent = self.tents[self.state.reserved_tent_id]
-            if self._is_tent_unlocked(tent) and tent.status == "available":
-                tent.status = "reserved"
-            self.state.reservation = None
-            self.state.reserved_tent_id = None
-            self.state.reserved_tent_day = None
 
         self.state.today_arrival_plan = planned_entries
         self.state.today_arrival_plan_day = self.state.day
@@ -836,10 +816,22 @@ class CampingPlazaEngine:
             normalized_free_actions.append(normalized)
 
         normalized_actions = []
+        seen_actions = set()
+        seen_repair_tent_ids = set()
         for action_data in actions:
             ok, normalized, message = self._validate_turn_plan_action(action_data, "decision")
             if not ok:
                 return {"success": False, "message": message}
+            action_name = normalized["action"]
+            if action_name in {"improve_service", "buy_food_package"}:
+                if action_name in seen_actions:
+                    return {"success": False, "message": "duplicate decision action"}
+                seen_actions.add(action_name)
+            elif action_name == "repair_tent":
+                tent_id = normalized["tent_id"]
+                if tent_id in seen_repair_tent_ids:
+                    return {"success": False, "message": "duplicate repair target"}
+                seen_repair_tent_ids.add(tent_id)
             normalized_actions.append(normalized)
 
         target_day, target_turn = self._current_turn_plan_target()
@@ -1502,11 +1494,6 @@ class CampingPlazaEngine:
 
     def _is_today_reserved_tent(self, tent_id: int) -> bool:
         """判断帐篷是否为今日预定帐篷"""
-        if (
-            self.state.reserved_tent_id == tent_id
-            and self.state.reserved_tent_day == self.state.day
-        ):
-            return True
         for entry in self.state.today_arrival_plan:
             if entry.get("planned_day") != self.state.day:
                 continue
@@ -1559,12 +1546,249 @@ class CampingPlazaEngine:
     # 回合推进
     # -------------------------------------------------------------------------
 
+    def _append_event_history(self, day: int, turn: int, text: str, kind: str) -> None:
+        """写入近期经营历史，保留最近 EVENT_HISTORY_LIMIT 条。"""
+        if not isinstance(text, str) or not text.strip():
+            return
+        entry = {
+            "day": int(day),
+            "turn": int(turn),
+            "text": text.strip(),
+            "kind": kind,
+        }
+        self.state.event_history.append(entry)
+        if len(self.state.event_history) > self.EVENT_HISTORY_LIMIT:
+            del self.state.event_history[:-self.EVENT_HISTORY_LIMIT]
+
+    def _append_result_events_to_history(self, day: int, turn: int, events: list) -> None:
+        """过滤流程提示后，统一记录公共结果中的正式世界事件。"""
+        ignored = {
+            "stale turn plan discarded",
+            "请先提交日终经营清单（day_end_actions）",
+            "日终清单已完成，请调用 start_next_day 开启下一天",
+            "=== 日终管理阶段 ===",
+        }
+        for text in events:
+            if text not in ignored:
+                self._append_event_history(day, turn, text, "world")
+
+    def _snapshot_turn_business_state(self) -> dict:
+        """保存营业回合摘要所需的轻量执行前状态。"""
+        action_statuses = {}
+        arrival_statuses = {}
+        for entry in self.state.today_arrival_plan:
+            npc_id = entry.get("npc_id")
+            arrival_statuses[npc_id] = entry.get("arrival_status")
+            for index, action in enumerate(entry.get("planned_actions", [])):
+                action_statuses[(npc_id, index)] = action.get("status")
+
+        return {
+            "income": dict(self.state.today_income),
+            "npcs": {
+                npc.id: {
+                    "visit_type": npc.visit_type,
+                    "has_left": npc.has_left,
+                    "review_left": npc.review_left,
+                }
+                for npc in self.npc_pool
+            },
+            "arrival_statuses": arrival_statuses,
+            "action_statuses": action_statuses,
+            "pending_review_ids": {
+                review.get("npc_id")
+                for review in self.state.pending_reviews
+                if isinstance(review, dict)
+            },
+        }
+
+    @staticmethod
+    def _tent_id_from_location(location: str) -> Optional[int]:
+        if not isinstance(location, str) or not location.startswith("tent_"):
+            return None
+        try:
+            return int(location.split("_", 1)[1])
+        except ValueError:
+            return None
+
+    def _append_turn_business_summaries(
+        self, snapshot: dict, day: int, turn: int
+    ) -> None:
+        """根据营业回合前后正式状态写入按同类事件汇总的日志。"""
+        income_before = snapshot["income"]
+        income_delta = {
+            key: self.state.today_income.get(key, 0) - income_before.get(key, 0)
+            for key in self.state.today_income
+        }
+        current_npcs = {npc.id: npc for npc in self.npc_pool}
+        current_entries = {
+            entry.get("npc_id"): entry
+            for entry in self.state.today_arrival_plan
+        }
+
+        newly_arrived_entries = [
+            entry
+            for npc_id, entry in current_entries.items()
+            if (
+                snapshot["arrival_statuses"].get(npc_id) != "arrived"
+                and entry.get("arrival_status") == "arrived"
+            )
+        ]
+
+        campsite_slots = sorted(
+            npc.campsite_slot
+            for entry in newly_arrived_entries
+            if entry.get("visit_type") == "day"
+            for npc in [current_npcs.get(entry.get("npc_id"))]
+            if npc is not None
+            and isinstance(npc.campsite_slot, int)
+            and 1 <= npc.campsite_slot <= self.DAY_CAMPSITE_CAPACITY
+        )
+        if campsite_slots:
+            count = len(campsite_slots)
+            slot_text = "、".join(f"{slot}号" for slot in campsite_slots)
+            income = income_delta.get("campsite", 0)
+            prefix = "共" if count > 1 else ""
+            self._append_event_history(
+                day,
+                turn,
+                f"{count}组客人到达{slot_text}营位，{prefix}收入{income}金币。",
+                "world",
+            )
+
+        converted_npcs = [
+            npc
+            for npc_id, before in snapshot["npcs"].items()
+            if before["visit_type"] == "day"
+            and not before["has_left"]
+            for npc in [current_npcs.get(npc_id)]
+            if npc is not None
+            and npc.visit_type == "overnight"
+            and self._tent_id_from_location(npc.location) is not None
+        ]
+        converted_tent_ids = sorted(
+            self._tent_id_from_location(npc.location) for npc in converted_npcs
+        )
+
+        overnight_arrival_entries = [
+            entry
+            for entry in newly_arrived_entries
+            if entry.get("visit_type") == "overnight"
+        ]
+        overnight_tent_ids = sorted(
+            tent_id
+            for entry in overnight_arrival_entries
+            for tent_id in [
+                self._tent_id_from_location(
+                    getattr(current_npcs.get(entry.get("npc_id")), "location", "")
+                )
+            ]
+            if tent_id is not None
+        )
+
+        accommodation_delta = income_delta.get("accommodation", 0)
+        converted_income = sum(
+            self.TENT_PRICES[tent_id] for tent_id in converted_tent_ids
+        )
+        overnight_income = sum(
+            self.TENT_PRICES[tent_id]
+            for entry in overnight_arrival_entries
+            if not entry.get("paid", False)
+            for tent_id in [
+                self._tent_id_from_location(
+                    getattr(current_npcs.get(entry.get("npc_id")), "location", "")
+                )
+            ]
+            if tent_id is not None
+        )
+        if overnight_tent_ids:
+            count = len(overnight_tent_ids)
+            tent_text = "、".join(f"{tent_id}号" for tent_id in overnight_tent_ids)
+            income = (
+                accommodation_delta
+                if not converted_tent_ids
+                else overnight_income
+            )
+            prefix = "共" if count > 1 else ""
+            self._append_event_history(
+                day,
+                turn,
+                f"{count}组客人入住{tent_text}帐篷，{prefix}收入{income}金币。",
+                "world",
+            )
+        if converted_tent_ids:
+            count = len(converted_tent_ids)
+            tent_text = "、".join(f"{tent_id}号" for tent_id in converted_tent_ids)
+            income = (
+                accommodation_delta
+                if not overnight_tent_ids
+                else converted_income
+            )
+            prefix = "共" if count > 1 else ""
+            self._append_event_history(
+                day,
+                turn,
+                f"{count}组客人选择留宿，入住{tent_text}帐篷，{prefix}新增住宿收入{income}金币。",
+                "world",
+            )
+
+        completed_actions = []
+        for entry in self.state.today_arrival_plan:
+            npc_id = entry.get("npc_id")
+            for index, action in enumerate(entry.get("planned_actions", [])):
+                if (
+                    snapshot["action_statuses"].get((npc_id, index)) != "completed"
+                    and action.get("status") == "completed"
+                ):
+                    completed_actions.append(action.get("action"))
+
+        summary_definitions = (
+            ("dining", "dining", "组客人完成用餐", "dining"),
+            ("paid_entertainment", "entertainment", "组客人参与收费娱乐", "entertainment"),
+            ("hot_spring", "hot_spring", "组客人使用温泉", "hot_spring"),
+        )
+        for action_name, income_key, label, _kind in summary_definitions:
+            count = completed_actions.count(action_name)
+            if count:
+                income = income_delta.get(income_key, 0)
+                self._append_event_history(
+                    day, turn, f"{count}{label}，共收入{income}金币。", "world"
+                )
+
+        departed_ids = [
+            npc_id
+            for npc_id, before in snapshot["npcs"].items()
+            if not before["has_left"]
+            and (
+                npc_id not in current_npcs
+                or current_npcs[npc_id].has_left
+            )
+        ]
+        if departed_ids:
+            reviewed_ids = {
+                review.get("npc_id")
+                for review in self.state.pending_reviews
+                if isinstance(review, dict)
+                and review.get("npc_id") not in snapshot["pending_review_ids"]
+            }
+            reviewed_count = len(set(departed_ids) & reviewed_ids)
+            text = f"{len(departed_ids)}组客人离场"
+            if reviewed_count:
+                text += f"，其中{reviewed_count}组留下评价"
+            self._append_event_history(day, turn, text + "。", "world")
+
     def advance_turn(self) -> dict:
         """推进一个回合，返回结算后的真实状态"""
+        executed_day = self.state.day
+        executed_turn = self.state.turn
         result = {
             "events": [],
             "next_actions": []
         }
+        business_snapshot = (
+            self._snapshot_turn_business_state()
+            if self.state.turn <= 5
+            else None
+        )
 
         # 修复：将已有 today_events 加入本次事件并清空，避免重复展示
         result["events"].extend(self.state.today_events)
@@ -1576,7 +1800,7 @@ class CampingPlazaEngine:
                 result["turn"] = self.state.turn
                 result["income"] = dict(self.state.today_income)
                 result["balance"] = self.state.balance
-                result["reputation"] = self.state.reputation_rate
+                result["average_rating"] = self.get_average_rating()
                 result["tents"] = self._get_tents_summary()
                 result["npcs"] = self._get_npcs_summary()
                 return result
@@ -1591,6 +1815,12 @@ class CampingPlazaEngine:
                 self._process_day_to_overnight(result)
             self._handle_breakdowns(result)
             if self.state.turn == 5:
+                for npc in self.npc_pool:
+                    if npc.has_left or npc.visit_type != "overnight":
+                        continue
+                    tent = self._find_occupied_tent_for_npc(npc.id)
+                    if tent is not None:
+                        npc.location = f"tent_{tent.id}"
                 self.state.food_stock = 0
             self.state.decisions_left = 3
 
@@ -1607,9 +1837,23 @@ class CampingPlazaEngine:
         result["turn"] = self.state.turn
         result["income"] = dict(self.state.today_income)
         result["balance"] = self.state.balance
-        result["reputation"] = self.state.reputation_rate
+        result["average_rating"] = self.get_average_rating()
         result["tents"] = self._get_tents_summary()
         result["npcs"] = self._get_npcs_summary()
+
+        for action_group in result.get("plan_execution", {}).values():
+            for action_result in action_group:
+                if action_result.get("success"):
+                    self._append_event_history(
+                        executed_day,
+                        executed_turn,
+                        action_result.get("message", ""),
+                    "action",
+                )
+        if business_snapshot is not None:
+            self._append_turn_business_summaries(
+                business_snapshot, executed_day, executed_turn
+            )
 
         return result
 
@@ -1623,19 +1867,15 @@ class CampingPlazaEngine:
         elif turn == 2:
             self._process_checkout_all(result)
             self._execute_pending_turn_plan(result)
-            self._assign_reserved_tent_for_today()
-            self._process_reservations(result)  # 修复 #1：预定客尝试入住
+            self._assign_reserved_tents_for_today()
             self._process_checkin(result)
 
         elif turn == 3:
             self._execute_pending_turn_plan(result)
-            # 修复 #1：Turn 3继续尝试预定客入住
-            self._process_reservations(result)
             self._process_checkin(result)
 
         elif turn == 4:
             self._execute_pending_turn_plan(result)
-            self._process_reservations(result)  # 修复 #1：预定客Turn 4继续重试入住
             self._process_checkin(result)
 
         elif turn == 5:
@@ -1711,8 +1951,6 @@ class CampingPlazaEngine:
             self.state.balance += income
             self.state.today_income["accommodation"] += income
 
-        satisfaction_gain = 10
-        npc.total_satisfaction = min(100, npc.total_satisfaction + satisfaction_gain)
         self._apply_greenery_entry_bonus_once(npc)
 
         if was_broken:
@@ -1784,6 +2022,7 @@ class CampingPlazaEngine:
                 if current_stock < required_portions:
                     action["status"] = "waiting_for_restock"
                     action["result"] = "insufficient_food"
+                    npc.had_food_shortage = True
                     reaction = self._get_temperament_service_reaction(
                         npc, "insufficient_food"
                     )
@@ -2058,70 +2297,32 @@ class CampingPlazaEngine:
     # 预定系统（修复 #1 #2 #3）
     # -------------------------------------------------------------------------
 
-    def _assign_reserved_tent_for_today(self):
-        """新一天开始时，为确认的预定分配帐篷"""
-        if (self.state.reserved_tent_id is not None
-                and self.state.reserved_tent_day == self.state.day):
-            tent = self.tents[self.state.reserved_tent_id]
+    def _assign_reserved_tents_for_today(self):
+        """将今日 arrival plan 中尚未到店的预约帐篷标记为 reserved。"""
+        for entry in self.state.today_arrival_plan:
+            if (
+                entry.get("planned_day") != self.state.day
+                or entry.get("source") != "reservation"
+                or entry.get("visit_type") != "overnight"
+                or entry.get("arrival_status") != "pending"
+            ):
+                continue
+            tent_id = entry.get("tent_id")
+            if tent_id not in self.tents:
+                continue
+            tent = self.tents[tent_id]
             if not self._is_tent_unlocked(tent):
-                return
+                continue
             if tent.status == "available":
                 tent.status = "reserved"
             elif tent.status == "cleaning":
                 pass  # 等清洁完自动变 reserved
 
-    def _process_reservations(self, result: dict):
-        """预定客按今日 arrival plan 到达入住。"""
-        for plan_entry in self.state.today_arrival_plan:
-            if plan_entry.get("planned_day") != self.state.day:
-                continue
-            if plan_entry.get("source") != "reservation":
-                continue
-            if plan_entry.get("visit_type") == "overnight":
-                continue
-            if plan_entry.get("arrival_status") != "pending":
-                continue
-            if plan_entry.get("arrival_turn", 0) > self.state.turn:
-                continue
-
-            tent_id = plan_entry.get("tent_id")
-            if tent_id is None or tent_id not in self.tents:
-                continue
-            tent = self.tents[tent_id]
-            if not self._is_tent_unlocked(tent):
-                continue
-            if tent.status not in ["available", "reserved"]:
-                continue
-
-            existing_reserved_npc = None
-            for npc in self.npc_pool:
-                if npc.is_reserved and npc.location == f"tent_{tent_id}":
-                    existing_reserved_npc = npc
-                    break
-
-            if existing_reserved_npc is not None:
-                plan_entry["arrival_status"] = "arrived"
-                continue
-
-            guest = NPCGroup(
-                id=plan_entry["npc_id"],
-                group_size=plan_entry["group_size"],
-                visit_type="overnight",
-                total_satisfaction=plan_entry["total_satisfaction"],
-                is_reserved=True,
-                paid=True
-            )
-            guest.economic_level = plan_entry["economic_level"]
-            guest.spending_habit = plan_entry["spending_habit"]
-            guest.temperament = plan_entry["temperament"]
-            self._checkin_npc(guest, tent_id, result, charge=False)
-            result["events"].append(f"预定客人到达，入住{tent_id}号帐篷")
-            plan_entry["arrival_status"] = "arrived"
-
     def _leave_day_guest(self, npc: NPCGroup, result: dict):
         """日间游客离场并触发评价。"""
         npc.has_left = True
         npc.location = "leaving"
+        npc.campsite_slot = None
         self._try_leave_review(npc, result)
 
     def _process_day_to_overnight(self, result: dict):
@@ -2161,6 +2362,7 @@ class CampingPlazaEngine:
             tent.occupied_by = guest.id
             guest.location = f"tent_{tent_id}"
             guest.visit_type = "overnight"
+            guest.campsite_slot = None
             guest.checkout_turn = 1
             if was_broken:
                 self._apply_broken_penalty(guest)
@@ -2349,11 +2551,25 @@ class CampingPlazaEngine:
             }
 
         actions = [] if actions is None else list(actions)
+        food_preorder_count = sum(
+            1
+            for action_data in actions
+            if isinstance(action_data, dict)
+            and action_data.get("action") == "buy_food_package"
+        )
+        if food_preorder_count > 1:
+            return {
+                "success": False,
+                "error_code": "duplicate_food_preorder",
+                "message": "日终清单中最多只能选择一个食材包",
+            }
         result = {
             "success": True,
             "events": [],
             "results": [],
         }
+        executed_day = self.state.day
+        executed_turn = self.state.turn
         self._process_day_end(result)
 
         for action_data in actions:
@@ -2382,6 +2598,7 @@ class CampingPlazaEngine:
                 result["results"].append(item_result)
                 continue
 
+            balance_before = self.state.balance
             if action_name == "repair_tent":
                 action_result = self.repair_tent(
                     params.get("tent_id"), consume_decision=False
@@ -2403,9 +2620,20 @@ class CampingPlazaEngine:
 
             item_result.update(action_result)
             result["results"].append(item_result)
+            if item_result.get("success"):
+                history_text = item_result.get("message", "")
+                balance_change = self.state.balance - balance_before
+                if balance_change:
+                    history_text = f"{history_text}，金币 {balance_change:+d}"
+                self._append_event_history(
+                    executed_day, executed_turn, history_text, "action"
+                )
 
         self.state.day_end_completed = True
         result["day_end_completed"] = True
+        self._append_result_events_to_history(
+            executed_day, executed_turn, result["events"]
+        )
         return result
 
     def start_next_day(self) -> dict:
@@ -2420,6 +2648,12 @@ class CampingPlazaEngine:
         result = {"events": [], "success": False}
         self._new_day(result)
         self.state.day_end_completed = False
+        self._append_result_events_to_history(
+            self.state.day, self.state.turn, result["events"]
+        )
+        self._append_result_events_to_history(
+            self.state.day, self.state.turn, self.state.today_events
+        )
         result["success"] = True
         result["day"] = self.state.day
         result["turn"] = self.state.turn
@@ -2466,6 +2700,7 @@ class CampingPlazaEngine:
         if actual > 0:
             npc.total_satisfaction -= actual
             npc.broken_tent_penalty = actual
+            npc.had_tent_problem = True
 
     def _restore_broken_penalty(self, npc: Optional[NPCGroup]) -> None:
         """维修成功后恢复已记录的 broken 临时扣分并清零。"""
@@ -2515,15 +2750,19 @@ class CampingPlazaEngine:
         # 修复：阶段保护，提升服务仅限营业回合
         if self.state.turn > 5:
             return {"success": False, "message": "提升服务只能在营业回合（Turn 1-5）进行"}
+        if self.state.improve_service_uses_today >= 2:
+            return {"success": False, "message": "今日提升服务次数已达到上限"}
         if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
 
         if consume_decision:
             self.state.decisions_left -= 1
+        self.state.improve_service_uses_today += 1
         affected = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.3:
                 npc.total_satisfaction = min(100, npc.total_satisfaction + 5)
+                npc.received_service_boost = True
                 affected.append(npc.id)
 
         return {"success": True, "message": f"服务提升，{len(affected)}组客人满意度+5"}
@@ -2558,15 +2797,6 @@ class CampingPlazaEngine:
             and entry.get("arrival_status") == "pending"
             and entry.get("paid") is True
         }
-        reservation = self.state.reservation
-        if (
-            reservation is not None
-            and reservation.get("visit_type") == "day"
-            and reservation.get("status") == "accepted"
-            and reservation.get("arrival_day") == self.state.day
-            and reservation.get("paid") is True
-        ):
-            pending_ids.add(reservation.get("npc_id"))
         return len(pending_ids)
 
     def get_day_campsite_remaining(self) -> int:
@@ -2578,12 +2808,127 @@ class CampingPlazaEngine:
             - self._get_pending_day_reservation_count(),
         )
 
+    def _assign_campsite_slot(self, npc: NPCGroup) -> Optional[int]:
+        """为成功入场的日间客分配本次到访固定的地图展示营位。"""
+        if isinstance(npc.campsite_slot, int) and 1 <= npc.campsite_slot <= self.DAY_CAMPSITE_CAPACITY:
+            return npc.campsite_slot
+
+        occupied_slots = {
+            other.campsite_slot
+            for other in self.npc_pool
+            if (
+                other.visit_type == "day"
+                and not other.has_left
+                and isinstance(other.campsite_slot, int)
+                and 1 <= other.campsite_slot <= self.DAY_CAMPSITE_CAPACITY
+            )
+        }
+        available_slots = [
+            slot
+            for slot in range(1, self.DAY_CAMPSITE_CAPACITY + 1)
+            if slot not in occupied_slots
+        ]
+        if not available_slots:
+            return None
+        npc.campsite_slot = random.choice(available_slots)
+        return npc.campsite_slot
+
     # -------------------------------------------------------------------------
     # 评价系统
     # -------------------------------------------------------------------------
 
+    def _get_review_comment_candidates(self, npc: NPCGroup) -> tuple[list[str], list[str]]:
+        """只从该客组本次已经真实发生的经历中收集可评论事项。"""
+        positive = []
+        negative = []
+
+        def add_unique(target: list[str], tag: str) -> None:
+            if tag not in target:
+                target.append(tag)
+
+        entry = self._find_arrival_plan_entry(npc_id=npc.id)
+        if entry is not None:
+            for action in entry.get("planned_actions", []):
+                action_name = action.get("action")
+                if action.get("status") == "completed":
+                    tag = {
+                        "dining": "dining",
+                        "paid_entertainment": "paid_entertainment",
+                        "free_entertainment": "free_entertainment",
+                        "hot_spring": "hot_spring",
+                    }.get(action_name)
+                    if tag is not None:
+                        add_unique(positive, tag)
+                if (
+                    action_name == "hot_spring"
+                    and action.get("result") == "capacity_full"
+                ):
+                    add_unique(negative, "hot_spring_full")
+
+        if npc.received_service_boost:
+            add_unique(positive, "service_boost")
+        if npc.greenery_entry_bonus_applied:
+            add_unique(positive, "greenery")
+        if npc.had_food_shortage:
+            add_unique(negative, "food_shortage")
+        if npc.had_tent_problem:
+            add_unique(negative, "tent_problem")
+        return positive, negative
+
+    @staticmethod
+    def _sample_review_comment_tags(tags: list[str]) -> list[str]:
+        if not tags:
+            return []
+        count = 1 if len(tags) == 1 else random.choice((1, 2))
+        return random.sample(tags, count)
+
+    def _select_review_comment_tags(
+        self, positive: list[str], negative: list[str], rating: int
+    ) -> list[str]:
+        """按星级从真实经历中选 1 至 2 个评论主题。"""
+        if rating == 5:
+            return self._sample_review_comment_tags(positive) if positive else []
+        if rating == 4:
+            if positive and negative and random.choice((False, False, True)):
+                return [random.choice(positive), random.choice(negative)]
+            return self._sample_review_comment_tags(positive or negative)
+        if rating == 3:
+            if positive and negative:
+                return [random.choice(positive), random.choice(negative)]
+            return self._sample_review_comment_tags(positive or negative)
+        return self._sample_review_comment_tags(negative) if negative else []
+
+    def _build_review_comment(self, npc: NPCGroup, rating: int) -> str:
+        positive, negative = self._get_review_comment_candidates(npc)
+        tags = self._select_review_comment_tags(positive, negative, rating)
+        if not tags:
+            return random.choice(self.REVIEW_GENERIC_COMMENTS[rating])
+
+        phrases = [random.choice(self.REVIEW_COMMENT_PHRASES[tag]) for tag in tags]
+        tag_types = ["positive" if tag in positive else "negative" for tag in tags]
+        if len(phrases) == 1:
+            if tag_types[0] == "positive":
+                ending = "这次很满意。" if rating == 5 else "整体感觉不错。" if rating == 4 else "整体还算可以。"
+            else:
+                ending = "影响了这次体验。" if rating <= 2 else "有点可惜。"
+            return f"{phrases[0]}，{ending}"
+
+        if tag_types[0] == "negative" and tag_types[1] == "positive":
+            phrases.reverse()
+            tag_types.reverse()
+        if tag_types == ["positive", "positive"]:
+            ending = "体验很满意。" if rating == 5 else "整体不错。"
+            return f"{phrases[0]}，{phrases[1]}，{ending}"
+        if tag_types == ["positive", "negative"]:
+            return f"{phrases[0]}，就是{phrases[1]}。"
+        return f"{phrases[0]}，{phrases[1]}，有点可惜。"
+
     def _try_leave_review(self, npc: NPCGroup, result: dict):
         """尝试留评价，并延迟到次日晨间结算。"""
+        if npc.review_attempted:
+            return
+
+        npc.review_attempted = True
         if random.random() < 0.5:
             rating = self._calculate_rating(npc.total_satisfaction)
             npc.review_rating = rating
@@ -2594,6 +2939,7 @@ class CampingPlazaEngine:
                 "npc_id": npc.id,
                 "visit_type": npc.visit_type,
                 "group_size": npc.group_size,
+                "comment": self._build_review_comment(npc, rating),
             })
             result["events"].append("有客人离场后留下评价，将在次日晨间结算")
 
@@ -2611,6 +2957,10 @@ class CampingPlazaEngine:
             rating = int(review["rating"])
             self._apply_review_rating(rating)
             ratings.append(rating)
+            self.state.review_history.append(dict(review))
+
+        if len(self.state.review_history) > self.EVENT_HISTORY_LIMIT:
+            del self.state.review_history[:-self.EVENT_HISTORY_LIMIT]
 
         self.state.pending_reviews = [
             review for review in self.state.pending_reviews
@@ -2624,15 +2974,6 @@ class CampingPlazaEngine:
     def _apply_review_rating(self, rating: int):
         self.state.total_reviews += 1
         self.state.total_rating_sum += rating
-
-        if self.state.total_reviews <= 10:
-            self.state.reputation_rate = (
-                self.state.total_rating_sum / (self.state.total_reviews * 5) * 100
-            )
-        else:
-            self.state.reputation_rate = (
-                self.state.reputation_rate * 0.9 + rating * 20 * 0.1
-            )
 
     def _calculate_rating(self, satisfaction: int) -> int:
         if satisfaction >= 90:
@@ -2823,8 +3164,6 @@ class CampingPlazaEngine:
 
                 if existing_reserved_npc is not None:
                     entry["arrival_status"] = "arrived"
-                    self.state.reserved_tent_id = None
-                    self.state.reserved_tent_day = None
                     continue
 
                 if tent.status not in ["available", "reserved", "broken"]:
@@ -2845,8 +3184,6 @@ class CampingPlazaEngine:
                 guest.temperament = entry["temperament"]
                 self._checkin_npc(guest, tent_id, result, charge=False)
                 entry["arrival_status"] = "arrived"
-                self.state.reserved_tent_id = None
-                self.state.reserved_tent_day = None
                 continue
 
             if entry.get("visit_type") == "day":
@@ -2866,6 +3203,10 @@ class CampingPlazaEngine:
                 guest.economic_level = entry["economic_level"]
                 guest.spending_habit = entry["spending_habit"]
                 guest.temperament = entry["temperament"]
+                if self._assign_campsite_slot(guest) is None:
+                    entry["arrival_status"] = "turned_away_full"
+                    result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
+                    continue
                 guest.location = "campsite"
                 guest.arrival_turn = self.state.turn
                 self._apply_greenery_entry_bonus_once(guest)
@@ -2941,6 +3282,29 @@ class CampingPlazaEngine:
 
     def _new_day(self, result: Optional[dict] = None):
         """新的一天。修复 #5：绿化衰减逻辑"""
+        income_total = sum(self.state.today_income.values())
+        expense_total = (
+            self.state.day_start_balance
+            + income_total
+            - self.state.balance
+        )
+        self.state.previous_day_summary = {
+            "day": self.state.day,
+            "income_total": income_total,
+            "expense_total": expense_total,
+            "net_income": income_total - expense_total,
+            "guest_groups_served": sum(
+                1
+                for entry in self.state.today_arrival_plan
+                if entry.get("planned_day") == self.state.day
+                and entry.get("arrival_status") == "arrived"
+            ),
+        }
+
+        review_result = {"events": []}
+        for npc in self._get_active_overnight_tent_npcs():
+            self._try_leave_review(npc, review_result)
+
         # 修复 #5：先根据上一日是否处理绿化决定是否衰减
         if not self.state.greenery_processed_today:
             # 上一日没有处理绿化，自动衰减一次
@@ -2957,8 +3321,6 @@ class CampingPlazaEngine:
 
         self.state.day += 1
         self.state.turn = 1
-        # 修复：进入预定日期的新一天时立即启用今日预定状态
-        self._assign_reserved_tent_for_today()
         self.state.today_income = {
             "accommodation": 0,
             "campsite": 0,
@@ -2968,16 +3330,18 @@ class CampingPlazaEngine:
         }
         self.state.today_events = []
         self.state.decisions_left = 3
+        self.state.improve_service_uses_today = 0
         self.state.pending_turn_plan = None
         self.state.day_campsite_groups_served = 0
         self.state.hot_spring_people_served_today = 0
         # 重置绿化标记
         self.state.greenery_processed_today = False
+        self.state.day_start_balance = self.state.balance
 
-        if result is not None:
-            self._settle_pending_reviews(result)
+        self._settle_pending_reviews(result if result is not None else {"events": []})
 
         self._ensure_today_arrival_plan()
+        self._assign_reserved_tents_for_today()
         self._generate_daily_reservation()
 
     def _process_greenery_decay(self) -> tuple[Optional[float], Optional[float]]:
@@ -2994,70 +3358,52 @@ class CampingPlazaEngine:
 
     def _generate_daily_reservation(self):
         profile = self._ensure_daily_demand_profile()
-        if profile.get("reservation_processed"):
+        if profile.get("reservations_processed"):
             return
 
-        if self.state.reservation is not None:
-            profile["reservation_processed"] = True
-            profile["reservation_result"] = "skipped_existing_reservation"
-            return
-
-        if not profile.get("reservation_request_available"):
-            profile["reservation_processed"] = True
-            profile["reservation_result"] = "not_triggered"
-            return
-
-        group_size = profile["reservation_group_size"]
-        if profile.get("reservation_visit_type") == "day":
-            self.state.reservation = self._create_reservation_record(
+        target_day = self.state.day + 1
+        for _ in range(self.DAY_CAMPSITE_CAPACITY):
+            if random.random() >= 0.15:
+                continue
+            group_size = random.randint(1, 6)
+            reservation = self._create_reservation_record(
                 group_size=group_size,
                 visit_type="day",
-                arrival_day=self.state.day + 1,
+                arrival_day=target_day,
                 paid=True,
                 status="accepted",
             )
+            self.state.reservations.append(reservation)
             self.state.balance += self.CAMPSITE_FEE
             self.state.today_income["campsite"] += self.CAMPSITE_FEE
             self.state.today_events.append(
                 f"接到一组{group_size}人的日间营位预约，客人将在明天到达。"
             )
-            profile["reservation_processed"] = True
-            profile["reservation_result"] = "accepted_day"
-            return
 
-        if profile.get("reservation_visit_type") != "overnight":
-            profile["reservation_processed"] = True
-            profile["reservation_result"] = "ignored_unknown_visit_type"
-            return
-
-        tent = self._find_reservable_overnight_tent(group_size)
-        if tent is None:
-            max_capacity = self._get_max_unlocked_tent_capacity()
-            self.state.today_events.append(
-                f"接到一组{group_size}人的过夜预约，但当前已开放的帐篷最大只能容纳{max_capacity}人，本次未能接下。"
+        for _ in self._get_unlocked_tents():
+            if random.random() >= 0.15:
+                continue
+            group_size = random.randint(1, 6)
+            tent = self._find_reservable_overnight_tent(group_size)
+            if tent is None:
+                continue
+            reservation = self._create_reservation_record(
+                group_size=group_size,
+                visit_type="overnight",
+                arrival_day=target_day,
+                paid=True,
+                status="accepted",
             )
-            profile["reservation_processed"] = True
-            profile["reservation_result"] = "rejected_overnight_capacity"
-            return
+            reservation["tent_id"] = tent.id
+            self.state.reservations.append(reservation)
+            payment = self.TENT_PRICES[tent.id]
+            self.state.balance += payment
+            self.state.today_income["accommodation"] += payment
+            self.state.today_events.append(
+                f"接到一组{group_size}人的过夜预约，已为明天预留{tent.id}号帐篷。"
+            )
 
-        self.state.reservation = self._create_reservation_record(
-            group_size=group_size,
-            visit_type="overnight",
-            arrival_day=self.state.day + 1,
-            paid=True,
-            status="accepted",
-        )
-        self.state.reservation["tent_id"] = tent.id
-        self.state.reserved_tent_id = tent.id
-        self.state.reserved_tent_day = self.state.day + 1
-        payment = self.TENT_PRICES[tent.id]
-        self.state.balance += payment
-        self.state.today_income["accommodation"] += payment
-        self.state.today_events.append(
-            f"接到一组{group_size}人的过夜预约，已为明天预留{tent.id}号帐篷。"
-        )
-        profile["reservation_processed"] = True
-        profile["reservation_result"] = "accepted_overnight"
+        profile["reservations_processed"] = True
 
     def get_full_state(self) -> dict:
         # 修复：对外隐藏NPC隐藏标签，引擎内部数据不变
@@ -3070,6 +3416,7 @@ class CampingPlazaEngine:
                     "visit_type": n.visit_type,
                     "arrival_turn": n.arrival_turn,
                     "location": n.location,
+                    "campsite_slot": n.campsite_slot,
                     "total_satisfaction": n.total_satisfaction,
                     "has_left": n.has_left,
                     "review_left": n.review_left,
@@ -3080,16 +3427,20 @@ class CampingPlazaEngine:
                     "paid": n.paid
                 })
 
-        # 修复：对外预定只暴露 group_size/visit_type/arrival_day/status，不暴露隐藏标签
-        if self.state.reservation is not None:
-            safe_reservation = {
-                "group_size": self.state.reservation["group_size"],
-                "visit_type": self.state.reservation["visit_type"],
-                "arrival_day": self.state.reservation["arrival_day"],
-                "status": self.state.reservation["status"],
+        safe_reservations = [
+            {
+                "group_size": reservation["group_size"],
+                "visit_type": reservation["visit_type"],
+                "arrival_day": reservation["arrival_day"],
+                "status": reservation["status"],
+                **(
+                    {"tent_id": reservation["tent_id"]}
+                    if reservation.get("visit_type") == "overnight"
+                    else {}
+                ),
             }
-        else:
-            safe_reservation = None
+            for reservation in self.state.reservations
+        ]
 
         # 修复：对外只暴露帐篷必要字段，隐藏 next_breakdown_turn
         safe_tents = {
@@ -3116,7 +3467,7 @@ class CampingPlazaEngine:
             "day": self.state.day,
             "turn": self.state.turn,
             "balance": self.state.balance,
-            "reputation_rate": round(self.state.reputation_rate, 1),
+            "average_rating": self.get_average_rating(),
             "tents": safe_tents,
             "facilities": {k: asdict(v) for k, v in self.facilities.items()},
             "greenery": {
@@ -3127,7 +3478,7 @@ class CampingPlazaEngine:
                 "decay_next_day": greenery_decay_next_day,
             },
             "active_npcs": safe_npcs,
-            "reservation": safe_reservation,
+            "reservations": safe_reservations,
             "decisions_left": self.state.decisions_left,
             "food_stock": self.state.food_stock,
             "today_income": self.state.today_income
@@ -3156,7 +3507,11 @@ class CampingPlazaEngine:
         lines = [
             f"📍 第{state['day']}天 · 回合{state['turn']}",
             f"💰 余额: {state['balance']}金币",
-            f"⭐ 好评率: {state['reputation_rate']}%",
+            (
+                f"⭐ 营地评价: {state['average_rating']:.1f} ★"
+                if state["average_rating"] is not None
+                else "⭐ 营地评价: -- ★"
+            ),
             f"🎯 剩余决策点: {state['decisions_left']}",
             "",
             "--- 帐篷状态 ---"

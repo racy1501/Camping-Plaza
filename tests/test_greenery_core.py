@@ -307,7 +307,7 @@ class GreeneryCoreTests(unittest.TestCase):
 
         engine._checkin_npc(guest, 1, {"events": []}, charge=False)
 
-        self.assertEqual(guest.total_satisfaction, 72.5)
+        self.assertEqual(guest.total_satisfaction, 62.5)
         self.assertTrue(guest.greenery_entry_bonus_applied)
 
     def test_same_group_does_not_get_greenery_bonus_twice(self):

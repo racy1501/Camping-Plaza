@@ -350,7 +350,7 @@ class DeterministicScenarioTests(LongRunTestCase):
         eng.state.day = 2
         eng.state.turn = 1
         reserved_npc_id = eng._next_npc_id()
-        eng.state.reservation = {
+        eng.state.reservations = [{
             "npc_id": reserved_npc_id,
             "group_size": 1,
             "visit_type": "overnight",
@@ -361,9 +361,9 @@ class DeterministicScenarioTests(LongRunTestCase):
             "spending_habit": 1,
             "temperament": 1,
             "tent_id": 3,
-        }
-        eng.state.reserved_tent_id = 3
-        eng.state.reserved_tent_day = 2
+        }]
+        with mock.patch.object(eng, "_roll_arrival_turn", return_value=2):
+            self.assertTrue(eng._ensure_today_arrival_plan())
 
         # 帐篷 3 昨晚被普通过夜客住着
         guest = NPCGroup(id=eng._next_npc_id(), group_size=1,
@@ -386,9 +386,6 @@ class DeterministicScenarioTests(LongRunTestCase):
             actions=[],
         ))
         self.assertTrue(plan_result["success"])
-        with mock.patch("game_engine.random.random", return_value=0.99), \
-             mock.patch.object(eng, "_roll_arrival_turn", return_value=2):
-            game_api.advance_turn()
         self.assertEqual(eng.tents[3].status, "occupied")
         reserved_npcs = [n for n in eng.npc_pool
                          if n.is_reserved and n.location == "tent_3"]
@@ -396,9 +393,14 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.assertTrue(reserved_npcs[0].paid)
         self.assertEqual(eng.tents[3].occupied_by, reserved_npcs[0].id)
         # 预定状态已结清
-        self.assertIsNone(eng.state.reservation)
-        self.assertIsNone(eng.state.reserved_tent_id)
-        self.assertIsNone(eng.state.reserved_tent_day)
+        self.assertEqual(eng.state.reservations, [])
+        reservation_entries = [
+            entry for entry in eng.state.today_arrival_plan
+            if entry.get("source") == "reservation"
+            and entry.get("npc_id") == reserved_npc_id
+        ]
+        self.assertEqual(len(reservation_entries), 1)
+        self.assertEqual(reservation_entries[0]["arrival_status"], "arrived")
         self._check_invariants("reserved-flow")
 
     def test_day_to_overnight_conversion_survives_restart(self):

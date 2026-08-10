@@ -219,9 +219,83 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         if day_end_completed:
             mode = "day_end_completed"
             panel_title = "日终管理"
+            day_end_action_candidates = []
         else:
             mode = "day_end_pending"
             panel_title = "日终管理"
+            day_end_action_candidates = []
+
+            cleaning_tent_ids = [
+                int(tid) for tid, t in state["tents"].items()
+                if t["unlocked"] and t["status"] == "cleaning"
+            ]
+            if cleaning_tent_ids and "clean_tents" in CampingPlazaEngine.DAY_END_ACTIONS:
+                day_end_action_candidates.append({
+                    "action": "clean_tents",
+                    "params": {"tent_ids": cleaning_tent_ids},
+                    "label": "清洁待清洁帐篷",
+                    "kind": "day_end",
+                    "enabled": True,
+                    "reason": "",
+                })
+
+            for tid, tent in state["tents"].items():
+                if not (tent["unlocked"] and tent["status"] == "broken"):
+                    continue
+                enabled = balance >= CampingPlazaEngine.REPAIR_COST
+                day_end_action_candidates.append({
+                    "action": "repair_tent",
+                    "params": {"tent_id": int(tid)},
+                    "label": f"维修{tid}号帐篷",
+                    "kind": "day_end",
+                    "enabled": enabled,
+                    "reason": "" if enabled else "金币不足",
+                })
+
+            greenery_value = state.get("greenery", {})
+            if (
+                not eng.state.greenery_processed_today
+                and greenery_value.get("value", 0) > 0
+                and "manage_greenery" in CampingPlazaEngine.DAY_END_ACTIONS
+            ):
+                enabled = balance >= 50
+                day_end_action_candidates.append({
+                    "action": "manage_greenery",
+                    "params": {"action": "maintain"},
+                    "label": "打理绿化",
+                    "kind": "day_end",
+                    "enabled": enabled,
+                    "reason": "" if enabled else "金币不足",
+                })
+
+            if (
+                eng.state.last_food_preorder_day != eng.state.day
+                and "buy_food_package" in CampingPlazaEngine.DAY_END_ACTIONS
+            ):
+                for entry in _food_package_action_entries():
+                    package_key = entry["params"]["package_key"]
+                    package = CampingPlazaEngine.FOOD_PACKAGES[package_key]
+                    day_end_action_candidates.append({
+                        "action": "buy_food_package",
+                        "params": {"package_key": package_key},
+                        "label": entry["description"],
+                        "kind": "day_end",
+                        "enabled": balance >= package["price"],
+                        "reason": "" if balance >= package["price"] else "金币不足",
+                    })
+
+            if "purchase_growth_project" in CampingPlazaEngine.DAY_END_ACTIONS:
+                for project in eng.get_growth_project_catalog():
+                    if not project.get("can_purchase_now"):
+                        continue
+                    day_end_action_candidates.append({
+                        "action": "purchase_growth_project",
+                        "params": {"project_id": project["project_id"]},
+                        "label": f"购买{project['display_name']}",
+                        "kind": "day_end",
+                        "enabled": True,
+                        "reason": "",
+                    })
         return {
             "success": True,
             "day": state["day"],
@@ -234,6 +308,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "turn_plan": None,
             "free_action_candidates": [],
             "decision_action_candidates": [],
+            "day_end_action_candidates": day_end_action_candidates,
             "primary_action": None,
         }
 
@@ -295,6 +370,18 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "enabled": can_afford,
             "reason": "金币不足" if not can_afford else "",
         })
+
+    improve_service_available = eng.state.improve_service_uses_today < 2
+    decision_action_candidates.append({
+        "action": "improve_service",
+        "params": {},
+        "label": "提升服务",
+        "kind": "decision",
+        "category": "service",
+        "repeatable": False,
+        "enabled": improve_service_available,
+        "reason": "" if improve_service_available else "今日提升服务次数已达到上限",
+    })
 
     # 补充食材候选：从 FOOD_PACKAGES 动态生成
     for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
@@ -426,6 +513,13 @@ def get_state():
     state["day_campsite"] = _get_day_campsite_status(eng)
     state["arrival_plan"] = _get_arrival_plan_summary(eng)
     state["today_events"] = list(eng.state.today_events)
+    state["event_history"] = list(eng.state.event_history)
+    state["review_history"] = list(eng.state.review_history)
+    state["previous_day_summary"] = (
+        dict(eng.state.previous_day_summary)
+        if eng.state.previous_day_summary is not None
+        else None
+    )
     return state
 
 
@@ -536,18 +630,31 @@ def advance_turn():
 def submit_turn_plan(req: TurnPlanRequest):
     """提交本轮营业计划"""
     eng = get_engine()
-    result = eng.submit_turn_plan(
+    plan_result = eng.submit_turn_plan(
         _normalize_turn_plan_actions(req.free_actions),
         _normalize_turn_plan_actions(req.actions),
     )
+    if not plan_result["success"]:
+        eng.save_state()
+        return {
+            "success": False,
+            "message": plan_result.get("message", ""),
+            "target_day": plan_result.get("target_day"),
+            "target_turn": plan_result.get("target_turn"),
+            "free_action_count": plan_result.get("free_actions_count", len(req.free_actions)),
+            "action_count": plan_result.get("actions_count", len(req.actions)),
+        }
+
+    advance_result = eng.advance_turn()
     eng.save_state()
     return {
-        "success": result["success"],
-        "message": result.get("message", ""),
-        "target_day": result.get("target_day"),
-        "target_turn": result.get("target_turn"),
-        "free_action_count": result.get("free_actions_count", len(req.free_actions)),
-        "action_count": result.get("actions_count", len(req.actions)),
+        **advance_result,
+        "success": True,
+        "message": plan_result.get("message", ""),
+        "target_day": plan_result.get("target_day"),
+        "target_turn": plan_result.get("target_turn"),
+        "free_action_count": plan_result.get("free_actions_count", len(req.free_actions)),
+        "action_count": plan_result.get("actions_count", len(req.actions)),
     }
 
 
@@ -677,7 +784,7 @@ def mcp_state():
         "day": state["day"],
         "turn": state["turn"],
         "balance": state["balance"],
-        "reputation_rate": state["reputation_rate"],
+        "average_rating": state["average_rating"],
         "decisions_left": state["decisions_left"],
         "food_stock": state["food_stock"],
         "tents": {
@@ -693,7 +800,7 @@ def mcp_state():
             k: {"level": v["level"]}
             for k, v in state["facilities"].items()
         },
-        "reservation": state["reservation"],
+        "reservations": state["reservations"],
         "today_income": state["today_income"],
         "hot_spring": _get_hot_spring_status(eng),
         "day_campsite": _get_day_campsite_status(eng),

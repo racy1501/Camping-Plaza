@@ -8,12 +8,9 @@ CREATE TABLE IF NOT EXISTS game_state (
     day INTEGER NOT NULL DEFAULT 1,
     turn INTEGER NOT NULL DEFAULT 1,
     balance INTEGER NOT NULL DEFAULT 1000,
-    reputation_rate REAL NOT NULL DEFAULT 60.0,
     total_reviews INTEGER NOT NULL DEFAULT 0,
     total_rating_sum INTEGER NOT NULL DEFAULT 0,
     decisions_left INTEGER NOT NULL DEFAULT 3,
-    reservation_data TEXT,  -- JSON: 预定信息
-    reserved_tent_id INTEGER,
     today_income_data TEXT,  -- JSON: 今日收入明细
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -105,5 +102,5 @@ INSERT OR IGNORE INTO facilities (name, level) VALUES
     ('entertainment', 0),
     ('greenery', 1);
 
-INSERT OR IGNORE INTO game_state (id, day, turn, balance, reputation_rate)
-VALUES (1, 1, 1, 1000, 60.0);
+INSERT OR IGNORE INTO game_state (id, day, turn, balance)
+VALUES (1, 1, 1, 1000);

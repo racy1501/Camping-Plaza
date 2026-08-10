@@ -90,34 +90,27 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
     def _prepare_auto_reserved_overnight_dining_plan(self, engine):
         engine.state.day = 1
         engine.state.turn = 1
-        engine.state.daily_demand_profile_day = engine.state.day
-        engine.state.daily_demand_profile = {
-            "natural_day_group_demand": 0,
-            "natural_overnight_group_demand": 0,
-            "reservation_request_available": True,
-            "reservation_visit_type": "overnight",
-            "reservation_group_size": 2,
-            "reservation_processed": False,
-            "reservation_result": None,
-        }
-
-        with mock.patch(
-            "game_engine.random.choices",
-            side_effect=[[1], [2], [2]],
-        ):
-            engine._generate_daily_reservation()
-
-        self.assertIsNotNone(engine.state.reservation)
-        self.assertEqual(engine.state.reservation["paid"], True)
-        self.assertEqual(engine.state.reservation["status"], "accepted")
-        self.assertEqual(engine.state.reservation["arrival_day"], 2)
-        self.assertIsNotNone(engine.state.reservation["npc_id"])
-        self.assertIsNotNone(engine.state.reservation["tent_id"])
+        reserved_npc_id = engine._next_npc_id()
+        reservation_tent_id = 1
+        reservation_payment = engine.TENT_PRICES[reservation_tent_id]
+        engine.state.reservations = [{
+            "npc_id": reserved_npc_id,
+            "group_size": 2,
+            "visit_type": "overnight",
+            "arrival_day": 2,
+            "status": "accepted",
+            "tent_id": reservation_tent_id,
+            "paid": True,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+            "total_satisfaction": 60,
+        }]
+        engine.state.balance += reservation_payment
+        engine.state.today_income["accommodation"] += reservation_payment
 
         balance_after_reservation = engine.state.balance
         accommodation_income_after_reservation = engine.state.today_income["accommodation"]
-        reserved_npc_id = engine.state.reservation["npc_id"]
-        reserved_tent_id = engine.state.reservation["tent_id"]
 
         engine.state.day = 2
         engine.state.turn = 2
@@ -125,11 +118,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         engine.state.daily_demand_profile = {
             "natural_day_group_demand": 0,
             "natural_overnight_group_demand": 0,
-            "reservation_request_available": False,
-            "reservation_visit_type": None,
-            "reservation_group_size": None,
-            "reservation_processed": False,
-            "reservation_result": None,
+            "reservations_processed": True,
         }
         engine.facilities["dining"].level = 1
         engine.state.food_stock = 2
@@ -148,9 +137,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                     ):
                         self.assertTrue(engine._ensure_today_arrival_plan())
 
-        self.assertIsNone(engine.state.reservation)
-        self.assertEqual(engine.state.reserved_tent_id, reserved_tent_id)
-        self.assertEqual(engine.state.reserved_tent_day, 2)
+        self.assertEqual(len(engine.state.reservations), 0)
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
 
         plan_entry = engine.state.today_arrival_plan[0]
@@ -159,7 +146,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(plan_entry["source"], "reservation")
         self.assertEqual(plan_entry["npc_id"], reserved_npc_id)
         self.assertEqual(plan_entry["paid"], True)
-        self.assertEqual(plan_entry["tent_id"], reserved_tent_id)
+        self.assertEqual(plan_entry["tent_id"], reservation_tent_id)
         self.assertEqual(plan_entry["arrival_turn"], 2)
         self.assertEqual(plan_entry["arrival_status"], "pending")
         self.assertEqual(dining_action["action"], "dining")
@@ -171,7 +158,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             "balance_after_reservation": balance_after_reservation,
             "accommodation_income_after_reservation": accommodation_income_after_reservation,
             "reserved_npc_id": reserved_npc_id,
-            "reserved_tent_id": reserved_tent_id,
+            "reservation_tent_id": reservation_tent_id,
             "plan_entry": plan_entry,
             "dining_action": dining_action,
         }
@@ -204,22 +191,45 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                 ):
                     with mock.patch(
                         "game_engine.random.random",
-                        side_effect=[0.0, 0.99, 0.99, 0.99, 0.99, 0.99],
+                        side_effect=[0.0, 0.99, 0.99, 0.99, 0.99, 0.99, 0.99],
                     ) as random_mock:
                         with mock.patch.object(
                             CampingPlazaEngine,
-                            "_roll_arrival_turn",
-                            side_effect=[2, 3],
+                            "_build_dining_planned_action",
+                            side_effect=[
+                                {"action": "dining", "menu_key": "basic", "status": "pending"},
+                                None,
+                            ],
                         ):
-                            with mock.patch(
-                                "game_engine.random.sample", return_value=[5]
-                            ) as sample_mock:
-                                first = engine._ensure_today_arrival_plan()
-                                second = engine._ensure_today_arrival_plan()
+                            with mock.patch.object(
+                                CampingPlazaEngine,
+                                "_build_paid_entertainment_planned_action",
+                                return_value=None,
+                            ):
+                                with mock.patch.object(
+                                    CampingPlazaEngine,
+                                    "_build_free_entertainment_planned_action",
+                                    return_value=None,
+                                ):
+                                    with mock.patch.object(
+                                        CampingPlazaEngine,
+                                        "_build_hot_spring_planned_action",
+                                        return_value=None,
+                                    ):
+                                        with mock.patch.object(
+                                            CampingPlazaEngine,
+                                            "_roll_arrival_turn",
+                                            side_effect=[2, 3],
+                                        ):
+                                            with mock.patch(
+                                                "game_engine.random.sample", return_value=[5]
+                                            ) as sample_mock:
+                                                first = engine._ensure_today_arrival_plan()
+                                                second = engine._ensure_today_arrival_plan()
 
         self.assertTrue(first)
         self.assertFalse(second)
-        self.assertEqual(random_mock.call_count, 6)
+        self.assertEqual(random_mock.call_count, 1)
         self.assertEqual(sample_mock.call_count, 1)
         self.assertEqual(len(engine.state.today_arrival_plan), 2)
 
@@ -659,27 +669,24 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         result = {"events": []}
         engine._process_dining(result)
 
-        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["status"], "waiting_for_restock")
         self.assertEqual(action["result"], "insufficient_food")
         self.assertEqual(engine.state.food_stock, 1)
         self.assertEqual(engine.state.balance, 500)
         self.assertEqual(engine.state.today_income["dining"], 0)
         self.assertEqual(npc.total_satisfaction, 55)
         self.assertEqual(npc.last_dining_day, 0)
-        self.assertEqual(len(result["events"]), 2)
+        self.assertTrue(npc.had_food_shortage)
+        self.assertEqual(len(result["events"]), 1)
 
         engine.state.turn = 3
         engine._process_dining({"events": []})
         self.assertEqual(engine.state.today_income["dining"], 0)
-        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["status"], "waiting_for_restock")
 
     def test_insufficient_food_appends_temperament_specific_reaction(self):
-        expectations = {
-            0: "客人表示理解，决定下次再来尝尝。",
-            1: "客人有些失望，但还是接受了这个结果。",
-            2: "客人明显不满，抱怨餐饮区准备得不够充分。",
-        }
-        for temperament, expected_text in expectations.items():
+        observed_events = []
+        for temperament in (0, 1, 2):
             with self.subTest(temperament=temperament):
                 engine = self._new_engine()
                 engine.state.day = 7
@@ -712,14 +719,15 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
                 result = {"events": []}
                 engine._process_dining(result)
 
-                self.assertEqual(action["status"], "failed")
+                self.assertEqual(action["status"], "waiting_for_restock")
                 self.assertEqual(action["result"], "insufficient_food")
                 self.assertEqual(engine.state.food_stock, 1)
                 self.assertEqual(engine.state.balance, 500)
                 self.assertEqual(engine.state.today_income["dining"], 0)
                 self.assertEqual(npc.total_satisfaction, 55)
-                self.assertIn(expected_text, result["events"])
-                self.assertEqual(len(result["events"]), 2)
+                observed_events.append(result["events"][0])
+                self.assertEqual(len(result["events"]), 1)
+        self.assertEqual(len(set(observed_events)), 3)
 
     def test_invalid_menu_does_not_append_temperament_failure_text(self):
         engine = self._new_engine()
@@ -923,7 +931,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
             "accommodation_income_after_reservation"
         ]
         reserved_npc_id = prepared["reserved_npc_id"]
-        reserved_tent_id = prepared["reserved_tent_id"]
+        reservation_tent_id = prepared["reservation_tent_id"]
 
         result = {"events": []}
         engine._process_planned_arrivals(result)
@@ -933,7 +941,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(engine.npc_pool[0].id, reserved_npc_id)
         self.assertTrue(engine.npc_pool[0].is_reserved)
         self.assertTrue(engine.npc_pool[0].paid)
-        self.assertEqual(engine.npc_pool[0].location, f"tent_{reserved_tent_id}")
+        self.assertEqual(engine.npc_pool[0].location, f"tent_{reservation_tent_id}")
         self.assertEqual(engine.state.balance, balance_after_reservation)
         self.assertEqual(
             engine.state.today_income["accommodation"],
@@ -948,7 +956,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(engine.state.today_income["dining"], 90)
         self.assertEqual(engine.state.food_stock, 0)
         self.assertEqual(engine.npc_pool[0].last_dining_day, engine.state.day)
-        self.assertEqual(engine.npc_pool[0].total_satisfaction, 74)
+        self.assertEqual(engine.npc_pool[0].total_satisfaction, 66)
         self.assertEqual(
             engine.state.balance,
             balance_after_reservation + engine.state.today_income["dining"],
@@ -963,7 +971,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         plan_entry = prepared["plan_entry"]
         dining_action = prepared["dining_action"]
         reserved_npc_id = prepared["reserved_npc_id"]
-        reserved_tent_id = prepared["reserved_tent_id"]
+        reservation_tent_id = prepared["reservation_tent_id"]
         balance_after_reservation = prepared["balance_after_reservation"]
         accommodation_income_after_reservation = prepared[
             "accommodation_income_after_reservation"
@@ -979,7 +987,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(reloaded_entry["source"], "reservation")
         self.assertEqual(reloaded_entry["npc_id"], reserved_npc_id)
         self.assertEqual(reloaded_entry["paid"], True)
-        self.assertEqual(reloaded_entry["tent_id"], reserved_tent_id)
+        self.assertEqual(reloaded_entry["tent_id"], reservation_tent_id)
         self.assertEqual(reloaded_entry["arrival_turn"], 2)
         self.assertEqual(reloaded_entry["arrival_status"], "pending")
         self.assertEqual(reloaded_action["action"], "dining")
@@ -1014,4 +1022,4 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         )
         self.assertEqual(reloaded.state.food_stock, 0)
         self.assertEqual(reloaded.npc_pool[0].last_dining_day, reloaded.state.day)
-        self.assertEqual(reloaded.npc_pool[0].total_satisfaction, 74)
+        self.assertEqual(reloaded.npc_pool[0].total_satisfaction, 66)

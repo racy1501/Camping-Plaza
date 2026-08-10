@@ -190,9 +190,6 @@ class GrowthProgressTests(unittest.TestCase):
         self.assertEqual(entry["arrival_status"], "turned_away_full")
         self.assertEqual(self.engine.state.total_served_groups, 0)
 
-        self.engine.state.reservation = {"group_size": 2, "status": "accepted"}
-        self.engine.state.reserved_tent_id = 1
-        self.engine.state.reserved_tent_day = self.engine.state.day + 1
         self.assertEqual(self.engine.state.total_served_groups, 0)
 
     def test_day_to_overnight_does_not_count_served_group_again(self):
@@ -220,6 +217,7 @@ class GrowthProgressTests(unittest.TestCase):
         self.engine._process_dining({"events": []})
         self.engine._process_dining({"events": []})
         self.assertEqual(normal_action["status"], "completed")
+        self.assertFalse(normal.had_food_shortage)
         self.assertEqual(self.engine.state.successful_dining_groups, 1)
 
         rescue = NPCGroup(id=51, group_size=2, visit_type="day")
@@ -228,12 +226,14 @@ class GrowthProgressTests(unittest.TestCase):
         self.engine.state.food_stock = 0
         self.engine._process_dining({"events": []})
         self.assertEqual(rescue_action["status"], "waiting_for_restock")
+        self.assertTrue(rescue.had_food_shortage)
         self.assertEqual(self.engine.state.successful_dining_groups, 1)
 
         self.engine.state.food_stock = 2
         self.engine._retry_waiting_dining_after_restock({"events": []})
         self.engine._retry_waiting_dining_after_restock({"events": []})
         self.assertEqual(rescue_action["status"], "completed")
+        self.assertTrue(rescue.had_food_shortage)
         self.assertEqual(self.engine.state.successful_dining_groups, 2)
 
     def test_paid_entertainment_counts_but_free_and_invalid_do_not(self):

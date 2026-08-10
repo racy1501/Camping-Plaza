@@ -304,6 +304,41 @@ button:disabled {
     gap: 6px;
 }
 
+.review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.review-entry {
+    padding: 5px 7px;
+    border-radius: 6px;
+    background: var(--cream);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.review-entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.review-entry-stars {
+    color: var(--terracotta);
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+
+.review-entry-comment {
+    margin-top: 2px;
+    color: var(--text-light);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
 .income-row {
     display: flex;
     justify-content: space-between;

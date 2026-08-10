@@ -120,7 +120,14 @@ class FullSaveRestoreTests(PersistenceTestCase):
         engine.state.day = 3
         engine.state.turn = 4
         engine.state.balance = 2345
-        engine.state.reputation_rate = 72.5
+        engine.state.day_start_balance = 1800
+        engine.state.previous_day_summary = {
+            "day": 2,
+            "income_total": 700,
+            "expense_total": 240,
+            "net_income": 460,
+            "guest_groups_served": 5,
+        }
         engine.state.total_reviews = 8
         engine.state.total_rating_sum = 33
         engine.state.today_income = {
@@ -128,13 +135,17 @@ class FullSaveRestoreTests(PersistenceTestCase):
         }
         engine.state.today_events = ["测试事件A", "测试事件B"]
         engine.state.decisions_left = 1
+        engine.state.improve_service_uses_today = 2
         engine.state.food_stock = 17
-        engine.state.reservation = {
-            "group_size": 3, "economic_level": 2,
-            "spending_habit": 0, "temperament": 1, "tent_id": 5
-        }
-        engine.state.reserved_tent_id = 5
-        engine.state.reserved_tent_day = 4
+        engine.state.reservations = [{
+            "npc_id": 42,
+            "group_size": 3,
+            "visit_type": "overnight",
+            "arrival_day": 4,
+            "status": "accepted",
+            "tent_id": 5,
+            "paid": True,
+        }]
         engine.state.greenery_processed_today = True
         engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
         engine.state.day_campsite_groups_served = 7
@@ -150,6 +161,15 @@ class FullSaveRestoreTests(PersistenceTestCase):
             "npc_id": 7,
             "visit_type": "overnight",
             "group_size": 2,
+            "comment": "整体不错，是一次挺舒服的体验。",
+        }]
+        engine.state.review_history = [{
+            "created_day": 1,
+            "rating": 5,
+            "npc_id": 6,
+            "visit_type": "day",
+            "group_size": 1,
+            "comment": "很满意，下次还想再来。",
         }]
 
         # 帐篷内部字段
@@ -169,7 +189,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         npc = NPCGroup(
             id=7, group_size=2, visit_type="overnight", arrival_turn=2,
             location="tent_2", total_satisfaction=85, has_left=False,
-            review_left=True, review_rating=4, economic_level=2,
+            review_left=True, review_rating=4, review_attempted=True, economic_level=2,
             spending_habit=0, temperament=1, visit_count=3,
             last_visit_day=1, is_reserved=True, paid=True
         )
@@ -191,21 +211,31 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(s.day, 3)
         self.assertEqual(s.turn, 4)
         self.assertEqual(s.balance, 2345)
-        self.assertEqual(s.reputation_rate, 72.5)
+        self.assertEqual(s.day_start_balance, 1800)
+        self.assertEqual(s.previous_day_summary, {
+            "day": 2,
+            "income_total": 700,
+            "expense_total": 240,
+            "net_income": 460,
+            "guest_groups_served": 5,
+        })
         self.assertEqual(s.total_reviews, 8)
         self.assertEqual(s.total_rating_sum, 33)
         self.assertEqual(s.today_income["accommodation"], 300)
         self.assertEqual(s.today_income["entertainment"], 80)
         self.assertEqual(s.today_events, ["测试事件A", "测试事件B"])
         self.assertEqual(s.decisions_left, 1)
+        self.assertEqual(s.improve_service_uses_today, 2)
         self.assertEqual(s.food_stock, 17)
-        self.assertEqual(s.reservation["group_size"], 3)
-        self.assertEqual(s.reservation["economic_level"], 2)
-        self.assertEqual(s.reservation["spending_habit"], 0)
-        self.assertEqual(s.reservation["temperament"], 1)
-        self.assertEqual(s.reservation["tent_id"], 5)
-        self.assertEqual(s.reserved_tent_id, 5)
-        self.assertEqual(s.reserved_tent_day, 4)
+        self.assertEqual(s.reservations, [{
+            "npc_id": 42,
+            "group_size": 3,
+            "visit_type": "overnight",
+            "arrival_day": 4,
+            "status": "accepted",
+            "tent_id": 5,
+            "paid": True,
+        }])
         self.assertTrue(s.greenery_processed_today)
         self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
         self.assertEqual(s.day_campsite_groups_served, 7)
@@ -221,6 +251,15 @@ class FullSaveRestoreTests(PersistenceTestCase):
             "npc_id": 7,
             "visit_type": "overnight",
             "group_size": 2,
+            "comment": "整体不错，是一次挺舒服的体验。",
+        }])
+        self.assertEqual(s.review_history, [{
+            "created_day": 1,
+            "rating": 5,
+            "npc_id": 6,
+            "visit_type": "day",
+            "group_size": 1,
+            "comment": "很满意，下次还想再来。",
         }])
 
         # 帐篷键恢复为 int
@@ -250,6 +289,7 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertFalse(n.has_left)
         self.assertTrue(n.review_left)
         self.assertEqual(n.review_rating, 4)
+        self.assertTrue(n.review_attempted)
         self.assertEqual(n.economic_level, 2)
         self.assertEqual(n.spending_habit, 0)
         self.assertEqual(n.temperament, 1)
@@ -275,6 +315,25 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(restored.state.food_stock, opening_stock)
         self.assertEqual(restored.state.today_events, opening_events)
         self.assertEqual(len(restored.state.today_events), 1)
+
+
+class EventHistoryPersistenceTests(PersistenceTestCase):
+    def test_event_history_roundtrip(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine._append_event_history(1, 6, "预购小包，金币 -80", "action")
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+
+        self.assertEqual(
+            restored.state.event_history,
+            [{
+                "day": 1,
+                "turn": 6,
+                "text": "预购小包，金币 -80",
+                "kind": "action",
+            }],
+        )
 
 
 class OverwriteTests(PersistenceTestCase):
@@ -674,13 +733,11 @@ class TurnPlanPersistenceTests(PersistenceTestCase):
         self.assertIsNotNone(restored.state.pending_turn_plan)
 
         with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
-            with unittest.mock.patch.object(CampingPlazaEngine, "_assign_reserved_tent_for_today"):
-                with unittest.mock.patch.object(CampingPlazaEngine, "_process_reservations"):
-                    with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkin"):
-                        with unittest.mock.patch.object(CampingPlazaEngine, "_process_dining"):
-                            with unittest.mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
-                                with unittest.mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
-                                    result = restored.advance_turn()
+            with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                with unittest.mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                    with unittest.mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                        with unittest.mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+                            result = restored.advance_turn()
 
         self.assertTrue(result["plan_execution"]["actions"][0]["success"])
         self.assertEqual(restored.tents[1].status, "available")
@@ -742,6 +799,9 @@ class BrokenTentPenaltyPersistenceTests(PersistenceTestCase):
             visit_type="overnight",
             total_satisfaction=60,
             broken_tent_penalty=2,
+            had_food_shortage=True,
+            had_tent_problem=True,
+            received_service_boost=True,
         )
         engine.npc_pool.append(npc)
         self.assertTrue(engine.save_state())
@@ -752,6 +812,9 @@ class BrokenTentPenaltyPersistenceTests(PersistenceTestCase):
         self.assertEqual(restored_npc.id, npc.id)
         self.assertEqual(restored_npc.broken_tent_penalty, 2)
         self.assertEqual(restored_npc.total_satisfaction, 60)
+        self.assertTrue(restored_npc.had_food_shortage)
+        self.assertTrue(restored_npc.had_tent_problem)
+        self.assertTrue(restored_npc.received_service_boost)
 
 
 if __name__ == "__main__":

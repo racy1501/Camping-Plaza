@@ -46,11 +46,7 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         engine.state.daily_demand_profile = {
             "natural_day_group_demand": 0,
             "natural_overnight_group_demand": 0,
-            "reservation_request_available": True,
-            "reservation_visit_type": "overnight",
-            "reservation_group_size": group_size,
-            "reservation_processed": False,
-            "reservation_result": None,
+            "reservations_processed": False,
         }
         engine.state.daily_demand_profile_day = engine.state.day
 
@@ -59,18 +55,20 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
             npc.spending_habit = 2
             npc.temperament = 0
 
-        with mock.patch.object(engine, "_assign_hidden_tags", side_effect=assign_hidden_tags):
+        with mock.patch.object(engine, "_assign_hidden_tags", side_effect=assign_hidden_tags), \
+             mock.patch("game_engine.random.random", side_effect=[0.99] * 10 + [0.1]), \
+             mock.patch("game_engine.random.randint", return_value=group_size):
             engine._generate_daily_reservation()
 
-        self.assertIsNotNone(engine.state.reservation)
-        self.assertEqual(engine.state.reservation["visit_type"], "overnight")
-        self.assertEqual(engine.state.reservation["group_size"], group_size)
-        self.assertEqual(engine.state.reservation["arrival_day"], engine.state.day + 1)
-        self.assertTrue(engine.state.reservation["paid"])
-        self.assertEqual(engine.state.reservation["status"], "accepted")
-        self.assertTrue(engine.state.daily_demand_profile["reservation_processed"])
-        self.assertEqual(engine.state.daily_demand_profile["reservation_result"], "accepted_overnight")
-        return dict(engine.state.reservation)
+        self.assertEqual(len(engine.state.reservations), 1)
+        reservation = engine.state.reservations[0]
+        self.assertEqual(reservation["visit_type"], "overnight")
+        self.assertEqual(reservation["group_size"], group_size)
+        self.assertEqual(reservation["arrival_day"], engine.state.day + 1)
+        self.assertTrue(reservation["paid"])
+        self.assertEqual(reservation["status"], "accepted")
+        self.assertTrue(engine.state.daily_demand_profile["reservations_processed"])
+        return dict(reservation)
 
     def _ensure_overnight_arrival_plan(self, engine, arrival_turn: int, day_guest_count: int = 0):
         natural_guest = self._make_guest(901, "day")
@@ -197,6 +195,7 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         engine = self._new_engine()
         engine.state.day = 1
         engine.state.turn = 6
+        engine.state.day_end_completed = True
         engine.state.pending_reviews = [
             {
                 "created_day": 1,
@@ -207,22 +206,22 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
             }
         ]
 
-        seen_rates = []
+        seen_average_ratings = []
 
         def capture_demand():
-            seen_rates.append(engine.state.reputation_rate)
+            seen_average_ratings.append(engine.get_average_rating())
             return {"day_guest_count": 3, "overnight_guest_count": 0}
 
         with mock.patch.object(engine, "_calculate_daily_visitor_demand", side_effect=capture_demand) as demand_mock:
             with mock.patch.object(engine, "_generate_daily_reservation", return_value=None):
-                result = engine.advance_turn()
+                result = engine.start_next_day()
 
         self.assertEqual(result["day"], 2)
         self.assertEqual(result["turn"], 1)
         self.assertEqual(engine.state.total_reviews, 1)
         self.assertEqual(engine.state.total_rating_sum, 5)
-        self.assertEqual(engine.state.reputation_rate, 100.0)
-        self.assertEqual(seen_rates, [100.0])
+        self.assertEqual(engine.get_average_rating(), 5.0)
+        self.assertEqual(seen_average_ratings, [5.0])
         self.assertEqual(demand_mock.call_count, 1)
         self.assertEqual(engine.state.today_arrival_plan_day, 2)
         self.assertEqual(len(engine.state.today_arrival_plan), 3)
@@ -257,9 +256,7 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         self.assertEqual(engine.state.today_arrival_plan[0]["visit_type"], "overnight")
         self.assertEqual(engine.state.today_arrival_plan[0]["tent_id"], reserved_tent_id)
         self.assertEqual(engine.state.today_arrival_plan[0]["paid"], True)
-        self.assertIsNone(engine.state.reservation)
-        self.assertEqual(engine.state.reserved_tent_id, reserved_tent_id)
-        self.assertEqual(engine.state.reserved_tent_day, reserved_day)
+        self.assertEqual(engine.state.reservations, [])
         self.assertTrue(engine._is_today_reserved_tent(reserved_tent_id))
         self.assertEqual(engine.state.balance, balance_after_accept)
 
@@ -289,9 +286,7 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         self._ensure_overnight_arrival_plan(engine, arrival_turn=4)
 
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
-        self.assertIsNone(engine.state.reservation)
-        self.assertEqual(engine.state.reserved_tent_id, reserved_tent_id)
-        self.assertEqual(engine.state.reserved_tent_day, reservation["arrival_day"])
+        self.assertEqual(engine.state.reservations, [])
         self.assertEqual(engine.state.today_arrival_plan[0]["source"], "reservation")
         self.assertEqual(engine.state.today_arrival_plan[0]["visit_type"], "overnight")
         self.assertEqual(engine.state.today_arrival_plan[0]["paid"], True)
@@ -299,9 +294,9 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
         balance_before_second_request = engine.state.balance
         self._auto_generate_overnight_reservation(engine, group_size=2)
 
-        self.assertIsNotNone(engine.state.reservation)
-        self.assertEqual(engine.state.reservation["group_size"], 2)
-        self.assertEqual(engine.state.reservation["arrival_day"], engine.state.day + 1)
+        self.assertEqual(len(engine.state.reservations), 1)
+        self.assertEqual(engine.state.reservations[0]["group_size"], 2)
+        self.assertEqual(engine.state.reservations[0]["arrival_day"], engine.state.day + 1)
         self.assertEqual(len(engine.state.today_arrival_plan), 1)
         self.assertGreater(engine.state.balance, balance_before_second_request)
 

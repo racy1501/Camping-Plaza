@@ -66,9 +66,9 @@ python game_api.py
 
 `/mcp/state` 主要字段（按经营、设施、预约/客流、Turn Plan 分组）：
 
-- **经营状态**：`day`、`turn`、`balance`、`reputation_rate`、`decisions_left`、`food_stock`、`today_income`
+- **经营状态**：`day`、`turn`、`balance`、`average_rating`、`decisions_left`、`food_stock`、`today_income`
 - **设施/帐篷**：`tents`（含 status/unlocked/capacity）、`facilities`（含 level）、`greenery`、`hot_spring`、`day_campsite`
-- **预约/客流**：`active_guests_count`、`reservation`、`arrival_plan`
+- **预约/客流**：`active_guests_count`、`reservations`、`arrival_plan`
 - **Turn Plan**：`planning_available`、`plan_submitted`、`plan_target_turn`、`turn_plan`、`next_turn_checkout_tents`
 
 `turn_plan` 说明：
@@ -94,7 +94,7 @@ python game_api.py
 - 预约由代码自动生成、接下、错失和结算；
 - 不存在 `accept_reservation` / `reject_reservation` 动作；
 - 玩家和 AI 无需手动接受或拒绝预约；
-- 对外安全 `reservation` 字段为：`group_size`、`visit_type`、`arrival_day`、`status`。
+- 对外安全 `reservations` 字段为列表；每项包含 `group_size`、`visit_type`、`arrival_day`、`status`，过夜预约额外包含 `tent_id`。
 
 #### `/api/action` 错误语义
 

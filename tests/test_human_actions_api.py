@@ -123,10 +123,41 @@ class Turn2PlanningTests(HumanActionsApiTestCase):
             self.assertEqual(c["portions"], package["portions"])
             self.assertIn(package["name"], c["label"])
 
-    def test_does_not_expose_improve_service(self):
+    def test_improve_service_candidate_enabled_until_daily_limit(self):
         actions = self._actions()
-        actions_exposed = {c["action"] for c in actions["decision_action_candidates"]}
-        self.assertNotIn("improve_service", actions_exposed)
+        candidate = next(
+            c for c in actions["decision_action_candidates"]
+            if c["action"] == "improve_service"
+        )
+        self.assertEqual(candidate["params"], {})
+        self.assertEqual(candidate["kind"], "decision")
+        self.assertTrue(candidate["enabled"])
+        self.assertEqual(candidate["reason"], "")
+
+        self.engine.state.improve_service_uses_today = 1
+        candidate = next(
+            c for c in self._actions()["decision_action_candidates"]
+            if c["action"] == "improve_service"
+        )
+        self.assertTrue(candidate["enabled"])
+        self.assertEqual(candidate["reason"], "")
+
+        self.engine.state.improve_service_uses_today = 2
+        candidate = next(
+            c for c in self._actions()["decision_action_candidates"]
+            if c["action"] == "improve_service"
+        )
+        self.assertFalse(candidate["enabled"])
+        self.assertEqual(candidate["reason"], "今日提升服务次数已达到上限")
+
+    def test_improve_service_does_not_change_other_candidates(self):
+        actions = self._actions()
+        self.assertEqual(
+            [c["action"] for c in actions["decision_action_candidates"]].count(
+                "buy_food_package"
+            ),
+            3,
+        )
 
     def test_cleaning_tent_free_candidate(self):
         self.engine.tents[1].status = "cleaning"
@@ -203,24 +234,21 @@ class PlanSubmittedTests(HumanActionsApiTestCase):
         super().setUp()
         self.engine.state.turn = 2
 
-    def test_empty_plan_submitted_ready_to_advance(self):
-        game_api.submit_turn_plan(
+    def test_empty_plan_submitted_advances_to_next_planning_turn(self):
+        result = game_api.submit_turn_plan(
             game_api.TurnPlanRequest(free_actions=[], actions=[])
         )
         actions = self._actions()
-        self.assertEqual(actions["mode"], "ready_to_advance")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["turn"], 3)
+        self.assertEqual(actions["mode"], "planning")
         self.assertEqual(actions["panel_title"], "营业经营")
-        self.assertFalse(actions["planning_available"])
-        self.assertTrue(actions["plan_submitted"])
-        self.assertIsNotNone(actions["turn_plan"])
+        self.assertTrue(actions["planning_available"])
+        self.assertFalse(actions["plan_submitted"])
+        self.assertIsNone(actions["turn_plan"])
 
-        primary = actions["primary_action"]
-        self.assertEqual(primary["action"], "advance_turn")
-        self.assertEqual(primary["label"], "推进经营轮次")
-        self.assertTrue(primary["enabled"])
-
-    def test_non_empty_plan_submitted_returns_summary(self):
-        game_api.submit_turn_plan(
+    def test_non_empty_plan_submitted_returns_execution_result(self):
+        result = game_api.submit_turn_plan(
             game_api.TurnPlanRequest(
                 free_actions=[game_api.ActionRequest(
                     action="clean_tents", params={"tent_ids": [1]}
@@ -230,21 +258,19 @@ class PlanSubmittedTests(HumanActionsApiTestCase):
                 )],
             )
         )
-        actions = self._actions()
-        self.assertEqual(actions["mode"], "ready_to_advance")
-        plan = actions["turn_plan"]
-        self.assertEqual(plan["target_day"], self.engine.state.day)
-        self.assertEqual(plan["target_turn"], self.engine.state.turn)
-        self.assertEqual(len(plan["free_actions"]), 1)
-        self.assertEqual(len(plan["decision_actions"]), 1)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["turn"], 3)
+        self.assertEqual(len(result["plan_execution"]["free_actions"]), 1)
+        self.assertEqual(len(result["plan_execution"]["actions"]), 1)
+        self.assertIsNone(self.engine.state.pending_turn_plan)
 
-    def test_submitted_plan_no_candidates(self):
+    def test_submitted_plan_does_not_leave_ready_to_advance_candidates(self):
         game_api.submit_turn_plan(
             game_api.TurnPlanRequest(free_actions=[], actions=[])
         )
         actions = self._actions()
-        self.assertEqual(actions["free_action_candidates"], [])
-        self.assertEqual(actions["decision_action_candidates"], [])
+        self.assertEqual(actions["mode"], "planning")
+        self.assertFalse(actions["plan_submitted"])
 
 
 class Turn6Tests(HumanActionsApiTestCase):
@@ -253,12 +279,59 @@ class Turn6Tests(HumanActionsApiTestCase):
         self.engine.state.turn = 6
 
     def test_turn6_day_end_pending(self):
+        self.engine.tents[1].status = "broken"
+        self.engine.facilities["greenery"].greenery_satisfaction = 1.0
+        self.engine.state.balance = 1000
         actions = self._actions()
         self.assertEqual(actions["mode"], "day_end_pending")
         self.assertEqual(actions["panel_title"], "日终管理")
         self.assertIsNone(actions["primary_action"])
         self.assertEqual(actions["free_action_candidates"], [])
         self.assertEqual(actions["decision_action_candidates"], [])
+        candidates = actions["day_end_action_candidates"]
+        candidate_actions = [candidate["action"] for candidate in candidates]
+        self.assertIn("repair_tent", candidate_actions)
+        self.assertIn("manage_greenery", candidate_actions)
+        self.assertIn("buy_food_package", candidate_actions)
+
+    def test_turn6_day_end_candidates_follow_current_conditions(self):
+        self.engine.tents[1].status = "broken"
+        self.engine.state.balance = 0
+        actions = self._actions()
+        candidates = {
+            (candidate["action"], tuple(sorted(candidate["params"].items()))): candidate
+            for candidate in actions["day_end_action_candidates"]
+        }
+        repair = candidates[("repair_tent", (("tent_id", 1),))]
+        self.assertFalse(repair["enabled"])
+        self.assertEqual(repair["reason"], "金币不足")
+        medium = candidates[("buy_food_package", (("package_key", "medium"),))]
+        self.assertFalse(medium["enabled"])
+        self.assertEqual(medium["reason"], "金币不足")
+
+        self.engine.tents[1].status = "available"
+        self.engine.facilities["greenery"].greenery_satisfaction = 0.0
+        self.engine.state.last_food_preorder_day = self.engine.state.day
+        actions = self._actions()
+        self.assertEqual(actions["day_end_action_candidates"], [])
+
+    def test_turn6_day_end_candidates_include_cleaning_and_qualified_growth(self):
+        self.engine.tents[1].status = "cleaning"
+        self.engine.state.balance = 10000
+        self.engine.state.successful_dining_groups = 8
+        actions = self._actions()
+        candidates = actions["day_end_action_candidates"]
+        self.assertTrue(any(
+            candidate["action"] == "clean_tents"
+            and candidate["params"] == {"tent_ids": [1]}
+            for candidate in candidates
+        ))
+        self.assertTrue(any(
+            candidate["action"] == "purchase_growth_project"
+            and candidate["params"] == {"project_id": "dining_lv1"}
+            and candidate["enabled"]
+            for candidate in candidates
+        ))
 
     def test_turn6_day_end_completed(self):
         self.engine.state.day_end_completed = True
@@ -268,6 +341,7 @@ class Turn6Tests(HumanActionsApiTestCase):
         self.assertIsNone(actions["primary_action"])
         self.assertEqual(actions["free_action_candidates"], [])
         self.assertEqual(actions["decision_action_candidates"], [])
+        self.assertEqual(actions["day_end_action_candidates"], [])
 
     def test_turn6_no_state_change(self):
         before = self._snapshot_state()
