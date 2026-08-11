@@ -498,18 +498,23 @@ class TemporaryConflictEventTests(unittest.TestCase):
         guest = NPCGroup(id=601, group_size=1, visit_type="day", campsite_slot=1)
         self.engine.npc_pool.append(guest)
         self.engine.state.turn = 5
+        balance_before = self.engine.state.balance
         with mock.patch("game_engine.random.random", return_value=0.0):
             self.engine._settle_tips({"events": []})
         self.assertEqual(self.engine.state.today_income["tip"], 20)
+        self.assertEqual(self.engine.state.balance, balance_before + 20)
         self.engine._settle_tips({"events": []})
         self.assertEqual(self.engine.state.today_income["tip"], 20)
+        self.assertEqual(self.engine.state.balance, balance_before + 20)
 
         self.engine.state.today_income["tip"] = 0
         self.engine.state.today_tip_settled = False
+        balance_before = self.engine.state.balance
         with mock.patch("game_engine.random.random", return_value=0.99):
             result = {"events": []}
             self.engine._settle_tips(result)
         self.assertEqual(result["events"], [])
+        self.assertEqual(self.engine.state.balance, balance_before)
 
     def test_campfire_changes_only_affected_tip_probability_and_star_amount(self):
         guests = [
@@ -520,9 +525,11 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine.state.campfire_affected_npc_ids = [701]
         self.engine.state.stargazing_affected_npc_ids = [702]
         self.engine.state.turn = 5
+        balance_before = self.engine.state.balance
         with mock.patch("game_engine.random.random", side_effect=[0.30, 0.0]):
             self.engine._settle_tips({"events": []})
         self.assertEqual(self.engine.state.today_income["tip"], 50)
+        self.assertEqual(self.engine.state.balance, balance_before + 50)
 
     def test_successful_greenery_upgrade_skips_same_batch_maintenance(self):
         self.engine.state.turn = 6

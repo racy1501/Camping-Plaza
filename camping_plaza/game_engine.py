@@ -3493,6 +3493,8 @@ class CampingPlazaEngine:
             if random.random() < probability:
                 total += 30 if npc.id in stargazing_ids else 20
         self.state.today_income["tip"] += total
+        if total:
+            self.state.balance += total
         self.state.today_tip_settled = True
         if total:
             message = f"今日收到小费 {total} 金币。"
