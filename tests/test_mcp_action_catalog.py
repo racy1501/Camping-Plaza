@@ -1,0 +1,117 @@
+import copy
+import sys
+import unittest
+from unittest import mock
+
+sys.path.insert(0, "camping_plaza")
+
+import game_api
+from game_engine import CampingPlazaEngine
+
+
+class McpActionCatalogTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = CampingPlazaEngine(db_path=":memory:")
+        self.engine.state.today_conflict_event = None
+        self.original_engine = game_api.engine
+        game_api.engine = self.engine
+
+    def tearDown(self):
+        game_api.engine = self.original_engine
+
+    def _submit_entry(self):
+        actions = game_api.mcp_available_actions()["available_actions"]
+        return next(item for item in actions if item["action"] == "submit_turn_plan")
+
+    def test_turn2_candidates_include_core_plan_actions_and_clean_tents(self):
+        self.engine.state.turn = 2
+        self.engine.tents[1].status = "cleaning"
+        entry = self._submit_entry()
+        free = {item["action"]: item for item in entry["free_action_candidates"]}
+        decision = {item["action"]: item for item in entry["decision_action_candidates"]}
+        self.assertEqual(free["clean_tents"]["params"], {"tent_ids": [1]})
+        self.assertEqual(free["clean_tents"]["cost_decision_points"], 0)
+        for name in ("improve_service", "clean_campsite", "make_post"):
+            self.assertTrue(decision[name]["enabled"])
+            self.assertEqual(decision[name]["cost_decision_points"], 1)
+            self.assertEqual(decision[name]["params"], {})
+
+    def test_turn_specific_candidates_and_daily_limits(self):
+        self.engine.state.turn = 3
+        self.assertNotIn("campfire", {x["action"] for x in self._submit_entry()["decision_action_candidates"]})
+        self.engine.state.turn = 4
+        self.assertIn("campfire", {x["action"] for x in self._submit_entry()["decision_action_candidates"]})
+        self.engine.state.turn = 5
+        self.assertIn("stargazing", {x["action"] for x in self._submit_entry()["decision_action_candidates"]})
+        self.engine.state.improve_service_uses_today = 2
+        self.engine.state.clean_campsite_uses_today = 2
+        self.engine.state.post_used_today = True
+        candidates = {x["action"]: x for x in self._submit_entry()["decision_action_candidates"]}
+        self.assertFalse(candidates["improve_service"]["enabled"])
+        self.assertEqual(candidates["improve_service"]["remaining_today"], 0)
+        self.assertFalse(candidates["clean_campsite"]["enabled"])
+        self.assertEqual(candidates["clean_campsite"]["remaining_today"], 0)
+        self.assertFalse(candidates["make_post"]["enabled"])
+        self.assertEqual(candidates["make_post"]["remaining_today"], 0)
+        self.assertTrue(candidates["improve_service"]["reason"])
+
+    def test_clean_tents_disabled_without_cleaning_tents(self):
+        self.engine.state.turn = 2
+        clean = self._submit_entry()["free_action_candidates"][0]
+        self.assertEqual(clean["action"], "clean_tents")
+        self.assertFalse(clean["enabled"])
+        self.assertEqual(clean["params"], {"tent_ids": []})
+        self.assertTrue(clean["reason"])
+
+    def test_conflict_is_immediate_and_exposes_required_choice_enum(self):
+        self.engine.state.turn = 3
+        self.engine.state.today_conflict_event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3, "mediate_result": {}, "ignore_result": {},
+        }
+        before = copy.deepcopy(self.engine.state)
+        actions = game_api.mcp_available_actions()["available_actions"]
+        self.assertEqual([item["action"] for item in actions], ["resolve_temporary_conflict"])
+        self.assertEqual(actions[0]["choices"], ["mediate", "ignore"])
+        self.assertIsNone(actions[0]["params"]["choice"])
+        self.assertEqual(actions[0]["required_params"][0]["enum"], ["mediate", "ignore"])
+        self.assertEqual(self.engine.state, before)
+
+    def test_submitted_plan_only_exposes_advance(self):
+        self.engine.state.turn = 3
+        self.engine.state.pending_turn_plan = {
+            "target_day": self.engine.state.day, "target_turn": 3,
+            "free_actions": [], "actions": [],
+        }
+        actions = game_api.mcp_available_actions()["available_actions"]
+        self.assertEqual([item["action"] for item in actions], ["advance_turn"])
+
+    def test_human_and_mcp_candidate_availability_matches(self):
+        for turn in (2, 3, 4, 5):
+            self.engine.state.turn = turn
+            self.engine.state.pending_turn_plan = None
+            mcp = self._submit_entry()
+            human = game_api.get_human_actions()
+            human_candidates = human["free_action_candidates"] + human["decision_action_candidates"]
+            mcp_candidates = mcp["free_action_candidates"] + mcp["decision_action_candidates"]
+            human_by_action = {item["action"]: item for item in human_candidates}
+            mcp_by_action = {item["action"]: item for item in mcp_candidates}
+            self.assertEqual(set(human_by_action), set(mcp_by_action))
+            for action in human_by_action:
+                self.assertEqual(human_by_action[action]["enabled"], mcp_by_action[action]["enabled"])
+                self.assertEqual(human_by_action[action]["reason"], mcp_by_action[action]["reason"])
+
+    def test_mcp_adapter_does_not_depend_on_human_catalog(self):
+        self.engine.state.turn = 2
+        with mock.patch.object(
+            game_api,
+            "_build_human_action_catalog",
+            side_effect=AssertionError("MCP must use the neutral source"),
+        ):
+            candidates = game_api._build_turn_action_candidates(self.engine)
+        self.assertTrue(candidates["free_action_candidates"])
+        self.assertTrue(candidates["decision_action_candidates"])
+
+
+if __name__ == "__main__":
+    unittest.main()

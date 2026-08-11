@@ -186,6 +186,90 @@ def _get_turn_plan_summary(eng: CampingPlazaEngine) -> Optional[dict]:
     }
 
 
+def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
+    """生成 Turn 2～5 共用的中性动作候选，不包含 UI 文案。"""
+    state = eng.get_full_state()
+    balance = eng.state.balance
+    turn = eng.state.turn
+    cleaning_tent_ids = [
+        int(tid) for tid, tent in state["tents"].items()
+        if tent["unlocked"] and tent["status"] == "cleaning"
+    ]
+    free_candidates = [{
+        "action": "clean_tents",
+        "kind": "free",
+        "enabled": bool(cleaning_tent_ids),
+        "reason": "" if cleaning_tent_ids else "暂无待清洁帐篷",
+        "params": {"tent_ids": cleaning_tent_ids},
+        "repeatable": False,
+        "cost_decision_points": 0,
+    }]
+    decision_candidates = []
+    for tid, tent in state["tents"].items():
+        if not (tent["unlocked"] and tent["status"] == "broken"):
+            continue
+        tent_id = int(tid)
+        enabled = balance >= CampingPlazaEngine.REPAIR_COST
+        decision_candidates.append({
+            "action": "repair_tent", "kind": "decision",
+            "enabled": enabled,
+            "reason": "" if enabled else "金币不足",
+            "params": {"tent_id": tent_id}, "repeatable": False,
+            "price": CampingPlazaEngine.REPAIR_COST,
+            "cost_decision_points": 1,
+        })
+
+    improve_remaining = max(0, 2 - eng.state.improve_service_uses_today)
+    decision_candidates.append({
+        "action": "improve_service", "kind": "decision",
+        "enabled": improve_remaining > 0,
+        "reason": "" if improve_remaining else "今日提升服务次数已达到上限",
+        "params": {}, "repeatable": False,
+        "remaining_today": improve_remaining, "cost_decision_points": 1,
+    })
+    clean_remaining = max(0, 2 - eng.state.clean_campsite_uses_today)
+    decision_candidates.append({
+        "action": "clean_campsite", "kind": "decision",
+        "enabled": clean_remaining > 0,
+        "reason": "" if clean_remaining else "今日清洁营地次数已达到上限",
+        "params": {}, "repeatable": False,
+        "remaining_today": clean_remaining, "cost_decision_points": 1,
+    })
+    post_remaining = 0 if eng.state.post_used_today else 1
+    decision_candidates.append({
+        "action": "make_post", "kind": "decision",
+        "enabled": post_remaining > 0,
+        "reason": "" if post_remaining else "今天已经发布过帖子",
+        "params": {}, "repeatable": False,
+        "remaining_today": post_remaining, "cost_decision_points": 1,
+    })
+    if turn == 4:
+        decision_candidates.append({
+            "action": "campfire", "kind": "decision", "enabled": True,
+            "reason": "", "params": {}, "repeatable": False,
+            "cost_decision_points": 1,
+        })
+    if turn == 5:
+        decision_candidates.append({
+            "action": "stargazing", "kind": "decision", "enabled": True,
+            "reason": "", "params": {}, "repeatable": False,
+            "cost_decision_points": 1,
+        })
+    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
+        enabled = balance >= package["price"]
+        decision_candidates.append({
+            "action": "buy_food_package", "kind": "decision",
+            "enabled": enabled, "reason": "" if enabled else "金币不足",
+            "params": {"package_key": package_key}, "repeatable": True,
+            "price": package["price"], "portions": package["portions"],
+            "max_quantity": 3, "cost_decision_points": 1,
+        })
+    return {
+        "free_action_candidates": free_candidates,
+        "decision_action_candidates": decision_candidates,
+    }
+
+
 def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
     """把引擎状态整理为适合人类网页读取的动作目录。只读，不修改状态。"""
     state = eng.get_full_state()
@@ -342,83 +426,40 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             },
         }
 
-    # Turn 2~5 尚未提交计划
-    cleaning_tent_ids = [
-        int(tid) for tid, t in state["tents"].items()
-        if t["unlocked"] and t["status"] == "cleaning"
-    ]
-    has_cleaning = bool(cleaning_tent_ids)
-    free_action_candidates = [{
-        "action": "clean_tents",
-        "params": {"tent_ids": cleaning_tent_ids},
-        "label": "清洁待清洁帐篷",
-        "kind": "free",
-        "category": "cleaning",
-        "repeatable": False,
-        "enabled": has_cleaning,
-        "reason": "" if has_cleaning else "暂无待清洁帐篷",
-    }]
-
+    # Turn 2~5 尚未提交计划：读取中性候选，再补充人类展示字段。
+    neutral = _build_neutral_turn_action_candidates(eng)
+    free_action_candidates = []
+    for source in neutral["free_action_candidates"]:
+        item = dict(source)
+        item.update({"label": "清洁待清洁帐篷", "category": "cleaning"})
+        item.pop("cost_decision_points", None)
+        free_action_candidates.append(item)
     decision_action_candidates = []
-
-    # 维修候选：每个损坏帐篷独立一张卡
-    for tid, t in state["tents"].items():
-        if not (t["unlocked"] and t["status"] == "broken"):
-            continue
-        tent_id = int(tid)
-        can_afford = balance >= CampingPlazaEngine.REPAIR_COST
-        decision_action_candidates.append({
-            "action": "repair_tent",
-            "params": {"tent_id": tent_id},
-            "label": f"维修{tent_id}号帐篷",
-            "kind": "decision",
-            "category": "repair",
-            "repeatable": False,
-            "price": CampingPlazaEngine.REPAIR_COST,
-            "enabled": can_afford,
-            "reason": "金币不足" if not can_afford else "",
-        })
-
-    improve_service_available = eng.state.improve_service_uses_today < 2
-    decision_action_candidates.append({
-        "action": "improve_service",
-        "params": {},
-        "label": "提升服务",
-        "kind": "decision",
-        "category": "service",
-        "repeatable": False,
-        "enabled": improve_service_available,
-        "reason": "" if improve_service_available else "今日提升服务次数已达到上限",
-    })
-
-    if turn in (2, 3, 4, 5):
-        clean_campsite_available = eng.state.clean_campsite_uses_today < 2
-        decision_action_candidates.extend([
-            {"action": "clean_campsite", "params": {}, "label": "清洁营地", "kind": "decision", "category": "cleaning", "repeatable": False, "enabled": clean_campsite_available, "reason": "" if clean_campsite_available else "今日清洁营地次数已达到上限"},
-            {"action": "make_post", "params": {}, "label": "发布帖子", "kind": "decision", "category": "post", "repeatable": False, "enabled": not eng.state.post_used_today, "reason": "今天已经发布过帖子" if eng.state.post_used_today else ""},
-        ])
-        if turn == 4:
-            decision_action_candidates.append({"action": "campfire", "params": {}, "label": "举行篝火", "kind": "decision", "category": "campfire", "repeatable": False, "enabled": True, "reason": ""})
-        if turn == 5:
-            decision_action_candidates.append({"action": "stargazing", "params": {}, "label": "观赏星空", "kind": "decision", "category": "stargazing", "repeatable": False, "enabled": True, "reason": ""})
-
-    # 补充食材候选：从 FOOD_PACKAGES 动态生成
-    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
-        can_afford = balance >= package["price"]
-        decision_action_candidates.append({
-            "action": "buy_food_package",
-            "params": {"package_key": package_key},
-            "label": f"补充{package['name']}",
-            "detail": f"{package['portions']}份 · {package['price']}金币",
-            "price": package["price"],
-            "portions": package["portions"],
-            "kind": "decision",
-            "category": "food",
-            "repeatable": True,
-            "max_quantity": 3,
-            "enabled": can_afford,
-            "reason": "金币不足" if not can_afford else "",
-        })
+    labels = {
+        "improve_service": "提升服务", "clean_campsite": "清洁营地",
+        "make_post": "发布帖子", "campfire": "举行篝火",
+        "stargazing": "观赏星空", "repair_tent": "维修帐篷",
+        "buy_food_package": "补充食材",
+    }
+    categories = {
+        "improve_service": "service", "clean_campsite": "cleaning",
+        "make_post": "post", "campfire": "campfire",
+        "stargazing": "stargazing", "repair_tent": "repair",
+        "buy_food_package": "food",
+    }
+    for source in neutral["decision_action_candidates"]:
+        item = dict(source)
+        action = item["action"]
+        item.update({"label": labels[action], "category": categories[action]})
+        if action == "repair_tent":
+            item["label"] = f"维修{item['params']['tent_id']}号帐篷"
+        if action == "buy_food_package":
+            package = CampingPlazaEngine.FOOD_PACKAGES[item["params"]["package_key"]]
+            item["label"] = f"补充{package['name']}"
+            item["detail"] = f"{package['portions']}份 · {package['price']}金币"
+        item.pop("cost_decision_points", None)
+        item.pop("remaining_today", None)
+        decision_action_candidates.append(item)
 
     temporary_event = _get_temporary_event_summary(eng)
 
@@ -558,6 +599,30 @@ def get_growth():
         "progress": eng.get_growth_progress(),
         "projects": eng.get_growth_project_catalog(),
     }
+
+
+def _build_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
+    """将中性 Turn Plan 候选转换为 MCP 使用的机器侧结构。"""
+    catalog = _build_neutral_turn_action_candidates(eng)
+    candidates = {}
+    for key in ("free_action_candidates", "decision_action_candidates"):
+        normalized = []
+        for source in catalog[key]:
+            item = {
+                "action": source["action"],
+                "kind": source["kind"],
+                "enabled": source["enabled"],
+                "reason": source.get("reason", ""),
+                "params": dict(source.get("params") or {}),
+                "repeatable": source.get("repeatable", False),
+                "cost_decision_points": 0 if source["kind"] == "free" else 1,
+            }
+            for field in ("remaining_today", "price", "portions", "max_quantity"):
+                if field in source:
+                    item[field] = source[field]
+            normalized.append(item)
+        candidates[key] = normalized
+    return candidates
 
 
 def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
@@ -929,15 +994,20 @@ def mcp_available_actions():
                 "params": {"free_actions": [], "actions": []},
                 "description": _food_package_plan_description(),
             }
+            turn_candidates = _build_turn_action_candidates(eng)
+            submit_entry.update(turn_candidates)
+            submit_entry["max_decision_actions"] = eng.state.decisions_left
             broken_candidates = [
                 {
-                    "action": "repair_tent",
-                    "params": {"tent_id": int(tid)},
-                    "cost": CampingPlazaEngine.REPAIR_COST,
-                    "description": f"维修{tid}号帐篷（{CampingPlazaEngine.REPAIR_COST}金币）",
+                    "action": item["action"],
+                    "params": dict(item["params"]),
+                    "cost": item.get("price", CampingPlazaEngine.REPAIR_COST),
+                    "enabled": item["enabled"],
+                    "reason": item["reason"],
+                    "description": f"维修{item['params']['tent_id']}号帐篷（{item.get('price', CampingPlazaEngine.REPAIR_COST)}金币）",
                 }
-                for tid, t in state["tents"].items()
-                if t["unlocked"] and t["status"] == "broken"
+                for item in turn_candidates["decision_action_candidates"]
+                if item["action"] == "repair_tent"
             ]
             if broken_candidates:
                 submit_entry["repair_candidates"] = broken_candidates
@@ -945,8 +1015,15 @@ def mcp_available_actions():
             if temporary_event is not None:
                 actions.append({
                     "action": "resolve_temporary_conflict",
-                    "params": {"choice": "mediate"},
-                    "choices": temporary_event["choices"],
+                    "params": {"choice": None},
+                    "required_params": [{
+                        "name": "choice",
+                        "type": "string",
+                        "required": True,
+                        "enum": ["mediate", "ignore"],
+                    }],
+                    "choices": ["mediate", "ignore"],
+                    "choice_details": temporary_event["choices"],
                     "temporary_event": temporary_event,
                     "description": "先立即处理临时事件，再提交本轮经营计划。",
                 })
