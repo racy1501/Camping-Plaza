@@ -184,12 +184,36 @@
                 </section>
 
                 <!-- 常驻经营操作 -->
+                <section class="panel-card morning-review hidden" id="morningReview" aria-label="晨间复盘">
+                    <h3>晨间复盘</h3>
+                    <div class="morning-review-grid">
+                        <div class="morning-review-item"><span>昨日接待</span><strong id="morningGuestGroups">--</strong></div>
+                        <div class="morning-review-item"><span>昨日净收入</span><strong id="morningNetIncome">--</strong></div>
+                        <div class="morning-review-item"><span>昨日新增评价</span><strong id="morningNewReviews">--</strong></div>
+                        <div class="morning-review-item"><span>当前营地评价</span><strong id="morningRating">-- ★</strong></div>
+                        <div class="morning-review-item morning-review-wide"><span>今日预约</span><strong id="morningReservations">今日预约：无</strong></div>
+                        <div class="morning-review-item"><span>食材库存</span><strong id="morningFoodStock">--</strong></div>
+                    </div>
+                </section>
+
                 <section class="operations-panel" aria-label="经营操作">
                     <div class="operations-heading">
                         <h3>经营操作</h3>
                     </div>
+                    <div class="action-message" id="decisionsResource"></div>
                     <div class="action-message" id="actionMessage"></div>
                     <div class="action-grid" id="actionGrid"></div>
+                </section>
+                <div class="temporary-event-modal hidden" id="temporaryEventModal" role="dialog" aria-modal="true" aria-labelledby="temporaryEventTitle">
+                    <div class="temporary-event-dialog">
+                        <h3 id="temporaryEventTitle">临时事件</h3>
+                        <p id="temporaryEventDescription"></p>
+                        <div class="temporary-event-choices" id="temporaryEventChoices"></div>
+                    </div>
+                </div>
+                <section class="panel-card log-panel" aria-label="经营日志">
+                    <h3>经营日志</h3>
+                    <div class="log-list" id="logList"></div>
                 </section>
             </div>
 
@@ -204,7 +228,7 @@
                     <h3>营地概况</h3>
                     <div class="overview-grid">
                         <div class="overview-item">
-                            <span class="overview-label">已开放营位</span>
+                            <span class="overview-label">已开放帐篷</span>
                             <span class="overview-value" id="openSlots">--</span>
                         </div>
                         <div class="overview-item">
@@ -212,12 +236,28 @@
                             <span class="overview-value" id="activeGroups">--</span>
                         </div>
                         <div class="overview-item">
-                            <span class="overview-label">剩余决策点</span>
-                            <span class="overview-value" id="todoCount">--</span>
+                            <span class="overview-label">明日预约客组</span>
+                            <span class="overview-value" id="tomorrowReservationGroups">0</span>
                         </div>
                         <div class="overview-item">
                             <span class="overview-label">食材库存</span>
-                            <span class="overview-value" id="facilityState">--</span>
+                            <span class="overview-value" id="foodStock">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">绿化</span>
+                            <span class="overview-value" id="greeneryState">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">篝火厨房</span>
+                            <span class="overview-value" id="bonfireKitchenState">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">星空游戏屋</span>
+                            <span class="overview-value" id="gameHouseState">--</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="overview-label">温泉</span>
+                            <span class="overview-value" id="hotSpringState">--</span>
                         </div>
                     </div>
                 </div>
@@ -255,11 +295,6 @@
             </aside>
         </main>
 
-        <!-- 经营日志 -->
-        <section class="panel-card log-panel" aria-label="经营日志">
-            <h3>经营日志</h3>
-            <div class="log-list" id="logList"></div>
-        </section>
     </div>
 
     <script src="scripts/overview.js"></script>

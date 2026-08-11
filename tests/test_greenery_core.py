@@ -100,7 +100,7 @@ class GreeneryCoreTests(unittest.TestCase):
 
                 self.assertNotIn("昨日未维护绿化，绿化值", " ".join(result["events"]))
 
-    def test_greenery_day_end_warns_before_next_day_decay(self):
+    def test_day_end_does_not_emit_greenery_forecast_event(self):
         engine = make_engine()
         greenery = engine.facilities["greenery"]
         greenery.level = 0
@@ -111,7 +111,7 @@ class GreeneryCoreTests(unittest.TestCase):
 
         engine._process_day_end(result)
 
-        self.assertIn(
+        self.assertNotIn(
             "今日绿化尚未维护，进入下一天后将从 3.0 降至 2.5。",
             result["events"],
         )
@@ -159,6 +159,23 @@ class GreeneryCoreTests(unittest.TestCase):
 
         self.assertEqual(greenery.greenery_satisfaction, 4.0)
         self.assertFalse(engine.state.greenery_processed_today)
+
+    def test_day_end_maintenance_records_no_stale_decay_forecast(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.state.balance = 1000
+
+        result = engine.submit_day_end_actions([
+            {"action": "manage_greenery", "params": {"action": "maintain"}},
+        ])
+
+        self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(engine.facilities["greenery"].greenery_satisfaction, 3.0)
+        self.assertTrue(engine.state.greenery_processed_today)
+        self.assertFalse(any(
+            "进入下一天后将从" in item["text"]
+            for item in engine.state.event_history
+        ))
 
     def test_insufficient_balance_does_not_maintain(self):
         engine = make_engine()

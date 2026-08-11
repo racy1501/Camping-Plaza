@@ -80,8 +80,9 @@ class FreshDatabaseTests(PersistenceTestCase):
             engine.state.food_stock,
             CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
         )
+        self.assertEqual(engine.state.today_events, [])
         self.assertEqual(
-            engine.state.today_events,
+            [item["text"] for item in engine.state.event_history],
             [engine._build_opening_food_gift_event()],
         )
         # 快照表存在且仅一行
@@ -106,7 +107,7 @@ class FreshDatabaseTests(PersistenceTestCase):
         medium_package = CampingPlazaEngine.FOOD_PACKAGES["medium"]
         self.assertIn(
             f'{medium_package["name"]}（{medium_package["portions"]}份）',
-            engine.state.today_events[0],
+            engine.state.event_history[0]["text"],
         )
 
 
@@ -307,14 +308,14 @@ class FullSaveRestoreTests(PersistenceTestCase):
 
     def test_opening_food_gift_persists_without_duplication(self):
         engine = CampingPlazaEngine(db_path=self.db_path)
-        opening_events = list(engine.state.today_events)
+        opening_events = list(engine.state.event_history)
         opening_stock = engine.state.food_stock
 
         restored = CampingPlazaEngine(db_path=self.db_path)
 
         self.assertEqual(restored.state.food_stock, opening_stock)
-        self.assertEqual(restored.state.today_events, opening_events)
-        self.assertEqual(len(restored.state.today_events), 1)
+        self.assertEqual(restored.state.event_history, opening_events)
+        self.assertEqual(len(restored.state.event_history), 1)
 
 
 class EventHistoryPersistenceTests(PersistenceTestCase):

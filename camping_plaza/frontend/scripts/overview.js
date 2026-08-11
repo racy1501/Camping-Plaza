@@ -46,6 +46,7 @@
     let selectedFreeActions = [];
     let selectedDecisionActions = [];
     let selectedDayEndActions = [];
+    let selectedConflictChoice = null;
 
     function init() {
         cacheElements();
@@ -68,13 +69,19 @@
         els.reminderList = document.getElementById('reminderList');
         els.openSlots = document.getElementById('openSlots');
         els.activeGroups = document.getElementById('activeGroups');
-        els.todoCount = document.getElementById('todoCount');
-        els.facilityState = document.getElementById('facilityState');
+        els.tomorrowReservationGroups = document.getElementById('tomorrowReservationGroups');
+        els.decisionsResource = document.getElementById('decisionsResource');
+        els.foodStock = document.getElementById('foodStock');
+        els.greeneryState = document.getElementById('greeneryState');
+        els.bonfireKitchenState = document.getElementById('bonfireKitchenState');
+        els.gameHouseState = document.getElementById('gameHouseState');
+        els.hotSpringState = document.getElementById('hotSpringState');
         els.incomeAccommodation = document.getElementById('income-accommodation');
         els.incomeCampsite = document.getElementById('income-campsite');
         els.incomeDining = document.getElementById('income-dining');
         els.incomeEntertainment = document.getElementById('income-entertainment');
         els.incomeTotal = document.getElementById('income-total');
+        els.incomeList = document.querySelector('.panel-card.income .income-list');
         els.reviewList = document.getElementById('reviewList');
         els.npcLayer = document.getElementById('npcLayer');
         els.playerMarker = document.getElementById('playerMarker');
@@ -82,6 +89,16 @@
         els.operationsHeading = document.querySelector('.operations-heading h3');
         els.actionMessage = document.getElementById('actionMessage');
         els.actionGrid = document.getElementById('actionGrid');
+        els.temporaryEventModal = document.getElementById('temporaryEventModal');
+        els.temporaryEventDescription = document.getElementById('temporaryEventDescription');
+        els.temporaryEventChoices = document.getElementById('temporaryEventChoices');
+        els.morningReview = document.getElementById('morningReview');
+        els.morningGuestGroups = document.getElementById('morningGuestGroups');
+        els.morningNetIncome = document.getElementById('morningNetIncome');
+        els.morningNewReviews = document.getElementById('morningNewReviews');
+        els.morningRating = document.getElementById('morningRating');
+        els.morningReservations = document.getElementById('morningReservations');
+        els.morningFoodStock = document.getElementById('morningFoodStock');
         els.campsiteSlots = {};
         for (let i = 1; i <= 10; i++) {
             els.campsiteSlots[i] = document.querySelector(`.campsite-slot[data-slot="${i}"]`);
@@ -186,14 +203,39 @@
 
     function renderAll(state) {
         renderTopCards(state);
+        renderMorningReview(state);
         renderMap(state);
         renderNPCs(state.active_npcs || []);
         renderIncome(state);
         renderReviewBook(state.review_history || []);
         renderOverview(state);
         renderReminders(state);
-        renderEvents(state.event_history || []);
+        renderEvents(state.event_history || [], state.today_events || []);
         showPlayerMarker();
+    }
+
+    function renderMorningReview(state) {
+        if (!els.morningReview) return;
+        const isTurnOne = Number(state.turn) === 1;
+        els.morningReview.style.display = isTurnOne ? '' : 'none';
+        if (!isTurnOne) return;
+        const previous = state.previous_day_summary || {};
+        const previousDay = Number(state.day) - 1;
+        const newReviews = Array.isArray(state.review_history)
+            ? state.review_history.filter(review => Number(review.created_day) === previousDay).length
+            : 0;
+        const plan = state.arrival_plan || {};
+        const overnight = Number(plan.reservation_overnight_groups) || 0;
+        const day = Number(plan.reservation_day_groups) || 0;
+        const reservations = [];
+        if (overnight) reservations.push(`帐篷 ${overnight} 顶`);
+        if (day) reservations.push(`营位 ${day} 组`);
+        els.morningGuestGroups.textContent = previous.guest_groups_served ?? '--';
+        els.morningNetIncome.textContent = previous.net_income ?? '--';
+        els.morningNewReviews.textContent = state.previous_day_summary ? newReviews : '--';
+        els.morningRating.textContent = typeof state.average_rating === 'number' ? state.average_rating.toFixed(1) + ' ★' : '-- ★';
+        els.morningReservations.textContent = reservations.length ? '今日预约：' + reservations.join('｜') : '今日预约：无';
+        els.morningFoodStock.textContent = (state.food_stock ?? '--') + '份';
     }
 
     function renderTopCards(state) {
@@ -323,17 +365,15 @@
 
     function renderIncome(state) {
         const income = state.today_income || {};
-        const accommodation = income.accommodation ?? 0;
-        const campsite = income.campsite ?? 0;
-        const dining = income.dining ?? 0;
-        const entertainment = income.entertainment ?? 0;
-        const total = accommodation + campsite + dining + entertainment;
-
-        if (els.incomeAccommodation) els.incomeAccommodation.textContent = '+' + accommodation;
-        if (els.incomeCampsite) els.incomeCampsite.textContent = '+' + campsite;
-        if (els.incomeDining) els.incomeDining.textContent = '+' + dining;
-        if (els.incomeEntertainment) els.incomeEntertainment.textContent = '+' + entertainment;
-        if (els.incomeTotal) els.incomeTotal.textContent = '+' + total;
+        const expenses = state.today_expenses || {};
+        const rows = (items, sign) => items.map(([label, key]) => `<div class="income-row"><span class="income-label">${label}</span><span class="income-value ${sign === '+' ? 'income-in' : 'income-out'}">${sign}${Number(items && (sign === '+' ? income : expenses)[key] || 0)}</span></div>`).join('');
+        const incomeItems = [['住宿', 'accommodation'], ['营位', 'campsite'], ['餐饮', 'dining'], ['娱乐', 'entertainment'], ['温泉', 'hot_spring'], ['小费', 'tip']];
+        const expenseItems = [['食材', 'food'], ['绿化', 'greenery'], ['维修', 'repair'], ['建设 / 升级', 'growth']];
+        const incomeTotal = incomeItems.reduce((sum, [, key]) => sum + Number(income[key] || 0), 0);
+        const expenseTotal = expenseItems.reduce((sum, [, key]) => sum + Number(expenses[key] || 0), 0);
+        if (els.incomeList) {
+            els.incomeList.innerHTML = `<div class="income-columns"><div class="income-column"><h4>今日收入</h4>${rows(incomeItems, '+')}</div><div class="income-column"><h4>今日支出</h4>${rows(expenseItems, '-')}</div></div><div class="income-summary"><div><span>收入合计</span><strong>+${incomeTotal}</strong></div><div><span>支出合计</span><strong>-${expenseTotal}</strong></div><div><span>今日净收益</span><strong>${incomeTotal - expenseTotal >= 0 ? '+' : ''}${incomeTotal - expenseTotal}</strong></div></div>`;
+        }
     }
 
     function reviewStars(rating) {
@@ -379,15 +419,55 @@
         const tents = state.tents || {};
         const unlocked = Object.values(tents).filter(t => t && t.unlocked).length;
         const active = (state.active_npcs || []).filter(n => n.location !== 'leaving').length;
+        const greenery = state.greenery || {};
+        const facilities = state.facilities || {};
+        const hotSpring = state.hot_spring || {};
+        const tomorrowDay = Number(state.day) + 1;
+        const tomorrowReservationGroups = (Array.isArray(state.reservations) ? state.reservations : [])
+            .filter(reservation => (
+                reservation &&
+                reservation.status === 'accepted' &&
+                Number(reservation.arrival_day) === tomorrowDay
+            )).length;
+        const facilityLevel = key => facilities[key] && facilities[key].level;
 
         if (els.openSlots) els.openSlots.textContent = `${unlocked}/6`;
         if (els.activeGroups) els.activeGroups.textContent = active;
-        if (els.todoCount) els.todoCount.textContent = state.decisions_left ?? '--';
-        if (els.facilityState) els.facilityState.textContent = state.food_stock ?? '--';
+        if (els.tomorrowReservationGroups) {
+            els.tomorrowReservationGroups.textContent = tomorrowReservationGroups;
+        }
+        const selectedDecisionCost = selectedDecisionActions.length;
+        const visibleDecisionsLeft = Math.max(
+            0,
+            Number(state.decisions_left ?? 0) - selectedDecisionCost
+        );
+        if (els.decisionsResource) {
+            if (Number(state.turn) === 6) {
+                els.decisionsResource.textContent = state.day_end_completed === true
+                    ? ''
+                    : '本轮日终操作：无上限';
+            } else {
+                els.decisionsResource.textContent = `本轮剩余决策点：${visibleDecisionsLeft}`;
+            }
+        }
+        if (els.foodStock) els.foodStock.textContent = `${state.food_stock ?? '--'}份`;
+        if (els.greeneryState) {
+            const value = Number.isFinite(Number(greenery.value)) ? Number(greenery.value).toFixed(1) : '--';
+            const max = Number.isFinite(Number(greenery.max)) ? Number(greenery.max).toFixed(1) : '--';
+            const maintenance = greenery.maintained_today ? '已维护' : '未维护';
+            els.greeneryState.textContent = `${value} / ${max}｜${maintenance}`;
+        }
+        if (els.bonfireKitchenState) els.bonfireKitchenState.textContent = `Lv.${facilityLevel('dining') ?? '--'}`;
+        if (els.gameHouseState) els.gameHouseState.textContent = `Lv.${facilityLevel('entertainment') ?? '--'}`;
+        if (els.hotSpringState) els.hotSpringState.textContent = hotSpring.built === true ? '已开放' : '待建造';
     }
 
     function renderReminders(state) {
         if (!els.reminderList) return;
+        if (state.turn === 6 && state.day_end_completed === true) {
+            els.reminderList.innerHTML = '<li>暂无紧急提醒</li>';
+            return;
+        }
         const reminders = [];
         const tents = state.tents || {};
         Object.entries(tents).forEach(([id, t]) => {
@@ -399,8 +479,8 @@
             }
         });
         const greenery = state.greenery || {};
-        if (greenery.level < 2 && !greenery.maintained_today && greenery.value > 0) {
-            reminders.push('绿化将在次日衰减，建议日终维护');
+        if (state.turn === 6 && !state.day_end_completed && greenery.level < 2 && !greenery.maintained_today && greenery.value > 0) {
+            reminders.push('如果今日不维护绿化，明天绿化值会下降 0.5。');
         }
         if (state.food_stock === 0) {
             reminders.push('食材库存为空');
@@ -411,16 +491,29 @@
         els.reminderList.innerHTML = reminders.map(r => `<li>${escapeHtml(r)}</li>`).join('');
     }
 
-    function renderEvents(events) {
+    function renderEvents(events, todayEvents) {
         if (!els.logList) return;
+        const visibleEvents = (Array.isArray(events) ? events.slice() : []).concat(
+            (Array.isArray(todayEvents) ? todayEvents : []).map((text, index) => ({
+                day: currentState && currentState.day,
+                turn: currentState && currentState.turn,
+                text,
+                sequence: Number.MAX_SAFE_INTEGER - ((Array.isArray(todayEvents) ? todayEvents.length : 0) - index),
+            }))
+        );
+        visibleEvents.sort((left, right) => (
+            Number(left.day || 0) - Number(right.day || 0)
+            || Number(left.turn || 0) - Number(right.turn || 0)
+            || Number(left.sequence || 0) - Number(right.sequence || 0)
+        ));
         els.logList.innerHTML = '';
-        if (!Array.isArray(events) || events.length === 0) {
+        if (visibleEvents.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'log-entry';
             empty.textContent = '暂无经营日志';
             els.logList.appendChild(empty);
         } else {
-            events.slice().reverse().forEach(event => {
+            visibleEvents.slice().reverse().forEach(event => {
                 const entry = document.createElement('div');
                 entry.className = 'log-entry';
                 entry.textContent = `Day ${event.day} · Turn ${event.turn}\n${event.text}`;
@@ -429,8 +522,8 @@
         }
 
         if (els.noticeList) {
-            const latest = Array.isArray(events) && events.length > 0
-                ? events[events.length - 1]
+            const latest = visibleEvents.length > 0
+                ? visibleEvents[visibleEvents.length - 1]
                 : null;
             if (!latest) {
                 els.noticeList.innerHTML = '<span class="notice-chip">暂无经营事件</span>';
@@ -452,6 +545,7 @@
             els.actionMessage.className = 'action-message action-warning';
         }
         if (els.actionGrid) els.actionGrid.innerHTML = '';
+        renderTemporaryEventModal(null);
         clearGrowthCatalog();
     }
 
@@ -462,8 +556,10 @@
         }
 
         clearGrowthCatalog();
+        clearDayEndSubmit();
         currentMode = actions.mode;
         currentActions = actions;
+        if (actions.mode !== 'planning') renderTemporaryEventModal(null);
 
         if (els.operationsHeading) {
             els.operationsHeading.textContent = actions.panel_title || '经营操作';
@@ -523,24 +619,49 @@
         };
     }
 
+    function displayActionLabel(candidate) {
+        if (candidate && candidate.action === 'clean_tents') {
+            return '清洁帐篷';
+        }
+        return candidate && (candidate.label || candidate.action);
+    }
+
+    function ensureRepairCandidate(candidates) {
+        const result = Array.isArray(candidates) ? candidates.slice() : [];
+        if (!result.some(candidate => candidate && candidate.action === 'repair_tent')) {
+            result.push({
+                action: 'repair_tent',
+                params: {},
+                label: '维修帐篷',
+                enabled: false,
+                reason: '当前没有待维修帐篷'
+            });
+        }
+        return result;
+    }
+
     function renderPlanningActions(actions) {
         if (!els.actionGrid) return;
         els.actionGrid.innerHTML = '';
+        renderTemporaryEventModal(actions.temporary_event);
 
         const freeCandidates = actions.free_action_candidates || [];
-        const decisionCandidates = actions.decision_action_candidates || [];
+        const decisionCandidates = ensureRepairCandidate(actions.decision_action_candidates || []);
+        const maxDecisionActions = Math.max(0, actions.max_decision_actions ?? 3);
         const freeKeys = new Set(freeCandidates.map(actionKey));
         const decisionKeys = new Set(decisionCandidates.map(actionKey));
         selectedFreeActions = selectedFreeActions.filter(item => freeKeys.has(actionKey(item)));
-        selectedDecisionActions = selectedDecisionActions.filter(item => decisionKeys.has(actionKey(item)));
+        selectedDecisionActions = selectedDecisionActions
+            .filter(item => decisionKeys.has(actionKey(item)))
+            .slice(0, maxDecisionActions);
 
         appendActionSection('免费操作', freeCandidates, selectedFreeActions, true);
         appendActionSection(
-            `决策操作（已选 ${selectedDecisionActions.length}/${actions.max_decision_actions || 3}）`,
+            `决策操作（已选 ${selectedDecisionActions.length}/${maxDecisionActions}）`,
             decisionCandidates,
             selectedDecisionActions,
             false,
-            actions.max_decision_actions || 3
+            maxDecisionActions
         );
 
         const submit = document.createElement('button');
@@ -551,6 +672,56 @@
         submit.disabled = !(actions.primary_action && actions.primary_action.enabled);
         submit.addEventListener('click', submitTurnPlan);
         els.actionGrid.appendChild(submit);
+        if (currentState) renderOverview(currentState);
+    }
+
+    function renderTemporaryEventModal(event) {
+        if (!els.temporaryEventModal) return;
+        if (!event) {
+            selectedConflictChoice = null;
+            els.temporaryEventModal.classList.add('hidden');
+            return;
+        }
+        if (els.temporaryEventDescription) {
+            els.temporaryEventDescription.textContent = event.description || '临时事件需要处理。';
+        }
+        if (!els.temporaryEventChoices) return;
+        els.temporaryEventChoices.innerHTML = '';
+        (event.choices || []).forEach(choice => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn-action compact';
+            button.textContent = choice.label;
+            const detail = document.createElement('small');
+            detail.textContent = `消耗${choice.decision_cost}个决策点 · ${choice.effect}`;
+            button.appendChild(detail);
+            button.addEventListener('click', async () => {
+                const buttons = els.temporaryEventChoices.querySelectorAll('button');
+                buttons.forEach(item => { item.disabled = true; });
+                try {
+                    const res = await fetch('/api/action', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            action: 'resolve_temporary_conflict',
+                            params: { choice: choice.value }
+                        })
+                    });
+                    const result = await res.json().catch(() => ({}));
+                    if (!res.ok || result.success === false) {
+                        throw new Error(result.message || `请求失败 (${res.status})`);
+                    }
+                    selectedConflictChoice = null;
+                    await fetchState();
+                    setActionMessage(result.message || '临时事件已处理。');
+                } catch (err) {
+                    buttons.forEach(item => { item.disabled = false; });
+                    setActionMessage('处理临时事件失败：' + err.message, 'action-error');
+                }
+            });
+            els.temporaryEventChoices.appendChild(button);
+        });
+        els.temporaryEventModal.classList.remove('hidden');
     }
 
     function appendActionSection(title, candidates, selected, isFree, maxDecisionActions) {
@@ -563,10 +734,10 @@
             const selectedIndex = selected.findIndex(item => actionKey(item) === actionKey(requestAction));
             const isSelected = selectedIndex !== -1;
             const btn = document.createElement('button');
-            btn.className = 'btn-action' + (isSelected ? ' primary' : '');
+            btn.className = 'btn-action compact' + (isSelected ? ' primary' : '');
             btn.type = 'button';
             const detail = candidate.detail ? ` · ${candidate.detail}` : '';
-            btn.textContent = `${isSelected ? '已选：' : ''}${candidate.label || candidate.action}${detail}`;
+            btn.textContent = `${isSelected ? '已选：' : ''}${displayActionLabel(candidate)}${detail}`;
             btn.disabled = !candidate.enabled;
             btn.title = candidate.reason || '';
             btn.addEventListener('click', () => {
@@ -624,10 +795,17 @@
     function renderDayEndActions(actions) {
         if (!els.actionGrid) return;
         els.actionGrid.innerHTML = '';
-        const candidates = (actions.day_end_action_candidates || [])
+        clearDayEndSubmit();
+        const allCandidates = ensureRepairCandidate(actions.day_end_action_candidates || []);
+        const candidates = allCandidates
             .filter(candidate => candidate.action !== 'purchase_growth_project');
-        const candidateKeys = new Set(candidates.map(actionKey));
+        const greeneryUpgradeSelected = selectedDayEndActions.some(item => (
+            item.action === 'purchase_growth_project'
+            && String(item.params && item.params.project_id || '').startsWith('greenery_')
+        ));
+        const candidateKeys = new Set(allCandidates.map(actionKey));
         selectedDayEndActions = selectedDayEndActions.filter(item => candidateKeys.has(actionKey(item)));
+        renderDayEndSelectionSummary(actions);
 
         candidates.forEach(candidate => {
             const requestAction = toRequestAction(candidate);
@@ -636,11 +814,14 @@
             );
             const isSelected = selectedIndex !== -1;
             const btn = document.createElement('button');
-            btn.className = 'btn-action' + (isSelected ? ' primary' : '');
+            btn.className = 'btn-action compact' + (isSelected ? ' primary' : '');
             btn.type = 'button';
-            btn.textContent = `${isSelected ? '已选：' : ''}${candidate.label || candidate.action}`;
-            btn.disabled = !candidate.enabled;
-            btn.title = candidate.reason || '';
+            btn.textContent = `${isSelected ? '已选：' : ''}${displayActionLabel(candidate)}`;
+            const blockedByGreeneryUpgrade = candidate.action === 'manage_greenery' && greeneryUpgradeSelected;
+            btn.disabled = !candidate.enabled || blockedByGreeneryUpgrade;
+            btn.title = blockedByGreeneryUpgrade
+                ? '绿化升级已包含当日维护，无需重复打理。'
+                : (candidate.reason || '');
             btn.addEventListener('click', () => {
                 if (isSelected) {
                     selectedDayEndActions.splice(selectedIndex, 1);
@@ -657,14 +838,21 @@
             els.actionGrid.appendChild(btn);
         });
 
-        const submit = document.createElement('button');
-        submit.className = 'btn-action primary';
-        submit.type = 'button';
-        submit.dataset.role = 'submit-day-end-actions';
-        submit.textContent = '提交日终清单';
-        submit.addEventListener('click', submitDayEndActions);
-        els.actionGrid.appendChild(submit);
         renderGrowthCatalog(actions.growth);
+        renderDayEndSubmit();
+    }
+
+    function renderDayEndSelectionSummary(actions) {
+        if (!els.actionMessage) return;
+        const candidates = actions.day_end_action_candidates || [];
+        const labels = selectedDayEndActions.map(item => {
+            const candidate = candidates.find(entry => actionKey(entry) === actionKey(item));
+            return candidate ? displayActionLabel(candidate) : item.action;
+        });
+        els.actionMessage.className = 'action-message';
+        els.actionMessage.textContent = labels.length
+            ? `本轮已选日终操作：${labels.join('、')}`
+            : '';
     }
 
     function renderDayEndCompleted() {
@@ -682,6 +870,28 @@
         const panel = els.actionGrid && els.actionGrid.parentElement;
         const existing = panel && panel.querySelector('[data-role="growth-catalog"]');
         if (existing) existing.remove();
+    }
+
+    function clearDayEndSubmit() {
+        const panel = els.actionGrid && els.actionGrid.parentElement;
+        const existing = panel && panel.querySelector('[data-role="day-end-submit"]');
+        if (existing) existing.remove();
+    }
+
+    function renderDayEndSubmit() {
+        const panel = els.actionGrid && els.actionGrid.parentElement;
+        if (!panel) return;
+        const section = document.createElement('div');
+        section.className = 'day-end-submit';
+        section.dataset.role = 'day-end-submit';
+        const submit = document.createElement('button');
+        submit.className = 'btn-action confirm';
+        submit.type = 'button';
+        submit.dataset.role = 'submit-day-end-actions';
+        submit.textContent = '提交日终清单并开启新一天';
+        submit.addEventListener('click', submitDayEndActions);
+        section.appendChild(submit);
+        panel.appendChild(section);
     }
 
     function renderGrowthCatalog(growth) {
@@ -725,7 +935,7 @@
 
     function appendGrowthStatus(container, label, status) {
         const btn = document.createElement('button');
-        btn.className = 'btn-action';
+        btn.className = 'btn-action compact';
         btn.type = 'button';
         btn.disabled = true;
         btn.textContent = `${label} ${status}`;
@@ -754,7 +964,7 @@
             item.params && item.params.project_id === project.project_id
         ));
         const btn = document.createElement('button');
-        btn.className = 'btn-action' + (candidate ? '' : ' locked');
+        btn.className = 'btn-action compact' + (candidate ? '' : ' locked');
         btn.type = 'button';
         btn.style.width = '100%';
         btn.textContent = project.display_name + (project.completed ? ' 已完成' : '');
@@ -774,6 +984,7 @@
                 if (isSelected) {
                     selectedDayEndActions.splice(selectedIndex, 1);
                 } else {
+                    selectedDayEndActions = selectedDayEndActions.filter(item => item.action !== 'manage_greenery');
                     selectedDayEndActions.push(requestAction);
                 }
                 renderDayEndActions(currentActions);
@@ -829,7 +1040,7 @@
             }
             selectedDayEndActions = [];
             await fetchState();
-            setActionMessage(result.message || '日终清单已提交');
+            setActionMessage(result.message || '日终清单已提交，已开启新的一天');
         } catch (err) {
             console.warn('提交日终清单失败：', err);
             setActionMessage('提交日终清单失败：' + err.message, 'action-error');
@@ -861,6 +1072,11 @@
 
     async function submitTurnPlan() {
         const btn = els.actionGrid && els.actionGrid.querySelector('[data-role="submit-turn-plan"]');
+        const temporaryEvent = currentActions && currentActions.temporary_event;
+        if (temporaryEvent) {
+            setActionMessage('请先处理临时事件。', 'action-warning');
+            return;
+        }
         if (btn) btn.disabled = true;
         setActionMessage('正在提交本轮计划…');
 
@@ -879,11 +1095,9 @@
             }
             selectedFreeActions = [];
             selectedDecisionActions = [];
+            selectedConflictChoice = null;
             await fetchState();
-            setActionMessage(
-                result.message || `计划已提交：目标 Day ${result.target_day} Turn ${result.target_turn}，` +
-                `${result.free_action_count} 项免费操作，${result.action_count} 项决策操作`
-            );
+            setActionMessage('本轮计划已执行，已进入下一经营轮次。');
         } catch (err) {
             console.warn('提交 Turn Plan 失败：', err);
             setActionMessage('提交计划失败：' + err.message, 'action-error');

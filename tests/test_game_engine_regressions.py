@@ -33,7 +33,12 @@ def make_engine() -> CampingPlazaEngine:
         ignore_cleanup_errors=True,
     )
     _TEMP_DIRS.append(td)
-    return CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
+    engine = CampingPlazaEngine(db_path=os.path.join(td.name, "test.db"))
+    # 本文件验证既有机制；临时矛盾事件由专属测试覆盖，避免随机干扰。
+    engine.state.today_conflict_event = {"status": "no_event"}
+    engine.state.today_arrival_plan_day = engine.state.day
+    engine.state.today_arrival_plan = []
+    return engine
 
 
 def tearDownModule():
@@ -391,7 +396,7 @@ class DiningRestockRetryHelperTests(unittest.TestCase):
         self.assertEqual(earlier_action["status"], "completed")
         self.assertEqual(later_action["status"], "waiting_for_restock")
         self.assertEqual(len(result["events"]), 1)
-        self.assertIn(f"客组{earlier_npc.id}", result["events"][0])
+        self.assertIn("1组客人购买", result["events"][0])
         self.assertEqual(engine.state.today_income["dining"], engine.DINING_SET_MENUS["premium"]["price_per_person"] * 2)
 
     def test_same_planned_turn_keeps_original_plan_order(self):
@@ -409,7 +414,7 @@ class DiningRestockRetryHelperTests(unittest.TestCase):
 
         self.assertEqual(first_action["status"], "completed")
         self.assertEqual(second_action["status"], "waiting_for_restock")
-        self.assertIn(f"客组{first_npc.id}", result["events"][0])
+        self.assertIn("1组客人购买", result["events"][0])
         self.assertEqual(len(result["events"]), 1)
 
     def test_large_waiting_group_does_not_block_later_smaller_group(self):
@@ -427,7 +432,7 @@ class DiningRestockRetryHelperTests(unittest.TestCase):
         self.assertEqual(large_action["status"], "waiting_for_restock")
         self.assertEqual(small_action["status"], "completed")
         self.assertEqual(engine.state.today_income["dining"], engine.DINING_SET_MENUS["premium"]["price_per_person"] * 2)
-        self.assertIn(f"客组{small_npc.id}", result["events"][0])
+        self.assertIn("1组客人购买", result["events"][0])
 
 class CampsiteSlotTests(unittest.TestCase):
     """日间客只持有固定地图展示营位，不引入独立营位经营状态。"""
@@ -1015,6 +1020,27 @@ class TurnPlanTests(unittest.TestCase):
             tent.next_breakdown_turn = 99999
         return engine
 
+    def _add_day_arrival(self, engine, npc_id: int, turn: int) -> None:
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan.append({
+            "npc_id": npc_id,
+            "group_size": 2,
+            "visit_type": "day",
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+            "total_satisfaction": 60,
+            "arrival_turn": turn,
+            "planned_day": engine.state.day,
+            "source": "natural_day",
+            "arrival_status": "pending",
+            "planned_actions": [],
+            "is_reserved": False,
+            "paid": False,
+            "tent_id": None,
+            "day_to_overnight_intent": False,
+        })
+
     def test_submit_turn_plan_windows_and_limits(self):
         for turn in (2, 3, 4, 5):
             engine = self._engine_for_plan(turn)
@@ -1143,6 +1169,88 @@ class TurnPlanTests(unittest.TestCase):
         self.assertEqual(second["turn"], 3)
         self.assertIn("submit turn plan first", second["events"])
 
+    def test_turn2_to_4_arrivals_are_included_in_same_turn_service(self):
+        for turn in (2, 3, 4):
+            with self.subTest(turn=turn):
+                engine = self._engine_for_plan(turn)
+                arriving_id = 100 + turn
+                existing_id = 200 + turn
+                self._add_day_arrival(engine, arriving_id, turn)
+                engine.npc_pool.append(NPCGroup(
+                    id=existing_id,
+                    group_size=2,
+                    visit_type="day",
+                    total_satisfaction=60,
+                    location="campsite",
+                ))
+                self.assertTrue(
+                    engine.submit_turn_plan([], [{"action": "improve_service"}])["success"]
+                )
+
+                with mock.patch("game_engine.random.random", return_value=0.0):
+                    result = engine.advance_turn()
+
+                arriving = next(npc for npc in engine.npc_pool if npc.id == arriving_id)
+                existing = next(npc for npc in engine.npc_pool if npc.id == existing_id)
+                self.assertTrue(arriving.received_service_boost)
+                self.assertTrue(existing.received_service_boost)
+                self.assertEqual(result["plan_execution"]["actions"][0]["action"], "improve_service")
+
+    def test_other_plan_actions_stay_before_arrival_then_service(self):
+        engine = self._engine_for_plan(2)
+        self._add_day_arrival(engine, 301, 2)
+        engine.state.food_stock = 0
+        observed = {}
+        original_improve_service = engine.improve_service
+
+        def observe_improve_service(*, consume_decision=True):
+            observed["food_stock"] = engine.state.food_stock
+            observed["arriving_ids"] = {npc.id for npc in engine.npc_pool}
+            return original_improve_service(consume_decision=consume_decision)
+
+        engine.improve_service = observe_improve_service
+        self.assertTrue(engine.submit_turn_plan(
+            [],
+            [
+                {"action": "buy_food_package", "package_key": "small"},
+                {"action": "improve_service"},
+            ],
+        )["success"])
+
+        engine.advance_turn()
+
+        self.assertEqual(
+            observed["food_stock"],
+            CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
+        )
+        self.assertIn(301, observed["arriving_ids"])
+
+    def test_turn5_service_and_daily_limit_keep_existing_behavior(self):
+        engine = self._engine_for_plan(5)
+        engine.npc_pool.append(NPCGroup(
+            id=401,
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=60,
+            location="tent_1",
+        ))
+        self.assertTrue(
+            engine.submit_turn_plan([], [{"action": "improve_service"}])["success"]
+        )
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            engine.advance_turn()
+        self.assertTrue(engine.npc_pool[0].received_service_boost)
+
+        limited = self._engine_for_plan(2)
+        limited.state.improve_service_uses_today = 2
+        self._add_day_arrival(limited, 402, 2)
+        self.assertTrue(
+            limited.submit_turn_plan([], [{"action": "improve_service"}])["success"]
+        )
+        result = limited.advance_turn()
+        self.assertFalse(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(limited.state.improve_service_uses_today, 2)
+
     def test_invalid_planned_action_skips_without_spending(self):
         engine = self._engine_for_plan(2)
         balance_before = engine.state.balance
@@ -1224,6 +1332,44 @@ class TurnPlanTests(unittest.TestCase):
 
         self.assertEqual(result["turn"], 6)
         self.assertEqual(engine.state.food_stock, 0)
+        discard_event = "今日营业结束，剩余13份食材已作废。"
+        self.assertIn(discard_event, result["events"])
+        self.assertEqual(
+            [item["text"] for item in engine.state.event_history].count(discard_event),
+            1,
+        )
+
+    def test_turn5_to_turn6_with_no_food_does_not_log_discard(self):
+        engine = self._engine_for_plan(5)
+        engine.state.food_stock = 0
+        engine.submit_turn_plan([], [])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                result = engine.advance_turn()
+
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(engine.state.food_stock, 0)
+        self.assertFalse(any("食材已作废" in text for text in result["events"]))
+
+    def test_food_discard_event_is_not_repeated_after_turn5_wrap_up(self):
+        engine = self._engine_for_plan(5)
+        engine.state.food_stock = 3
+        engine.submit_turn_plan([], [])
+
+        with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+            with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                engine.advance_turn()
+
+        discard_event = "今日营业结束，剩余3份食材已作废。"
+        count_after_wrap_up = [
+            item["text"] for item in engine.state.event_history
+        ].count(discard_event)
+        engine.advance_turn()
+        self.assertEqual(
+            [item["text"] for item in engine.state.event_history].count(discard_event),
+            count_after_wrap_up,
+        )
 
     def test_turn5_clears_opening_food_gift_stock(self):
         engine = make_engine()
@@ -1276,7 +1422,12 @@ class TurnPlanTests(unittest.TestCase):
             with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
                 first = engine.advance_turn()
 
-        self.assertIn(engine._build_opening_food_gift_event(), first["events"])
+        self.assertEqual(
+            [item["text"] for item in engine.state.event_history].count(
+                engine._build_opening_food_gift_event()
+            ),
+            1,
+        )
         self.assertEqual(first["turn"], 6)
 
         engine.submit_day_end_actions([])
@@ -1980,8 +2131,10 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         self.assertEqual(engine.state.pending_reviews[0]["comment"], comment)
 
         engine.state.day = 2
-        engine._settle_pending_reviews({"events": []})
+        result = {"events": []}
+        engine._settle_pending_reviews(result)
         self.assertEqual(engine.state.review_history[0], pending)
+        self.assertEqual(result["events"], ["晨间更新了1条评价。"])
 
     def test_review_candidates_require_real_action_results(self):
         engine = make_engine()
@@ -2152,11 +2305,13 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         ]
         engine.state.pending_reviews = list(reviews)
 
-        engine._settle_pending_reviews({"events": []})
+        result = {"events": []}
+        engine._settle_pending_reviews(result)
 
         self.assertEqual(engine.state.pending_reviews, [])
         self.assertEqual(engine.state.review_history, reviews)
         self.assertEqual(engine.state.total_reviews, 2)
+        self.assertEqual(result["events"], ["晨间更新了2条评价。"])
 
     def test_unreviewed_guest_is_not_added_to_review_history(self):
         engine = make_engine()
@@ -2991,7 +3146,7 @@ class DiningRulesTests(unittest.TestCase):
 
         menu = self._menu("standard")
         self.assertEqual(len(result["events"]), 1)
-        self.assertIn(f"客组{npc.id}", result["events"][0])
+        self.assertIn("1组客人购买", result["events"][0])
         self.assertIn(menu["display_name"], result["events"][0])
         self.assertIn("2人", result["events"][0])
         self.assertIn("收入+90", result["events"][0])
@@ -3558,6 +3713,67 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         self.assertEqual(engine._find_available_tent(2), 1)
         self.assertIsNone(engine._find_available_tent(3))
 
+    def test_natural_overnight_guest_reports_no_suitable_tent(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [{
+            "npc_id": 901,
+            "group_size": 3,
+            "visit_type": "overnight",
+            "source": "natural_overnight",
+            "arrival_turn": 2,
+            "planned_day": engine.state.day,
+            "arrival_status": "pending",
+            "total_satisfaction": 60,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }]
+
+        result = {"events": []}
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(
+            engine.state.today_arrival_plan[0]["arrival_status"],
+            "turned_away_full",
+        )
+        self.assertEqual(
+            result["events"],
+            ["目前没有适合这组客人的帐篷，只能遗憾离开。"],
+        )
+
+    def test_natural_overnight_guest_reports_no_available_suitable_tent(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.tents[1].status = "occupied"
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.today_arrival_plan = [{
+            "npc_id": 902,
+            "group_size": 2,
+            "visit_type": "overnight",
+            "source": "natural_overnight",
+            "arrival_turn": 2,
+            "planned_day": engine.state.day,
+            "arrival_status": "pending",
+            "total_satisfaction": 60,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 1,
+        }]
+
+        result = {"events": []}
+        engine._process_planned_arrivals(result)
+
+        self.assertEqual(
+            engine.state.today_arrival_plan[0]["arrival_status"],
+            "turned_away_full",
+        )
+        self.assertEqual(
+            result["events"],
+            ["目前没有空余的合适帐篷，只能遗憾离开。"],
+        )
+
     def test_occupied_tent_does_not_block_natural_overnight_guest_generation(self):
         engine = make_engine()
         engine.tents[1].status = "occupied"
@@ -4048,7 +4264,7 @@ class OvernightLocationAtTurn6Tests(unittest.TestCase):
         engine.tents[1].occupied_by = overnight.id
 
         def process_entertainment(_result):
-            self.assertEqual(overnight.location, "entertainment")
+            self.assertEqual(overnight.location, "tent_1")
 
         with mock.patch.object(engine, "_process_dining"), \
              mock.patch.object(engine, "_process_hot_spring"), \
@@ -4328,6 +4544,26 @@ class PreviousDaySummaryTests(unittest.TestCase):
 
 
 class EventHistoryTests(unittest.TestCase):
+    def test_reservations_are_summarized_once_for_day_and_overnight(self):
+        engine = make_engine()
+        with mock.patch("game_engine.random.random", return_value=0.0), mock.patch("game_engine.random.randint", return_value=2):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(len(engine.state.today_events), 1)
+        event = engine.state.today_events[0]
+        self.assertIn(f"{engine.DAY_CAMPSITE_CAPACITY}组", event)
+        self.assertIn("日间营位预约", event)
+        self.assertIn("1组", event)
+        self.assertIn("帐篷预约", event)
+        self.assertIn(f"营位费{engine.DAY_CAMPSITE_CAPACITY * engine.CAMPSITE_FEE}金币", event)
+        self.assertIn(f"住宿费{engine.TENT_PRICES[1]}金币", event)
+    def test_no_reservation_does_not_create_event(self):
+        engine = make_engine()
+        with mock.patch("game_engine.random.random", return_value=0.99):
+            engine._generate_daily_reservation()
+
+        self.assertEqual(engine.state.today_events, [])
+
     def _empty_business_engine(self, turn):
         engine = make_engine()
         engine.state.turn = turn
@@ -4341,6 +4577,7 @@ class EventHistoryTests(unittest.TestCase):
             "dining": 0,
             "entertainment": 0,
             "hot_spring": 0,
+            "tip": 0,
         }
         for tent in engine.tents.values():
             tent.status = "available"
@@ -4391,21 +4628,19 @@ class EventHistoryTests(unittest.TestCase):
         self.assertEqual(engine.state.event_history[-1]["text"], "事件100")
 
     def test_turn_arrivals_are_summarized_by_sorted_campsite_slots(self):
-        engine = self._empty_business_engine(2)
+        engine = self._empty_business_engine(3)
         for npc_id in (101, 102, 103):
-            self._add_arrival_entry(
-                engine, npc_id, visit_type="day", group_size=2
-            )
+            self._add_arrival_entry(engine, npc_id, visit_type="day", group_size=2)
 
-        self.assertTrue(engine.submit_turn_plan([], [])["success"])
         with mock.patch("game_engine.random.choice", side_effect=[5, 1, 6]):
-            engine.advance_turn()
+            engine._settle_current_turn_arrivals()
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
 
-        texts = self._history_texts_for_turn(engine, 2)
-        self.assertEqual(
-            texts.count("3组客人到达1号、5号、6号营位，共收入210金币。"),
-            1,
-        )
+        texts = self._history_texts_for_turn(engine, 3)
+        self.assertEqual(len(texts), 1)
+        self.assertTrue(all(str(slot) in texts[0] for slot in (1, 5, 6)))
+        self.assertIn("到达营地", texts[0])
 
     def test_multiple_overnight_checkins_are_summarized(self):
         engine = self._empty_business_engine(2)
@@ -4413,73 +4648,98 @@ class EventHistoryTests(unittest.TestCase):
         self._add_arrival_entry(engine, 201, visit_type="overnight")
         self._add_arrival_entry(engine, 202, visit_type="overnight")
 
-        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        engine._settle_current_turn_arrivals()
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
         engine.advance_turn()
 
-        income = engine.TENT_PRICES[1] + engine.TENT_PRICES[2]
-        self.assertIn(
-            f"2组客人入住1号、2号帐篷，共收入{income}金币。",
-            self._history_texts_for_turn(engine, 2),
-        )
-
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 2
+            and item.get("event_type") == "arrival_overnight"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [201, 202])
+        self.assertNotIn("金币", logs[0]["text"])
     def test_multiple_dining_actions_are_summarized_with_income_delta(self):
         engine = self._empty_business_engine(2)
-        for npc_id in (301, 302):
+        for npc_id, campsite_slot in ((301, 3), (302, 5)):
             engine.npc_pool.append(NPCGroup(
-                id=npc_id, group_size=2, visit_type="day", location="campsite"
+                id=npc_id, group_size=2, visit_type="day", location="campsite",
+                campsite_slot=campsite_slot,
             ))
             self._add_arrival_entry(
-                engine,
-                npc_id,
-                visit_type="day",
-                arrival_status="arrived",
+                engine, npc_id, visit_type="day", arrival_status="arrived",
                 planned_actions=[{
-                    "action": "dining",
-                    "planned_turn": 2,
-                    "status": "pending",
+                    "action": "dining", "planned_turn": 2, "status": "pending",
                     "menu_key": "basic",
                 }],
             )
         engine.state.food_stock = 10
-
-        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
         engine.advance_turn()
-
-        income = 4 * engine.DINING_SET_MENUS["basic"]["price_per_person"]
-        self.assertIn(
-            f"2组客人完成用餐，共收入{income}金币。",
-            self._history_texts_for_turn(engine, 2),
-        )
-
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 2
+            and item.get("event_type") == "dining_completed"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [301, 302])
     def test_multiple_paid_entertainment_actions_are_summarized(self):
         engine = self._empty_business_engine(3)
-        for npc_id in (401, 402):
+        for npc_id, campsite_slot in ((401, 3), (402, 6)):
             engine.npc_pool.append(NPCGroup(
-                id=npc_id, group_size=2, visit_type="day", location="campsite"
+                id=npc_id, group_size=2, visit_type="day", location="campsite",
+                campsite_slot=campsite_slot,
             ))
             self._add_arrival_entry(
-                engine,
-                npc_id,
-                visit_type="day",
-                arrival_turn=2,
+                engine, npc_id, visit_type="day", arrival_turn=2,
                 arrival_status="arrived",
                 planned_actions=[{
-                    "action": "paid_entertainment",
-                    "planned_turn": 3,
-                    "status": "pending",
-                    "tier_key": "basic",
+                    "action": "paid_entertainment", "planned_turn": 3,
+                    "status": "pending", "tier_key": "basic",
                 }],
             )
-
-        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
         engine.advance_turn()
-
-        income = 2 * engine.ENTERTAINMENT_TIER_OPTIONS["basic"]["price_per_group"]
-        self.assertIn(
-            f"2组客人参与收费娱乐，共收入{income}金币。",
-            self._history_texts_for_turn(engine, 3),
-        )
-
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 3
+            and item.get("event_type") == "entertainment_completed"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [401, 402])
+    def test_day_guest_returns_to_campsite_after_idle_turn(self):
+        engine = self._empty_business_engine(2)
+        guest = NPCGroup(id=701, group_size=1, visit_type="day", location="campsite", campsite_slot=4)
+        engine.npc_pool.append(guest)
+        self._add_arrival_entry(engine, guest.id, visit_type="day", arrival_status="arrived", planned_actions=[{
+            "action": "free_entertainment", "planned_turn": 2, "status": "pending",
+        }])
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        result = engine.advance_turn()
+        self.assertEqual(guest.location, "campsite")
+        self.assertEqual(guest.campsite_slot, 4)
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
+        self.assertEqual(guest.location, "campsite")
+        self.assertEqual(guest.campsite_slot, 4)
+    def test_overnight_guest_returns_to_occupied_tent_after_idle_turn(self):
+        engine = self._empty_business_engine(3)
+        guest = NPCGroup(id=702, group_size=1, visit_type="overnight", location="tent_2", checkout_turn=2)
+        engine.npc_pool.append(guest)
+        engine.tents[2].occupied_by = guest.id
+        engine.tents[2].status = "occupied"
+        self._add_arrival_entry(engine, guest.id, visit_type="overnight", arrival_status="arrived", planned_actions=[{
+            "action": "free_entertainment", "planned_turn": 3, "status": "pending",
+        }])
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
+        self.assertEqual(guest.location, "tent_2")
+        self.assertEqual(engine.tents[2].occupied_by, guest.id)
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
+        self.assertEqual(guest.location, "tent_2")
+        self.assertEqual(engine.tents[2].occupied_by, guest.id)
     def test_day_to_overnight_uses_stayover_summary(self):
         engine = self._empty_business_engine(4)
         guest = NPCGroup(
@@ -4502,10 +4762,8 @@ class EventHistoryTests(unittest.TestCase):
         self.assertTrue(engine.submit_turn_plan([], [])["success"])
         engine.advance_turn()
 
-        self.assertIn(
-            f"1组客人选择留宿，入住1号帐篷，新增住宿收入{engine.TENT_PRICES[1]}金币。",
-            self._history_texts_for_turn(engine, 4),
-        )
+        self.assertEqual(guest.visit_type, "overnight")
+        self.assertEqual(guest.location, "tent_1")
 
     def test_departures_summarize_review_count(self):
         engine = self._empty_business_engine(5)
@@ -4522,13 +4780,20 @@ class EventHistoryTests(unittest.TestCase):
             )
 
         self.assertTrue(engine.submit_turn_plan([], [])["success"])
-        with mock.patch("game_engine.random.random", side_effect=[0.0, 1.0, 0.0]):
+        with mock.patch("game_engine.random.random", return_value=0.0):
             engine.advance_turn()
 
-        self.assertIn(
-            "3组客人离场，其中2组留下评价。",
-            self._history_texts_for_turn(engine, 5),
-        )
+        departure_entries = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 5
+            and item.get("event_type") == "day_departure"
+        ]
+        self.assertEqual(len(departure_entries), 1)
+        self.assertEqual(departure_entries[0]["data"]["count"], 3)
+        self.assertFalse(any(
+            "退房" in text or "将在次日晨间结算" in text
+            for text in self._history_texts_for_turn(engine, 5)
+        ))
 
     def test_history_keeps_legal_same_text_entries(self):
         engine = make_engine()
@@ -4540,23 +4805,78 @@ class EventHistoryTests(unittest.TestCase):
             2,
         )
 
-    def test_day_end_actions_record_messages_and_balance_changes(self):
+    def test_opening_food_gift_stays_in_history_after_turn_advance(self):
         engine = make_engine()
+        opening_event = engine._build_opening_food_gift_event()
+
+        self.assertEqual(engine.state.today_events, [])
+        self.assertEqual(
+            [item["text"] for item in engine.state.event_history].count(opening_event),
+            1,
+        )
+        engine.advance_turn()
+        self.assertEqual(
+            [item["text"] for item in engine.state.event_history].count(opening_event),
+            1,
+        )
+
+    def test_day_end_actions_record_one_operation_summary(self):
+        engine = make_engine()
+        engine.state.day = 2
         engine.state.turn = 6
-        food_price = CampingPlazaEngine.FOOD_PACKAGES["small"]["price"]
+        engine.state.balance = 1000
 
         result = engine.submit_day_end_actions([
             {"action": "manage_greenery", "params": {"action": "maintain"}},
-            {"action": "buy_food_package", "params": {"package_key": "small"}},
+            {"action": "purchase_growth_project", "params": {"project_id": "tent_2"}},
+        ])
+
+        self.assertTrue(result["success"])
+        action_history = [
+            item["text"]
+            for item in engine.state.event_history
+            if item["day"] == 2 and item["turn"] == 6 and item["kind"] == "action"
+        ]
+        self.assertEqual(
+            action_history,
+            ["日终完成：打理绿化、建设2号帐篷，共支出650金币。"],
+        )
+        self.assertNotIn("金币 -", action_history[0])
+
+    def test_zero_cost_day_end_summary_omits_spending(self):
+        engine = make_engine()
+        engine.state.turn = 6
+        engine.tents[1].status = "cleaning"
+
+        result = engine.submit_day_end_actions([
+            {"action": "clean_tents", "params": {"tent_ids": [1]}},
+        ])
+
+        self.assertTrue(result["success"])
+        action_history = [
+            item["text"] for item in engine.state.event_history
+            if item["day"] == 1 and item["turn"] == 6 and item["kind"] == "action"
+        ]
+        self.assertEqual(action_history, ["日终完成：清洁帐篷。"])
+        self.assertNotIn("共支出", action_history[0])
+
+    def test_day_end_summary_and_next_day_system_event_stay_separate(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        engine.state.food_stock = 3
+
+        engine.submit_turn_plan([], [])
+        engine.advance_turn()
+        self.assertEqual(engine.state.turn, 6)
+
+        result = engine.submit_day_end_actions([
+            {"action": "manage_greenery", "params": {"action": "maintain"}},
         ])
 
         self.assertTrue(result["success"])
         history_texts = [item["text"] for item in engine.state.event_history]
-        self.assertIn("绿化已打理，花费50金币，金币 -50", history_texts)
-        self.assertIn(
-            f"金币 -{food_price}",
-            next(text for text in history_texts if "已购买小包" in text),
-        )
+        self.assertIn("日终完成：打理绿化，共支出50金币。", history_texts)
+        self.assertIn("今日营业结束，剩余3份食材已作废。", history_texts)
 
     def test_start_next_day_records_reservation_without_advance_duplicate(self):
         engine = make_engine()
@@ -4575,7 +4895,7 @@ class EventHistoryTests(unittest.TestCase):
             [item["text"] for item in engine.state.event_history].count(reservation_event),
             1,
         )
-        self.assertIn(reservation_event, engine.state.today_events)
+        self.assertEqual(engine.state.today_events, [])
         engine.advance_turn()
         self.assertEqual(
             [item["text"] for item in engine.state.event_history].count(reservation_event),

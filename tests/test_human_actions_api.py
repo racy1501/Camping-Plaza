@@ -247,7 +247,7 @@ class PlanSubmittedTests(HumanActionsApiTestCase):
         self.assertFalse(actions["plan_submitted"])
         self.assertIsNone(actions["turn_plan"])
 
-    def test_non_empty_plan_submitted_returns_execution_result(self):
+    def test_non_empty_plan_submitted_returns_compact_result(self):
         result = game_api.submit_turn_plan(
             game_api.TurnPlanRequest(
                 free_actions=[game_api.ActionRequest(
@@ -260,9 +260,27 @@ class PlanSubmittedTests(HumanActionsApiTestCase):
         )
         self.assertTrue(result["success"])
         self.assertEqual(result["turn"], 3)
-        self.assertEqual(len(result["plan_execution"]["free_actions"]), 1)
-        self.assertEqual(len(result["plan_execution"]["actions"]), 1)
+        self.assertIn("events", result)
+        self.assertNotIn("plan_execution", result)
+        self.assertNotIn("tents", result)
+        self.assertNotIn("npcs", result)
         self.assertIsNone(self.engine.state.pending_turn_plan)
+
+    def test_plan_execution_failure_is_returned_without_full_execution_details(self):
+        result = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(
+                free_actions=[],
+                actions=[game_api.ActionRequest(
+                    action="repair_tent", params={"tent_id": 1}
+                )],
+            )
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["turn"], 3)
+        self.assertEqual(result["action_failures"][0]["action"], "repair_tent")
+        self.assertTrue(result["action_failures"][0]["message"])
+        self.assertNotIn("plan_execution", result)
 
     def test_submitted_plan_does_not_leave_ready_to_advance_candidates(self):
         game_api.submit_turn_plan(

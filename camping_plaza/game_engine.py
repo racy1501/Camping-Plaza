@@ -108,11 +108,25 @@ class GameState:
         "dining": 0,
         "entertainment": 0,
         "hot_spring": 0,
+        "tip": 0,
     })
+    today_expenses: dict = field(default_factory=lambda: {
+        "food": 0,
+        "greenery": 0,
+        "repair": 0,
+        "growth": 0,
+    })
+    post_used_today: bool = False
+    pending_post_reservation: Optional[dict] = None
+    campfire_affected_npc_ids: list = field(default_factory=list)
+    stargazing_affected_npc_ids: list = field(default_factory=list)
+    today_tip_settled: bool = False
     today_events: list = field(default_factory=list)
     event_history: list = field(default_factory=list)
+    event_sequence: int = 0
     decisions_left: int = 3
     improve_service_uses_today: int = 0
+    clean_campsite_uses_today: int = 0
     day_campsite_groups_served: int = 0
     food_stock: int = 0
     last_food_preorder_day: int = 0
@@ -141,6 +155,7 @@ class GameState:
 
     today_arrival_plan_day: int = 0
     today_arrival_plan: list = field(default_factory=list)
+    today_conflict_event: Optional[dict] = None
 
 
 # =============================================================================
@@ -164,6 +179,12 @@ class CampingPlazaEngine:
     HOT_SPRING_PRICE_PER_PERSON = 80
     HOT_SPRING_SATISFACTION_GAIN = 6
     HOT_SPRING_DAILY_CAPACITY = 20
+    TEMPORARY_CONFLICT_EVENT_PROBABILITY = 0.70
+    TEMPORARY_CONFLICT_SATISFACTION_PENALTY = 2
+    TEMPORARY_CONFLICT_PENALTY_PROBABILITIES = {
+        "mediate": {0: 0.00, 1: 0.20, 2: 0.05},
+        "ignore": {0: 0.05, 1: 0.45, 2: 0.05},
+    }
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -311,10 +332,14 @@ class CampingPlazaEngine:
             "required": ("package_key",),
             "optional": (),
         },
+        "clean_campsite": {"kind": "decision", "required": (), "optional": ()},
+        "make_post": {"kind": "decision", "required": (), "optional": ()},
+        "campfire": {"kind": "decision", "required": (), "optional": ()},
+        "stargazing": {"kind": "decision", "required": (), "optional": ()},
     }
 
     REVIEW_COMMENT_PHRASES = {
-        "dining": ("饭菜挺不错", "吃得挺满意", "餐饮比预想中舒服"),
+        "dining": ("饭菜挺不错", "吃得挺满意", "餐饮比预想中更好"),
         "paid_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
         "free_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
         "hot_spring": ("温泉泡得很舒服", "泡汤体验不错"),
@@ -732,7 +757,126 @@ class CampingPlazaEngine:
 
         self.state.today_arrival_plan = planned_entries
         self.state.today_arrival_plan_day = self.state.day
+        self._initialize_today_conflict_event()
         return True
+
+    def _initialize_today_conflict_event(self) -> None:
+        """在当天到达计划落盘后，只生成一次临时矛盾事件。"""
+        if self.state.today_conflict_event is not None:
+            return
+        entries = [
+            entry for entry in self.state.today_arrival_plan
+            if entry.get("planned_day") == self.state.day
+        ]
+        if len(entries) < 2 or random.random() >= self.TEMPORARY_CONFLICT_EVENT_PROBABILITY:
+            self.state.today_conflict_event = {"status": "no_event"}
+            return
+        npc_a, npc_b = random.sample(entries, 2)
+        trigger_turn = random.randint(
+            max(npc_a["arrival_turn"], npc_b["arrival_turn"]), 5
+        )
+        self.state.today_conflict_event = {
+            "status": "scheduled",
+            "npc_a_id": npc_a["npc_id"],
+            "npc_b_id": npc_b["npc_id"],
+            "trigger_turn": trigger_turn,
+            "mediate_result": self._roll_temporary_conflict_result(npc_a, npc_b, "mediate"),
+            "ignore_result": self._roll_temporary_conflict_result(npc_a, npc_b, "ignore"),
+        }
+
+    def _roll_temporary_conflict_result(self, npc_a: dict, npc_b: dict, choice: str) -> dict:
+        probabilities = self.TEMPORARY_CONFLICT_PENALTY_PROBABILITIES[choice]
+        return {
+            "npc_a_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
+            if random.random() < probabilities.get(npc_a.get("temperament"), 0.0) else 0,
+            "npc_b_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
+            if random.random() < probabilities.get(npc_b.get("temperament"), 0.0) else 0,
+        }
+
+    def get_current_temporary_conflict_event(self) -> Optional[dict]:
+        event = self.state.today_conflict_event
+        if not isinstance(event, dict) or event.get("status") != "scheduled":
+            return None
+        if event.get("trigger_turn") != self.state.turn:
+            return None
+        return event
+
+    def _apply_temporary_conflict_event(self, result: dict) -> None:
+        event = self.get_current_temporary_conflict_event()
+        if event is None:
+            return
+        choice = result.get("conflict_choice")
+        if choice not in {"mediate", "ignore"}:
+            raise RuntimeError("scheduled temporary conflict is missing a choice")
+        outcome = event[f"{choice}_result"]
+        npc_by_id = {npc.id: npc for npc in self.npc_pool}
+        for key, delta_key in (("npc_a_id", "npc_a_delta"), ("npc_b_id", "npc_b_delta")):
+            npc = npc_by_id.get(event[key])
+            if npc is not None:
+                npc.total_satisfaction = max(0, npc.total_satisfaction + outcome[delta_key])
+        labels = [self._visible_guest_label(event["npc_a_id"]), self._visible_guest_label(event["npc_b_id"])]
+        affected_labels = [
+            label for label, delta_key in zip(labels, ("npc_a_delta", "npc_b_delta"))
+            if outcome[delta_key] < 0
+        ]
+        if choice == "mediate":
+            if not affected_labels:
+                outcome_text = "你进行了调解，双方很快平静下来。"
+            elif len(affected_labels) == 1:
+                outcome_text = f"你进行了调解，但{affected_labels[0]}仍有些不满。"
+            else:
+                outcome_text = "你进行了调解，但双方情绪都没有完全平复。"
+        elif not affected_labels:
+            outcome_text = "你没有介入，双方随后自行平静下来。"
+        elif len(affected_labels) == 1:
+            outcome_text = f"你没有介入，{affected_labels[0]}仍有些不满。"
+        else:
+            outcome_text = "你没有介入，双方情绪都没有完全平复。"
+        message = f"临时事件：{labels[0]}与{labels[1]}发生了争执。{outcome_text}"
+        result["events"].append(message)
+        self._record_business_event(
+            self.state.day,
+            event["trigger_turn"],
+            "temporary_conflict",
+            guest_ids=[event["npc_a_id"], event["npc_b_id"]],
+            data={"choice": choice, "affected_guest_ids": [
+                npc_id for npc_id, delta_key in (
+                    (event["npc_a_id"], "npc_a_delta"),
+                    (event["npc_b_id"], "npc_b_delta"),
+                ) if outcome[delta_key] < 0
+            ]},
+            merge=False,
+        )
+        event["status"] = "resolved"
+
+    def resolve_current_temporary_conflict(self, choice: str) -> dict:
+        """在事件出现的当前 Turn 立即结算，普通经营计划仍可随后提交。"""
+        event = self.get_current_temporary_conflict_event()
+        if event is None:
+            return {"success": False, "message": "当前没有可处理的临时事件"}
+        if choice not in {"mediate", "ignore"}:
+            return {"success": False, "message": "无效的临时事件处理方式"}
+        cost = 1 if choice == "mediate" else 0
+        if self.state.decisions_left < cost:
+            return {"success": False, "message": "本轮剩余决策点不足"}
+        result = {"events": [], "conflict_choice": choice}
+        self._apply_temporary_conflict_event(result)
+        self.state.decisions_left -= cost
+        return {
+            "success": True,
+            "message": result["events"][-1] if result["events"] else "临时事件已处理",
+            "decision_cost": cost,
+            "decisions_left": self.state.decisions_left,
+        }
+
+    def _visible_guest_label(self, npc_id: int) -> str:
+        npc = next((item for item in self.npc_pool if item.id == npc_id), None)
+        if npc is not None and npc.visit_type == "day" and isinstance(npc.campsite_slot, int):
+            return f"{npc.campsite_slot}号营位客人"
+        tent = self._find_occupied_tent_for_npc(npc_id)
+        if tent is not None:
+            return f"{tent.id}号帐篷住客"
+        return "营地客人"
     def _validate_turn_plan_action(
         self, action_data: dict, expected_kind: str
     ) -> tuple[bool, Optional[dict], str]:
@@ -793,7 +937,7 @@ class CampingPlazaEngine:
         result["events"].append("submit turn plan first")
         return False
 
-    def submit_turn_plan(self, free_actions: Optional[list], actions: Optional[list]) -> dict:
+    def submit_turn_plan(self, free_actions: Optional[list], actions: Optional[list], conflict_choice: Optional[str] = None) -> dict:
         free_actions = [] if free_actions is None else free_actions
         actions = [] if actions is None else actions
 
@@ -805,7 +949,11 @@ class CampingPlazaEngine:
             return {"success": False, "message": "turn plan already submitted"}
         if not isinstance(free_actions, list) or not isinstance(actions, list):
             return {"success": False, "message": "invalid turn plan"}
-        if len(actions) > 3:
+        if self.get_current_temporary_conflict_event() is not None:
+            return {"success": False, "message": "temporary event choice required"}
+        if conflict_choice is not None:
+            return {"success": False, "message": "temporary event must be resolved before planning"}
+        if len(actions) > self.state.decisions_left:
             return {"success": False, "message": "too many actions"}
 
         normalized_free_actions = []
@@ -823,7 +971,7 @@ class CampingPlazaEngine:
             if not ok:
                 return {"success": False, "message": message}
             action_name = normalized["action"]
-            if action_name in {"improve_service", "buy_food_package"}:
+            if action_name in {"improve_service", "clean_campsite", "buy_food_package"}:
                 if action_name in seen_actions:
                     return {"success": False, "message": "duplicate decision action"}
                 seen_actions.add(action_name)
@@ -848,6 +996,7 @@ class CampingPlazaEngine:
             "target_turn": target_turn,
             "free_actions_count": len(normalized_free_actions),
             "actions_count": len(normalized_actions),
+            "conflict_decision_cost": 0,
         }
 
     def _run_turn_plan_action(self, action_data: dict) -> dict:
@@ -858,6 +1007,14 @@ class CampingPlazaEngine:
             result = self.repair_tent(action_data["tent_id"], consume_decision=False)
         elif action_name == "buy_food_package":
             result = self._buy_food_package(action_data["package_key"])
+        elif action_name == "clean_campsite":
+            result = self.clean_campsite(consume_decision=False)
+        elif action_name == "make_post":
+            result = self.make_post()
+        elif action_name == "campfire":
+            result = self.hold_campfire(consume_decision=False)
+        elif action_name == "stargazing":
+            result = self.go_stargazing(consume_decision=False)
         else:
             result = self.improve_service(consume_decision=False)
         return {
@@ -878,6 +1035,7 @@ class CampingPlazaEngine:
         portions = package["portions"]
         name = package["name"]
         self.state.balance -= price
+        self.state.today_expenses["food"] = self.state.today_expenses.get("food", 0) + price
         self.state.food_stock += portions
         return {
             "success": True,
@@ -900,34 +1058,72 @@ class CampingPlazaEngine:
             self.state.last_food_preorder_day = self.state.day
         return result
 
-    def _execute_pending_turn_plan(self, result: dict):
+    def _execute_pending_turn_plan(
+        self, result: dict, *, defer_improve_service: bool = False
+    ) -> list[dict]:
         plan = self.state.pending_turn_plan
         result["plan_execution"] = {"free_actions": [], "actions": []}
         if not plan:
-            return
+            return []
         if (plan.get("target_day"), plan.get("target_turn")) != self._current_turn_plan_target():
             result["events"].append("stale turn plan discarded")
             self.state.pending_turn_plan = None
-            return
+            return []
 
         for action_data in plan.get("free_actions", []):
             result["plan_execution"]["free_actions"].append(
                 self._run_turn_plan_action(action_data)
             )
+        deferred_improve_service_actions = []
         for action_data in plan.get("actions", []):
+            if defer_improve_service and action_data.get("action") in {
+                "improve_service", "clean_campsite", "campfire"
+            }:
+                deferred_improve_service_actions.append(action_data)
+                continue
             action_result = self._run_turn_plan_action(action_data)
             result["plan_execution"]["actions"].append(action_result)
+            if action_result.get("success"):
+                self._record_turn_plan_action_event(action_data, action_result)
             if (
                 action_data.get("action") == "buy_food_package"
                 and action_result.get("success")
             ):
                 self._retry_waiting_dining_after_restock(result)
+        result["conflict_choice"] = plan.get("conflict_choice")
         self.state.pending_turn_plan = None
+        return deferred_improve_service_actions
+
+    def _execute_deferred_improve_service_actions(
+        self, result: dict, actions: list[dict]
+    ) -> None:
+        for action_data in actions:
+            action_result = self._run_turn_plan_action(action_data)
+            result["plan_execution"]["actions"].append(action_result)
+            if action_result.get("success"):
+                self._record_turn_plan_action_event(action_data, action_result)
+
+    def _record_turn_plan_action_event(self, action_data: dict, action_result: dict) -> None:
+        """把玩家经营动作写入统一日志；无实际信息的动作不单独记录。"""
+        if action_data.get("action") != "buy_food_package":
+            return
+        package = self.FOOD_PACKAGES.get(action_data.get("package_key"))
+        if package is None:
+            return
+        self._record_business_event(
+            self.state.day, self.state.turn, "food_restock",
+            data={"name": package["name"], "portions": package["portions"]},
+        )
 
     def _apply_opening_food_gift(self):
         package = self.FOOD_PACKAGES[self.OPENING_FOOD_GIFT_PACKAGE]
         self.state.food_stock = package["portions"]
-        self.state.today_events.append(self._build_opening_food_gift_event())
+        self._append_event_history(
+            self.state.day,
+            self.state.turn,
+            self._build_opening_food_gift_event(),
+            "world",
+        )
 
     def _build_opening_food_gift_event(self) -> str:
         package = self.FOOD_PACKAGES[self.OPENING_FOOD_GIFT_PACKAGE]
@@ -1029,6 +1225,55 @@ class CampingPlazaEngine:
             for key, value in payload["state"].items():
                 if key in state_fields:
                     setattr(restored_state, key, value)
+            restored_state.today_expenses = {
+                category: int((restored_state.today_expenses or {}).get(category, 0) or 0)
+                for category in ("food", "greenery", "repair", "growth")
+            }
+            restored_state.today_income = {
+                category: int((restored_state.today_income or {}).get(category, 0) or 0)
+                for category in (
+                    "accommodation", "campsite", "dining", "entertainment",
+                    "hot_spring", "tip",
+                )
+            }
+            raw_history = (
+                restored_state.event_history
+                if isinstance(restored_state.event_history, list) else []
+            )
+            normalized_history = []
+            used_sequences = {
+                int(item.get("sequence", 0) or 0)
+                for item in raw_history
+                if isinstance(item, dict) and int(item.get("sequence", 0) or 0) > 0
+            }
+            next_legacy_sequence = max(used_sequences, default=0)
+            for item in raw_history:
+                if not isinstance(item, dict):
+                    continue
+                normalized_item = dict(item)
+                sequence = int(normalized_item.get("sequence", 0) or 0)
+                if sequence <= 0:
+                    next_legacy_sequence += 1
+                    while next_legacy_sequence in used_sequences:
+                        next_legacy_sequence += 1
+                    sequence = next_legacy_sequence
+                    normalized_item["sequence"] = sequence
+                    used_sequences.add(sequence)
+                normalized_item.setdefault("event_type", "legacy")
+                if not isinstance(normalized_item.get("guest_ids"), list):
+                    normalized_item["guest_ids"] = []
+                if not isinstance(normalized_item.get("data"), dict):
+                    normalized_item["data"] = {}
+                normalized_history.append(normalized_item)
+            restored_state.event_history = normalized_history
+            restored_state.event_sequence = max(
+                int(restored_state.event_sequence or 0),
+                max(
+                    (int(item.get("sequence", 0) or 0)
+                     for item in restored_state.event_history if isinstance(item, dict)),
+                    default=0,
+                ),
+            )
 
             restored_tents = {}
             for tid, tdata in payload["tents"].items():
@@ -1370,6 +1615,7 @@ class CampingPlazaEngine:
                     "error": str(exc),
                 }
 
+            self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1399,6 +1645,7 @@ class CampingPlazaEngine:
                     "error_code": "growth_project_purchase_failed",
                     "error": str(exc),
                 }
+            self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1442,6 +1689,7 @@ class CampingPlazaEngine:
                     "error": str(exc),
                 }
 
+            self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1473,6 +1721,7 @@ class CampingPlazaEngine:
                 "error": str(exc),
             }
 
+        self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
         return {
             "success": True,
             "project_id": project_id,
@@ -1546,15 +1795,109 @@ class CampingPlazaEngine:
     # 回合推进
     # -------------------------------------------------------------------------
 
-    def _append_event_history(self, day: int, turn: int, text: str, kind: str) -> None:
-        """写入近期经营历史，保留最近 EVENT_HISTORY_LIMIT 条。"""
+    def _format_guest_labels(self, guest_ids: list[int]) -> str:
+        """把内部客组 ID 统一转成紧凑的玩家可见位置称呼。"""
+        campsite_slots = []
+        tent_ids = []
+        for npc_id in guest_ids:
+            npc = self._find_npc(npc_id)
+            if npc is not None and npc.visit_type == "day" and isinstance(npc.campsite_slot, int):
+                campsite_slots.append(npc.campsite_slot)
+                continue
+            tent = self._find_occupied_tent_for_npc(npc_id)
+            if tent is not None:
+                tent_ids.append(tent.id)
+        parts = []
+        if campsite_slots:
+            parts.append("、".join(str(slot) for slot in sorted(set(campsite_slots))) + "号营位客人")
+        if tent_ids:
+            parts.append("、".join(str(tent_id) for tent_id in sorted(set(tent_ids))) + "号帐篷住客")
+        return "及".join(parts)
+
+    def _format_business_event(self, event_type: str, guest_ids: list[int], data: dict) -> str:
+        guests = self._format_guest_labels(guest_ids)
+        if event_type == "temporary_conflict":
+            choice = "你进行了调解" if data.get("choice") == "mediate" else "你没有介入"
+            affected = self._format_guest_labels(data.get("affected_guest_ids", []))
+            if not affected:
+                outcome = "双方很快平静下来。" if data.get("choice") == "mediate" else "双方随后自行平静下来。"
+            elif len(data.get("affected_guest_ids", [])) == 1:
+                outcome = f"但{affected}仍有些不满。"
+            else:
+                outcome = "但双方情绪都没有完全平复。"
+            return f"临时事件：{guests}发生了争执。{choice}，{outcome}"
+        if event_type == "arrival_day":
+            return f"{guests}到达营地。"
+        if event_type == "arrival_overnight":
+            return f"{guests}入住营地。"
+        if event_type == "dining_completed":
+            return f"{guests}完成用餐。"
+        if event_type == "dining_shortage":
+            return f"{guests}想要用餐，但因食材不足未能提供。"
+        if event_type == "entertainment_completed":
+            return f"{guests}参与收费娱乐。"
+        if event_type == "hot_spring_completed":
+            return f"{guests}使用温泉。"
+        if event_type == "improve_service":
+            return f"服务提升，{guests}满意度+5。"
+        if event_type == "clean_campsite":
+            return f"清洁营地，{guests}满意度+2。"
+        if event_type == "campfire":
+            return f"篝火进行，{guests}享受了篝火。"
+        if event_type == "stargazing":
+            return f"星空体验，{guests}感受了星空。"
+        if event_type == "food_restock":
+            return f"已购买{data['name']}，补充{data['portions']}份食材。"
+        if event_type == "tips":
+            return f"今日收到小费 {data['amount']} 金币。"
+        if event_type == "day_departure":
+            return f"{data['count']}组日间客离场。"
+        if event_type == "food_discard":
+            return f"今日营业结束，剩余{data['portions']}份食材已作废。"
+        return str(data.get("text", "")).strip()
+
+    def _record_business_event(
+        self, day: int, turn: int, event_type: str, *, guest_ids: Optional[list[int]] = None,
+        data: Optional[dict] = None, kind: str = "world", merge: bool = True,
+    ) -> None:
+        """统一记录、聚合、格式化经营日志；只接受结构化事实，不接受调用方拼文案。"""
+        guest_ids = list(guest_ids or [])
+        data = dict(data or {})
+        text = self._format_business_event(event_type, guest_ids, data)
+        if not text:
+            return
+        if merge and self.state.event_history:
+            previous = self.state.event_history[-1]
+            if (
+                previous.get("day") == day and previous.get("turn") == turn
+                and previous.get("event_type") == event_type
+            ):
+                merged_guests = list(dict.fromkeys(previous.get("guest_ids", []) + guest_ids))
+                previous["guest_ids"] = merged_guests
+                if event_type == "day_departure":
+                    previous["data"]["count"] = previous.get("data", {}).get("count", 0) + data.get("count", 0)
+                previous["text"] = self._format_business_event(event_type, merged_guests, previous.get("data", data))
+                return
+        self._append_event_history(day, turn, text, kind, event_type, guest_ids, data)
+
+    def _append_event_history(
+        self, day: int, turn: int, text: str, kind: str,
+        event_type: str = "legacy", guest_ids: Optional[list[int]] = None,
+        data: Optional[dict] = None,
+    ) -> None:
+        """统一日志底层写入：固定真实 day/turn，并记录同 Turn 内发生顺序。"""
         if not isinstance(text, str) or not text.strip():
             return
+        self.state.event_sequence += 1
         entry = {
             "day": int(day),
             "turn": int(turn),
             "text": text.strip(),
             "kind": kind,
+            "sequence": self.state.event_sequence,
+            "event_type": event_type,
+            "guest_ids": list(guest_ids or []),
+            "data": dict(data or {}),
         }
         self.state.event_history.append(entry)
         if len(self.state.event_history) > self.EVENT_HISTORY_LIMIT:
@@ -1589,6 +1932,7 @@ class CampingPlazaEngine:
                     "visit_type": npc.visit_type,
                     "has_left": npc.has_left,
                     "review_left": npc.review_left,
+                    "campsite_slot": npc.campsite_slot,
                 }
                 for npc in self.npc_pool
             },
@@ -1643,7 +1987,42 @@ class CampingPlazaEngine:
             and isinstance(npc.campsite_slot, int)
             and 1 <= npc.campsite_slot <= self.DAY_CAMPSITE_CAPACITY
         )
-        if campsite_slots:
+        day_reservation_slots = [
+            npc.campsite_slot
+            for entry in newly_arrived_entries
+            if entry.get("visit_type") == "day"
+            and entry.get("source") == "reservation"
+            for npc in [current_npcs.get(entry.get("npc_id"))]
+            if npc is not None and isinstance(npc.campsite_slot, int)
+        ]
+        day_natural_slots = [
+            npc.campsite_slot
+            for entry in newly_arrived_entries
+            if entry.get("visit_type") == "day"
+            and entry.get("source") != "reservation"
+            for npc in [current_npcs.get(entry.get("npc_id"))]
+            if npc is not None and isinstance(npc.campsite_slot, int)
+        ]
+        day_reservation_slots.sort()
+        day_natural_slots.sort()
+        if day_reservation_slots:
+            slots = "、".join(f"{slot}号" for slot in day_reservation_slots)
+            message = (
+                f"1组日间预约客按约到达，进入{slots}营位。"
+                if len(day_reservation_slots) == 1
+                else f"{len(day_reservation_slots)}组日间预约客按约到达，分别进入{slots}营位。"
+            )
+            self._append_event_history(day, turn, message, "world")
+        if day_natural_slots:
+            slots = "、".join(f"{slot}号" for slot in day_natural_slots)
+            income = income_delta.get("campsite", 0)
+            message = (
+                f"1组日间游客到达{slots}营位，收入{income}金币。"
+                if len(day_natural_slots) == 1
+                else f"{len(day_natural_slots)}组日间游客到达{slots}营位，共收入{income}金币。"
+            )
+            self._append_event_history(day, turn, message, "world")
+        if False and campsite_slots:
             count = len(campsite_slots)
             slot_text = "、".join(f"{slot}号" for slot in campsite_slots)
             income = income_delta.get("campsite", 0)
@@ -1700,7 +2079,36 @@ class CampingPlazaEngine:
             ]
             if tent_id is not None
         )
-        if overnight_tent_ids:
+        overnight_reservation_tent_ids = sorted(
+            getattr(self._find_occupied_tent_for_npc(entry.get("npc_id")), "id", None)
+            for entry in overnight_arrival_entries
+            if entry.get("source") == "reservation"
+            and getattr(self._find_occupied_tent_for_npc(entry.get("npc_id")), "id", None) is not None
+        )
+        overnight_natural_tent_ids = sorted(
+            getattr(self._find_occupied_tent_for_npc(entry.get("npc_id")), "id", None)
+            for entry in overnight_arrival_entries
+            if entry.get("source") != "reservation"
+            and getattr(self._find_occupied_tent_for_npc(entry.get("npc_id")), "id", None) is not None
+        )
+        if overnight_reservation_tent_ids:
+            tents = "、".join(f"{tent_id}号" for tent_id in overnight_reservation_tent_ids)
+            message = (
+                f"1组过夜预约客按约到达，入住{tents}帐篷。"
+                if len(overnight_reservation_tent_ids) == 1
+                else f"{len(overnight_reservation_tent_ids)}组过夜预约客按约到达，分别入住{tents}帐篷。"
+            )
+            self._append_event_history(day, turn, message, "world")
+        if overnight_natural_tent_ids:
+            tents = "、".join(f"{tent_id}号" for tent_id in overnight_natural_tent_ids)
+            income = accommodation_delta
+            message = (
+                f"1组过夜客入住{tents}帐篷，收入{income}金币。"
+                if len(overnight_natural_tent_ids) == 1
+                else f"{len(overnight_natural_tent_ids)}组过夜客入住{tents}帐篷，共收入{income}金币。"
+            )
+            self._append_event_history(day, turn, message, "world")
+        if False and overnight_tent_ids:
             count = len(overnight_tent_ids)
             tent_text = "、".join(f"{tent_id}号" for tent_id in overnight_tent_ids)
             income = (
@@ -1739,19 +2147,77 @@ class CampingPlazaEngine:
                     snapshot["action_statuses"].get((npc_id, index)) != "completed"
                     and action.get("status") == "completed"
                 ):
-                    completed_actions.append(action.get("action"))
+                    completed_actions.append({
+                        "action": action.get("action"),
+                        "npc_id": npc_id,
+                    })
 
         summary_definitions = (
             ("dining", "dining", "组客人完成用餐", "dining"),
             ("paid_entertainment", "entertainment", "组客人参与收费娱乐", "entertainment"),
             ("hot_spring", "hot_spring", "组客人使用温泉", "hot_spring"),
         )
+        food_shortage_dining_count = sum(
+            1
+            for entry in self.state.today_arrival_plan
+            for index, action in enumerate(entry.get("planned_actions", []))
+            if action.get("action") == "dining"
+            and action.get("status") == "waiting_for_restock"
+            and snapshot["action_statuses"].get((entry.get("npc_id"), index))
+            != "waiting_for_restock"
+        )
+        if food_shortage_dining_count:
+            self._append_event_history(
+                day,
+                turn,
+                f"{food_shortage_dining_count}组客人想要用餐，但因食材不足未能提供。",
+                "world",
+            )
+
+        def visible_guest_label(npc_id):
+            npc = current_npcs.get(npc_id)
+            before = snapshot["npcs"].get(npc_id, {})
+            visit_type = npc.visit_type if npc is not None else before.get("visit_type")
+            if visit_type == "day":
+                campsite_slot = (
+                    getattr(npc, "campsite_slot", None)
+                    if npc is not None
+                    else None
+                )
+                if not isinstance(campsite_slot, int):
+                    campsite_slot = before.get("campsite_slot")
+                if isinstance(campsite_slot, int) and 1 <= campsite_slot <= self.DAY_CAMPSITE_CAPACITY:
+                    return f"{campsite_slot}号营位客人"
+                return None
+            if visit_type == "overnight":
+                tent = self._find_occupied_tent_for_npc(npc_id)
+                if tent is not None:
+                    return f"{tent.id}号帐篷住客"
+            return None
+
         for action_name, income_key, label, _kind in summary_definitions:
-            count = completed_actions.count(action_name)
-            if count:
+            action_items = [
+                item for item in completed_actions
+                if item["action"] == action_name
+            ]
+            guest_labels = [
+                visible_guest_label(item["npc_id"])
+                for item in action_items
+            ]
+            guest_labels = [label for label in guest_labels if label]
+            if guest_labels:
                 income = income_delta.get(income_key, 0)
+                guests_text = "、".join(guest_labels)
+                income_text = "收入" if len(guest_labels) == 1 else "共收入"
+                display_label = {
+                    "dining": "完成用餐",
+                    "paid_entertainment": "参与收费娱乐",
+                    "hot_spring": "使用温泉",
+                }[action_name]
                 self._append_event_history(
-                    day, turn, f"{count}{label}，共收入{income}金币。", "world"
+                    day, turn,
+                    f"{guests_text}{display_label}，{income_text}{income}金币。",
+                    "world",
                 )
 
         departed_ids = [
@@ -1764,16 +2230,7 @@ class CampingPlazaEngine:
             )
         ]
         if departed_ids:
-            reviewed_ids = {
-                review.get("npc_id")
-                for review in self.state.pending_reviews
-                if isinstance(review, dict)
-                and review.get("npc_id") not in snapshot["pending_review_ids"]
-            }
-            reviewed_count = len(set(departed_ids) & reviewed_ids)
             text = f"{len(departed_ids)}组客人离场"
-            if reviewed_count:
-                text += f"，其中{reviewed_count}组留下评价"
             self._append_event_history(day, turn, text + "。", "world")
 
     def advance_turn(self) -> dict:
@@ -1806,10 +2263,12 @@ class CampingPlazaEngine:
                 return result
 
             self._process_business_turn(result)
+            self._apply_temporary_conflict_event(result)
             self._process_dining(result)
             self._process_entertainment(result)
             self._process_hot_spring(result)
             if self.state.turn == 5:
+                self._settle_tips(result)
                 self._process_day_guest_departures(result)
             if self.state.turn == 4:
                 self._process_day_to_overnight(result)
@@ -1821,11 +2280,21 @@ class CampingPlazaEngine:
                     tent = self._find_occupied_tent_for_npc(npc.id)
                     if tent is not None:
                         npc.location = f"tent_{tent.id}"
+                discarded_food = self.state.food_stock
+                if discarded_food > 0:
+                    discard_event = f"今日营业结束，剩余{discarded_food}份食材已作废。"
+                    result["events"].append(discard_event)
+                    self._record_business_event(
+                        executed_day, executed_turn, "food_discard",
+                        data={"portions": discarded_food}, merge=False,
+                    )
                 self.state.food_stock = 0
             self.state.decisions_left = 3
 
             # 推进到下一回合
             self.state.turn += 1
+            self._restore_active_npc_base_locations()
+            self._settle_current_turn_arrivals()
         else:
             if self.state.day_end_completed:
                 result["events"].append("日终清单已完成，请调用 start_next_day 开启下一天")
@@ -1841,48 +2310,67 @@ class CampingPlazaEngine:
         result["tents"] = self._get_tents_summary()
         result["npcs"] = self._get_npcs_summary()
 
-        for action_group in result.get("plan_execution", {}).values():
-            for action_result in action_group:
-                if action_result.get("success"):
-                    self._append_event_history(
-                        executed_day,
-                        executed_turn,
-                        action_result.get("message", ""),
-                    "action",
-                )
-        if business_snapshot is not None:
-            self._append_turn_business_summaries(
-                business_snapshot, executed_day, executed_turn
-            )
-
         return result
 
     def _process_business_turn(self, result: dict):
         """处理营业回合"""
         turn = self.state.turn
+        self._restore_active_npc_base_locations()
 
         if turn == 1:
             self._process_checkout_partial(result)
 
         elif turn == 2:
             self._process_checkout_all(result)
-            self._execute_pending_turn_plan(result)
+            deferred_service_actions = self._execute_pending_turn_plan(
+                result, defer_improve_service=True
+            )
             self._assign_reserved_tents_for_today()
             self._process_checkin(result)
+            self._execute_deferred_improve_service_actions(
+                result, deferred_service_actions
+            )
 
         elif turn == 3:
-            self._execute_pending_turn_plan(result)
+            deferred_service_actions = self._execute_pending_turn_plan(
+                result, defer_improve_service=True
+            )
             self._process_checkin(result)
+            self._execute_deferred_improve_service_actions(
+                result, deferred_service_actions
+            )
 
         elif turn == 4:
-            self._execute_pending_turn_plan(result)
+            deferred_service_actions = self._execute_pending_turn_plan(
+                result, defer_improve_service=True
+            )
             self._process_checkin(result)
+            self._execute_deferred_improve_service_actions(
+                result, deferred_service_actions
+            )
 
         elif turn == 5:
             self._execute_pending_turn_plan(result)
 
         # 清理已离开的NPC
         self._cleanup_left_npcs()
+
+    def _restore_active_npc_base_locations(self):
+        """在本 Turn 行为执行前恢复仍在场 NPC 的基础位置。"""
+        for npc in self.npc_pool:
+            if npc.has_left:
+                continue
+            if npc.visit_type == "day":
+                if (
+                    isinstance(npc.campsite_slot, int)
+                    and 1 <= npc.campsite_slot <= self.DAY_CAMPSITE_CAPACITY
+                ):
+                    npc.location = "campsite"
+                continue
+            if npc.visit_type == "overnight":
+                tent = self._find_occupied_tent_for_npc(npc.id)
+                if tent is not None:
+                    npc.location = f"tent_{tent.id}"
 
     def _process_checkout_partial(self, result: dict):
         """Turn 1: 部分过夜客退房"""
@@ -2030,6 +2518,10 @@ class CampingPlazaEngine:
                         f"{npc.group_size}人客人想在餐饮区用餐，但食材不足："
                         f"需要{required_portions}份，当前只有{current_stock}份。{reaction}"
                     )
+                    self._record_business_event(
+                        self.state.day, self.state.turn, "dining_shortage",
+                        guest_ids=[npc.id],
+                    )
                     continue
 
                 spend = menu["price_per_person"] * npc.group_size
@@ -2074,8 +2566,11 @@ class CampingPlazaEngine:
         action["charged_amount"] = spend
         action["food_portions_used"] = npc.group_size
         action["satisfaction_gain"] = menu["satisfaction_gain"]
+        self._record_business_event(
+            self.state.day, self.state.turn, "dining_completed", guest_ids=[npc.id]
+        )
         result["events"].append(
-            f"客组{npc.id}购买{menu['display_name']}，"
+            f"1组客人购买{menu['display_name']}，"
             f"{npc.group_size}人用餐，收入+{spend}，"
             f"消耗食材{npc.group_size}份，"
             f"整组满意度+{menu['satisfaction_gain']}"
@@ -2187,7 +2682,11 @@ class CampingPlazaEngine:
                     action["satisfaction_gain"] = self.HOT_SPRING_SATISFACTION_GAIN
                     action["people_served"] = npc.group_size
                     result["events"].append(
-                        f"一组{npc.group_size}人的客组使用温泉，收入+{spend}，整组满意度+{self.HOT_SPRING_SATISFACTION_GAIN}。"
+                        f"1组客人使用温泉，收入+{spend}，整组满意度+{self.HOT_SPRING_SATISFACTION_GAIN}。"
+                    )
+                    self._record_business_event(
+                        self.state.day, self.state.turn, "hot_spring_completed",
+                        guest_ids=[npc.id],
                     )
                 except Exception:
                     self.state.balance = balance_before
@@ -2254,9 +2753,13 @@ class CampingPlazaEngine:
                     action["satisfaction_gain"] = tier["satisfaction_gain"]
                     self._record_successful_paid_entertainment_once(npc)
                     result["events"].append(
-                        f"客组{npc.id}参加{tier['display_name']}，"
+                        f"1组客人参加{tier['display_name']}，"
                         f"整组收费+{spend}，"
                         f"整组满意度+{tier['satisfaction_gain']}"
+                    )
+                    self._record_business_event(
+                        self.state.day, self.state.turn, "entertainment_completed",
+                        guest_ids=[npc.id],
                     )
                     continue
 
@@ -2267,7 +2770,7 @@ class CampingPlazaEngine:
                 action["charged_amount"] = 0
                 action["satisfaction_gain"] = 1
                 result["events"].append(
-                    f"客组{npc.id}参加免费娱乐，收入+0，整组满意度+1"
+                    "1组客人参加免费娱乐，收入+0，整组满意度+1"
                 )
 
     def _calc_spend_probability(
@@ -2320,6 +2823,10 @@ class CampingPlazaEngine:
 
     def _leave_day_guest(self, npc: NPCGroup, result: dict):
         """日间游客离场并触发评价。"""
+        self._record_business_event(
+            self.state.day, self.state.turn, "day_departure",
+            guest_ids=[npc.id], data={"count": 1},
+        )
         npc.has_left = True
         npc.location = "leaving"
         npc.campsite_slot = None
@@ -2430,6 +2937,12 @@ class CampingPlazaEngine:
                     )
                     self._apply_broken_penalty(occupant)
                 result["events"].append(f"⚠️ {tent_id}号帐篷出现故障，需要维修")
+                self._append_event_history(
+                    self.state.day,
+                    self.state.turn,
+                    f"⚠️ {tent_id}号帐篷出现故障，需要维修。",
+                    "world",
+                )
                 result["next_actions"].append(f"repair_tent_{tent_id}")
 
     def clean_tents(self, tent_ids: Optional[list[int]] = None) -> dict:
@@ -2508,17 +3021,6 @@ class CampingPlazaEngine:
     def _process_day_end(self, result: dict):
         """日终管理阶段提示事件"""
         result["events"].append("=== 日终管理阶段 ===")
-        greenery = self.facilities["greenery"]
-        greenery_value = round(greenery.greenery_satisfaction, 1)
-        if (
-            greenery.level < 2
-            and not self.state.greenery_processed_today
-            and greenery_value > 0.0
-        ):
-            next_day_value = round(max(0.0, greenery_value - 0.5), 1)
-            result["events"].append(
-                f"今日绿化尚未维护，进入下一天后将从 {greenery_value:.1f} 降至 {next_day_value:.1f}。"
-            )
         result["phase"] = "management"
 
     # 允许出现在日终批处理清单中的动作
@@ -2529,6 +3031,44 @@ class CampingPlazaEngine:
         "buy_food_package",
         "purchase_growth_project",
     }
+
+    def _day_end_action_summary_label(self, item_result: dict) -> str:
+        """返回日终经营汇总使用的玩家可见动作名称。"""
+        action_name = item_result.get("action")
+        if action_name == "buy_food_package":
+            return "补充食材"
+        if action_name == "manage_greenery":
+            return "打理绿化"
+        if action_name == "clean_tents":
+            return "清洁帐篷"
+        if action_name == "repair_tent":
+            tent_id = (item_result.get("params") or {}).get("tent_id")
+            return f"维修{tent_id}号帐篷" if tent_id is not None else "维修帐篷"
+        if action_name == "purchase_growth_project":
+            display_name = item_result.get("display_name") or "成长项目"
+            category = item_result.get("category")
+            if category in {"tent", "hot_spring"}:
+                return f"建设{display_name}"
+            return f"升级{display_name}"
+        return ""
+
+    def _day_end_action_cost(self, action_data: dict) -> int:
+        action_name = action_data.get("action")
+        params = action_data.get("params") or {}
+        if action_name == "repair_tent":
+            return self.REPAIR_COST
+        if action_name == "manage_greenery":
+            return 50 if params.get("action", "maintain") == "maintain" else 0
+        if action_name == "buy_food_package":
+            return self.FOOD_PACKAGES.get(params.get("package_key"), {}).get("price", 0)
+        if action_name == "purchase_growth_project":
+            project = next(
+                (p for p in self.GROWTH_PROJECT_CATALOG
+                 if p["project_id"] == params.get("project_id")),
+                None,
+            )
+            return project.get("price", 0) if project else 0
+        return 0
 
     def submit_day_end_actions(self, actions: Optional[list]) -> dict:
         """日终批处理入口：一次性执行完整经营清单。
@@ -2563,6 +3103,47 @@ class CampingPlazaEngine:
                 "error_code": "duplicate_food_preorder",
                 "message": "日终清单中最多只能选择一个食材包",
             }
+        has_greenery_upgrade = any(
+            isinstance(action_data, dict)
+            and action_data.get("action") == "purchase_growth_project"
+            and next(
+                (project.get("category") for project in self.GROWTH_PROJECT_CATALOG
+                 if project.get("project_id") == (action_data.get("params") or {}).get("project_id")),
+                None,
+            ) == "greenery"
+            for action_data in actions
+        )
+        submitted_cost = 0
+        budgeted_growth_projects = set()
+        for action_data in actions:
+            if not isinstance(action_data, dict):
+                continue
+            action_name = action_data.get("action")
+            if has_greenery_upgrade and action_name == "manage_greenery":
+                continue
+            if action_name == "purchase_growth_project":
+                project_id = (action_data.get("params") or {}).get("project_id")
+                if project_id in budgeted_growth_projects:
+                    continue
+                budgeted_growth_projects.add(project_id)
+                if not next(
+                    (
+                        project.get("can_purchase_now")
+                        for project in self.get_growth_project_catalog()
+                        if project.get("project_id") == project_id
+                    ),
+                    False,
+                ):
+                    continue
+            submitted_cost += self._day_end_action_cost(action_data)
+        if submitted_cost > self.state.balance:
+            return {
+                "success": False,
+                "error_code": "day_end_budget_exceeded",
+                "balance": self.state.balance,
+                "submitted_cost": submitted_cost,
+                "shortfall": submitted_cost - self.state.balance,
+            }
         result = {
             "success": True,
             "events": [],
@@ -2570,9 +3151,24 @@ class CampingPlazaEngine:
         }
         executed_day = self.state.day
         executed_turn = self.state.turn
+        successful_action_labels = []
+        total_spend = 0
         self._process_day_end(result)
 
-        for action_data in actions:
+        ordered_actions = sorted(
+            actions,
+            key=lambda item: 0 if (
+                isinstance(item, dict)
+                and item.get("action") == "purchase_growth_project"
+                and next(
+                    (project.get("category") for project in self.GROWTH_PROJECT_CATALOG
+                     if project.get("project_id") == (item.get("params") or {}).get("project_id")),
+                    None,
+                ) == "greenery"
+            ) else 1,
+        )
+        greenery_upgrade_succeeded = False
+        for action_data in ordered_actions:
             if not isinstance(action_data, dict):
                 result["results"].append({
                     "action": None,
@@ -2599,7 +3195,14 @@ class CampingPlazaEngine:
                 continue
 
             balance_before = self.state.balance
-            if action_name == "repair_tent":
+            if action_name == "manage_greenery" and greenery_upgrade_succeeded:
+                action_result = {
+                    "success": True,
+                    "skipped": True,
+                    "message": "绿化升级已包含当日维护，本次打理绿化未执行。",
+                }
+                result["events"].append(action_result["message"])
+            elif action_name == "repair_tent":
                 action_result = self.repair_tent(
                     params.get("tent_id"), consume_decision=False
                 )
@@ -2620,14 +3223,33 @@ class CampingPlazaEngine:
 
             item_result.update(action_result)
             result["results"].append(item_result)
+            if (
+                action_name == "purchase_growth_project"
+                and item_result.get("success")
+                and item_result.get("category") == "greenery"
+            ):
+                greenery_upgrade_succeeded = True
             if item_result.get("success"):
-                history_text = item_result.get("message", "")
                 balance_change = self.state.balance - balance_before
-                if balance_change:
-                    history_text = f"{history_text}，金币 {balance_change:+d}"
-                self._append_event_history(
-                    executed_day, executed_turn, history_text, "action"
-                )
+                if not item_result.get("skipped"):
+                    successful_action_labels.append(
+                        self._day_end_action_summary_label(item_result)
+                    )
+                if balance_change < 0:
+                    total_spend -= balance_change
+
+        successful_action_labels = [
+            label for label in successful_action_labels if label
+        ]
+        if successful_action_labels:
+            history_text = f"日终完成：{'、'.join(successful_action_labels)}"
+            if total_spend:
+                history_text += f"，共支出{total_spend}金币"
+            self._append_event_history(
+                executed_day, executed_turn, history_text + "。", "action"
+            )
+
+        self._finalize_post_reservation(result)
 
         self.state.day_end_completed = True
         result["day_end_completed"] = True
@@ -2654,6 +3276,7 @@ class CampingPlazaEngine:
         self._append_result_events_to_history(
             self.state.day, self.state.turn, self.state.today_events
         )
+        self.state.today_events.clear()
         result["success"] = True
         result["day"] = self.state.day
         result["turn"] = self.state.turn
@@ -2676,6 +3299,7 @@ class CampingPlazaEngine:
             if self.state.balance < cost:
                 return f"余额不足，需要{cost}金币"
             self.state.balance -= cost
+            self.state.today_expenses["greenery"] = self.state.today_expenses.get("greenery", 0) + cost
             facility.greenery_satisfaction = min(
                 self.GREENERY_LEVEL_MAX.get(facility.level, 10.0),
                 facility.greenery_satisfaction + 1.0,
@@ -2723,6 +3347,7 @@ class CampingPlazaEngine:
             return {"success": False, "message": "金币不足"}
 
         self.state.balance -= self.REPAIR_COST
+        self.state.today_expenses["repair"] = self.state.today_expenses.get("repair", 0) + self.REPAIR_COST
 
         # 修复：根据住客/预定状态恢复对应状态
         if tent.occupied_by:
@@ -2765,7 +3390,150 @@ class CampingPlazaEngine:
                 npc.received_service_boost = True
                 affected.append(npc.id)
 
-        return {"success": True, "message": f"服务提升，{len(affected)}组客人满意度+5"}
+        if affected:
+            labels = [self._visible_guest_label(npc_id) for npc_id in affected]
+            message = f"服务提升，{'、'.join(labels)}满意度+5。"
+            self._record_business_event(
+                self.state.day, self.state.turn, "improve_service", guest_ids=affected
+            )
+        else:
+            message = f"服务提升，{len(affected)}组客人满意度+5"
+        return {"success": True, "message": message}
+
+    def _active_guest_ids(self) -> list[int]:
+        return [npc.id for npc in self.npc_pool if not npc.has_left]
+
+    def clean_campsite(self, *, consume_decision: bool = True) -> dict:
+        if self.state.turn not in (2, 3, 4, 5):
+            return {"success": False, "message": "清洁营地只能在营业回合进行"}
+        if consume_decision and self.state.decisions_left <= 0:
+            return {"success": False, "message": "今日决策点已用完"}
+        if self.state.clean_campsite_uses_today >= 2:
+            return {"success": False, "message": "今日清洁营地次数已达到上限"}
+        affected = []
+        for npc in self.npc_pool:
+            if not npc.has_left and random.random() < 0.7:
+                npc.total_satisfaction = min(100, npc.total_satisfaction + 2)
+                affected.append(npc.id)
+        if consume_decision:
+            self.state.decisions_left -= 1
+        self.state.clean_campsite_uses_today += 1
+        labels = [self._visible_guest_label(npc_id) for npc_id in affected]
+        message = (
+            f"清洁营地，{'、'.join(labels)}满意度+2。"
+            if labels else "清洁营地完成。"
+        )
+        if affected:
+            self._record_business_event(
+                self.state.day, self.state.turn, "clean_campsite", guest_ids=affected
+            )
+        return {"success": True, "message": message, "affected_npc_ids": affected}
+
+    def make_post(self) -> dict:
+        if self.state.turn not in (2, 3, 4, 5):
+            return {"success": False, "message": "发帖只能在营业回合进行"}
+        if self.state.post_used_today:
+            return {"success": False, "message": "今天已经发布过帖子"}
+        self.state.post_used_today = True
+        if random.random() >= 0.25:
+            return {"success": True, "message": "帖子已发布"}
+        visit_type = "day" if random.random() < 0.5 else "overnight"
+        record = self._create_reservation_record(
+            group_size=random.randint(1, 6),
+            visit_type=visit_type,
+            arrival_day=self.state.day + 1,
+            paid=False,
+            status="post_pending",
+        )
+        self.state.pending_post_reservation = record
+        return {"success": True, "message": "帖子已发布"}
+
+    def hold_campfire(self, *, consume_decision: bool = True) -> dict:
+        if self.state.turn != 4:
+            return {"success": False, "message": "篝火只能在 Turn 4 进行"}
+        if consume_decision and self.state.decisions_left <= 0:
+            return {"success": False, "message": "今日决策点已用完"}
+        affected = [npc.id for npc in self.npc_pool if not npc.has_left and random.random() < 0.6]
+        self.state.campfire_affected_npc_ids = affected
+        if consume_decision:
+            self.state.decisions_left -= 1
+        labels = [self._visible_guest_label(npc_id) for npc_id in affected]
+        if affected:
+            self._record_business_event(
+                self.state.day, self.state.turn, "campfire", guest_ids=affected
+            )
+        return {"success": True, "message": f"篝火进行，{'、'.join(labels)}享受了篝火。" if labels else "篝火进行。"}
+
+    def go_stargazing(self, *, consume_decision: bool = True) -> dict:
+        if self.state.turn != 5:
+            return {"success": False, "message": "星空只能在 Turn 5 进行"}
+        if consume_decision and self.state.decisions_left <= 0:
+            return {"success": False, "message": "今日决策点已用完"}
+        affected = [npc.id for npc in self.npc_pool if not npc.has_left and random.random() < 0.6]
+        self.state.stargazing_affected_npc_ids = affected
+        if consume_decision:
+            self.state.decisions_left -= 1
+        labels = [self._visible_guest_label(npc_id) for npc_id in affected]
+        if affected:
+            self._record_business_event(
+                self.state.day, self.state.turn, "stargazing", guest_ids=affected
+            )
+        return {"success": True, "message": f"星空体验，{'、'.join(labels)}感受了星空。" if labels else "星空体验开始。"}
+
+    def _settle_tips(self, result: dict) -> None:
+        if self.state.today_tip_settled:
+            return
+        total = 0
+        campfire_ids = set(self.state.campfire_affected_npc_ids)
+        stargazing_ids = set(self.state.stargazing_affected_npc_ids)
+        for npc in self.npc_pool:
+            if npc.has_left:
+                continue
+            probability = 0.35 if npc.id in campfire_ids else 0.20
+            if random.random() < probability:
+                total += 30 if npc.id in stargazing_ids else 20
+        self.state.today_income["tip"] += total
+        self.state.today_tip_settled = True
+        if total:
+            message = f"今日收到小费 {total} 金币。"
+            result["events"].append(message)
+            self._record_business_event(
+                self.state.day, self.state.turn, "tips", data={"amount": total}, merge=False
+            )
+
+    def _finalize_post_reservation(self, result: dict) -> None:
+        record = self.state.pending_post_reservation
+        if not record:
+            return
+        target_day = self.state.day + 1
+        success = False
+        if record["visit_type"] == "day":
+            accepted = sum(
+                1 for item in self.state.reservations
+                if item.get("arrival_day") == target_day
+                and item.get("visit_type") == "day"
+                and item.get("status") == "accepted"
+            )
+            success = accepted < self.DAY_CAMPSITE_CAPACITY
+            if success:
+                self.state.balance += self.CAMPSITE_FEE
+                self.state.today_income["campsite"] += self.CAMPSITE_FEE
+        else:
+            tent = self._find_reservable_overnight_tent(record["group_size"])
+            success = tent is not None
+            if success:
+                record["tent_id"] = tent.id
+                self.state.balance += self.TENT_PRICES[tent.id]
+                self.state.today_income["accommodation"] += self.TENT_PRICES[tent.id]
+        if success:
+            record["paid"] = True
+            record["status"] = "accepted"
+            self.state.reservations.append(record)
+            message = "今日发布的帖子带来了一组明日预约。"
+        else:
+            message = "今日发布的帖子收到一组预约咨询，但未能接下。"
+        result["events"].append(message)
+        self.state.pending_post_reservation = None
 
     # -------------------------------------------------------------------------
     # NPC生成
@@ -2966,10 +3734,7 @@ class CampingPlazaEngine:
             review for review in self.state.pending_reviews
             if review.get("created_day", self.state.day) >= self.state.day
         ]
-        joined_ratings = "、".join(f"{rating}星" for rating in ratings)
-        result["events"].append(
-            f"晨间结算了{len(ratings)}条昨日评价：{joined_ratings}"
-        )
+        result["events"].append(f"晨间更新了{len(ratings)}条评价。")
 
     def _apply_review_rating(self, rating: int):
         self.state.total_reviews += 1
@@ -3241,7 +4006,43 @@ class CampingPlazaEngine:
                     entry["arrival_status"] = "arrived"
                 else:
                     entry["arrival_status"] = "turned_away_full"
-                    result["events"].append("过夜客到达时帐篷已经客满，只能遗憾离开。")
+                    has_suitable_tent = any(
+                        tent.capacity >= guest.group_size
+                        for tent in self._get_unlocked_tents()
+                    )
+                    if has_suitable_tent:
+                        result["events"].append(
+                            "目前没有空余的合适帐篷，只能遗憾离开。"
+                        )
+                    else:
+                        result["events"].append(
+                            "目前没有适合这组客人的帐篷，只能遗憾离开。"
+                        )
+
+    def _settle_current_turn_arrivals(self) -> None:
+        """在进入营业 Turn 后一次性落定当轮到达，供 actions 读取前使用。"""
+        if self.state.turn not in (2, 3, 4):
+            return
+        arrival_result = {"events": []}
+        self._process_planned_arrivals(arrival_result)
+        arrived = [
+            entry for entry in self.state.today_arrival_plan
+            if entry.get("planned_day") == self.state.day
+            and entry.get("arrival_turn") == self.state.turn
+            and entry.get("arrival_status") == "arrived"
+            and not entry.get("arrival_log_recorded")
+        ]
+        for event_type, entries in (
+            ("arrival_day", [entry for entry in arrived if entry.get("visit_type") == "day"]),
+            ("arrival_overnight", [entry for entry in arrived if entry.get("visit_type") == "overnight"]),
+        ):
+            if entries:
+                self._record_business_event(
+                    self.state.day, self.state.turn, event_type,
+                    guest_ids=[entry["npc_id"] for entry in entries],
+                )
+                for entry in entries:
+                    entry["arrival_log_recorded"] = True
 
     def _has_consumed_dining_today(self, npc: NPCGroup) -> bool:
         return npc.last_dining_day == self.state.day
@@ -3327,11 +4128,20 @@ class CampingPlazaEngine:
             "dining": 0,
             "entertainment": 0,
             "hot_spring": 0,
+            "tip": 0,
         }
+        self.state.today_expenses = {"food": 0, "greenery": 0, "repair": 0, "growth": 0}
         self.state.today_events = []
         self.state.decisions_left = 3
         self.state.improve_service_uses_today = 0
+        self.state.clean_campsite_uses_today = 0
         self.state.pending_turn_plan = None
+        self.state.today_conflict_event = None
+        self.state.post_used_today = False
+        self.state.pending_post_reservation = None
+        self.state.campfire_affected_npc_ids = []
+        self.state.stargazing_affected_npc_ids = []
+        self.state.today_tip_settled = False
         self.state.day_campsite_groups_served = 0
         self.state.hot_spring_people_served_today = 0
         # 重置绿化标记
@@ -3362,6 +4172,10 @@ class CampingPlazaEngine:
             return
 
         target_day = self.state.day + 1
+        day_groups = 0
+        overnight_groups = 0
+        campsite_reservation_income = 0
+        overnight_reservation_income = 0
         for _ in range(self.DAY_CAMPSITE_CAPACITY):
             if random.random() >= 0.15:
                 continue
@@ -3376,9 +4190,8 @@ class CampingPlazaEngine:
             self.state.reservations.append(reservation)
             self.state.balance += self.CAMPSITE_FEE
             self.state.today_income["campsite"] += self.CAMPSITE_FEE
-            self.state.today_events.append(
-                f"接到一组{group_size}人的日间营位预约，客人将在明天到达。"
-            )
+            campsite_reservation_income += self.CAMPSITE_FEE
+            day_groups += 1
 
         for _ in self._get_unlocked_tents():
             if random.random() >= 0.15:
@@ -3399,8 +4212,29 @@ class CampingPlazaEngine:
             payment = self.TENT_PRICES[tent.id]
             self.state.balance += payment
             self.state.today_income["accommodation"] += payment
+            overnight_reservation_income += payment
+            overnight_groups += 1
+
+        if False and day_groups and overnight_groups:
             self.state.today_events.append(
-                f"接到一组{group_size}人的过夜预约，已为明天预留{tent.id}号帐篷。"
+                f"接到明日{day_groups}组日间营位预约、{overnight_groups}组帐篷预约。"
+            )
+        elif False and day_groups:
+            self.state.today_events.append(f"接到明日{day_groups}组日间营位预约。")
+        elif False and overnight_groups:
+            self.state.today_events.append(f"接到明日{overnight_groups}组帐篷预约。")
+
+        if day_groups and overnight_groups:
+            self.state.today_events.append(
+                f"接到明日{day_groups}组日间营位预约、{overnight_groups}组帐篷预约，已收取营位费{campsite_reservation_income}金币、住宿费{overnight_reservation_income}金币。"
+            )
+        elif day_groups:
+            self.state.today_events.append(
+                f"接到明日{day_groups}组日间营位预约，已收取营位费{campsite_reservation_income}金币。"
+            )
+        elif overnight_groups:
+            self.state.today_events.append(
+                f"接到明日{overnight_groups}组帐篷预约，已收取住宿费{overnight_reservation_income}金币。"
             )
 
         profile["reservations_processed"] = True
@@ -3481,7 +4315,8 @@ class CampingPlazaEngine:
             "reservations": safe_reservations,
             "decisions_left": self.state.decisions_left,
             "food_stock": self.state.food_stock,
-            "today_income": self.state.today_income
+            "today_income": self.state.today_income,
+            "today_expenses": self.state.today_expenses
         }
 
     def _get_tents_summary(self) -> dict:

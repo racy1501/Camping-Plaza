@@ -57,6 +57,7 @@ class ActionRequest(BaseModel):
 class TurnPlanRequest(BaseModel):
     free_actions: list[ActionRequest] = Field(default_factory=list)
     actions: list[ActionRequest] = Field(default_factory=list)
+    conflict_choice: Optional[str] = None
 
 
 class DayEndRequest(BaseModel):
@@ -75,6 +76,7 @@ def _food_package_action_entries() -> list[dict]:
         entries.append({
             "action": "buy_food_package",
             "params": {"package_key": package_key},
+            "cost": package["price"],
             "description": (
                 f"购买{package['name']}（{package['portions']}份，{package['price']}金币）"
             )
@@ -246,6 +248,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                 day_end_action_candidates.append({
                     "action": "repair_tent",
                     "params": {"tent_id": int(tid)},
+                    "cost": CampingPlazaEngine.REPAIR_COST,
                     "label": f"维修{tid}号帐篷",
                     "kind": "day_end",
                     "enabled": enabled,
@@ -262,6 +265,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                 day_end_action_candidates.append({
                     "action": "manage_greenery",
                     "params": {"action": "maintain"},
+                    "cost": 50,
                     "label": "打理绿化",
                     "kind": "day_end",
                     "enabled": enabled,
@@ -278,6 +282,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                     day_end_action_candidates.append({
                         "action": "buy_food_package",
                         "params": {"package_key": package_key},
+                        "cost": package["price"],
                         "label": entry["description"],
                         "kind": "day_end",
                         "enabled": balance >= package["price"],
@@ -291,6 +296,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                     day_end_action_candidates.append({
                         "action": "purchase_growth_project",
                         "params": {"project_id": project["project_id"]},
+                        "cost": project["price"],
                         "label": f"购买{project['display_name']}",
                         "kind": "day_end",
                         "enabled": True,
@@ -300,6 +306,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "success": True,
             "day": state["day"],
             "turn": turn,
+            "balance": balance,
             "mode": mode,
             "panel_title": panel_title,
             "planning_available": False,
@@ -309,6 +316,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "free_action_candidates": [],
             "decision_action_candidates": [],
             "day_end_action_candidates": day_end_action_candidates,
+            "total_cost_must_not_exceed_balance": True,
             "primary_action": None,
         }
 
@@ -383,6 +391,17 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         "reason": "" if improve_service_available else "今日提升服务次数已达到上限",
     })
 
+    if turn in (2, 3, 4, 5):
+        clean_campsite_available = eng.state.clean_campsite_uses_today < 2
+        decision_action_candidates.extend([
+            {"action": "clean_campsite", "params": {}, "label": "清洁营地", "kind": "decision", "category": "cleaning", "repeatable": False, "enabled": clean_campsite_available, "reason": "" if clean_campsite_available else "今日清洁营地次数已达到上限"},
+            {"action": "make_post", "params": {}, "label": "发布帖子", "kind": "decision", "category": "post", "repeatable": False, "enabled": not eng.state.post_used_today, "reason": "今天已经发布过帖子" if eng.state.post_used_today else ""},
+        ])
+        if turn == 4:
+            decision_action_candidates.append({"action": "campfire", "params": {}, "label": "举行篝火", "kind": "decision", "category": "campfire", "repeatable": False, "enabled": True, "reason": ""})
+        if turn == 5:
+            decision_action_candidates.append({"action": "stargazing", "params": {}, "label": "观赏星空", "kind": "decision", "category": "stargazing", "repeatable": False, "enabled": True, "reason": ""})
+
     # 补充食材候选：从 FOOD_PACKAGES 动态生成
     for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
         can_afford = balance >= package["price"]
@@ -401,6 +420,8 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "reason": "金币不足" if not can_afford else "",
         })
 
+    temporary_event = _get_temporary_event_summary(eng)
+
     return {
         "success": True,
         "day": state["day"],
@@ -409,10 +430,11 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         "panel_title": "营业经营",
         "planning_available": True,
         "plan_submitted": False,
-        "max_decision_actions": 3,
+        "max_decision_actions": eng.state.decisions_left,
         "turn_plan": None,
         "free_action_candidates": free_action_candidates,
         "decision_action_candidates": decision_action_candidates,
+        "temporary_event": temporary_event,
         "primary_action": {
             "action": "submit_turn_plan",
             "label": "提交本轮计划",
@@ -457,6 +479,8 @@ def _get_arrival_plan_summary(eng: CampingPlazaEngine) -> dict:
     turned_away_full_groups = sum(
         1 for e in current_entries if e.get("arrival_status") == "turned_away_full"
     )
+    reservation_day_groups = sum(1 for e in current_entries if e.get("source") == "reservation" and e.get("visit_type") == "day")
+    reservation_overnight_groups = sum(1 for e in current_entries if e.get("source") == "reservation" and e.get("visit_type") == "overnight")
 
     pending_by_turn = {
         "2": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
@@ -484,6 +508,8 @@ def _get_arrival_plan_summary(eng: CampingPlazaEngine) -> dict:
         "pending_people": sum(e.get("group_size", 0) for e in pending_entries),
         "arrived_groups": arrived_groups,
         "turned_away_full_groups": turned_away_full_groups,
+        "reservation_day_groups": reservation_day_groups,
+        "reservation_overnight_groups": reservation_overnight_groups,
         "pending_by_turn": pending_by_turn,
     }
 
@@ -532,6 +558,35 @@ def get_growth():
         "progress": eng.get_growth_progress(),
         "projects": eng.get_growth_project_catalog(),
     }
+
+
+def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
+    """临时事件的玩家/AI 共用安全摘要，不暴露已预生成结果。"""
+    event = eng.get_current_temporary_conflict_event()
+    if event is None:
+        return None
+    return {
+        "description": (
+            f"{eng._visible_guest_label(event['npc_a_id'])}与"
+            f"{eng._visible_guest_label(event['npc_b_id'])}发生了争执。"
+        ),
+        "choices": [
+            {
+                "value": "mediate", "label": "调解", "decision_cost": 1,
+                "effect": "降低双方不满风险",
+            },
+            {
+                "value": "ignore", "label": "不调解", "decision_cost": 0,
+                "effect": "双方更可能产生不满",
+            },
+        ],
+    }
+
+
+@app.get("/mcp/query_growth_projects")
+def mcp_query_growth_projects():
+    """MCP 只读查询：复用现有成长目录和进度读取逻辑。"""
+    return get_growth()
 
 
 @app.get("/api/actions")
@@ -633,6 +688,7 @@ def submit_turn_plan(req: TurnPlanRequest):
     plan_result = eng.submit_turn_plan(
         _normalize_turn_plan_actions(req.free_actions),
         _normalize_turn_plan_actions(req.actions),
+        req.conflict_choice,
     )
     if not plan_result["success"]:
         eng.save_state()
@@ -647,25 +703,40 @@ def submit_turn_plan(req: TurnPlanRequest):
 
     advance_result = eng.advance_turn()
     eng.save_state()
-    return {
-        **advance_result,
+    response = {
         "success": True,
-        "message": plan_result.get("message", ""),
-        "target_day": plan_result.get("target_day"),
-        "target_turn": plan_result.get("target_turn"),
-        "free_action_count": plan_result.get("free_actions_count", len(req.free_actions)),
-        "action_count": plan_result.get("actions_count", len(req.actions)),
+        "day": advance_result["day"],
+        "turn": advance_result["turn"],
+        "events": advance_result.get("events", []),
     }
+    action_failures = [
+        {
+            "action": item.get("action"),
+            "message": item.get("message", ""),
+        }
+        for action_group in advance_result.get("plan_execution", {}).values()
+        for item in action_group
+        if not item.get("success")
+    ]
+    if action_failures:
+        response["action_failures"] = action_failures
+    return response
 
 
 @app.post("/api/day/end")
 def submit_day_end(req: DayEndRequest):
-    """日终批处理入口：一次性提交完整日终经营清单（Turn 6）。
+    """日终批处理入口：提交完整日终经营清单并开启新一天。
 
     单个动作业务失败保留在 results 中，整体正常返回 200。
     """
     eng = get_engine()
     result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
+    if result.get("success"):
+        next_day_result = eng.start_next_day()
+        result["events"].extend(next_day_result.get("events", []))
+        result["day"] = next_day_result.get("day", eng.state.day)
+        result["turn"] = next_day_result.get("turn", eng.state.turn)
+        result["day_end_completed"] = eng.state.day_end_completed
     eng.save_state()
     return result
 
@@ -707,7 +778,13 @@ def do_action(req: ActionRequest):
         eng.save_state()
         return result
 
-    if req.action == "repair_tent":
+    if req.action == "resolve_temporary_conflict":
+        choice = req.params.get("choice") if req.params else None
+        if not isinstance(choice, str):
+            _raise_action_request_error("missing_conflict_choice", "缺少临时事件处理方式")
+        result = eng.resolve_current_temporary_conflict(choice)
+
+    elif req.action == "repair_tent":
         tent_id = req.params.get("tent_id") if req.params else None
         if tent_id is None:
             _raise_action_request_error("missing_tent_id", "缺少tent_id参数")
@@ -824,6 +901,7 @@ def mcp_available_actions():
     eng = get_engine()
     state = eng.get_full_state()
     actions = []
+    next_calls = []
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
 
     # 存在待清洁帐篷时提供批量清洁操作（营业和日终阶段均可）
@@ -840,7 +918,12 @@ def mcp_available_actions():
 
     if state["turn"] <= 5:
         actions = []
-        if planning_available:
+        if state["turn"] == 1:
+            actions.append({
+                "action": "advance_turn",
+                "description": "完成晨间结算并进入营业",
+            })
+        elif planning_available:
             submit_entry = {
                 "action": "submit_turn_plan",
                 "params": {"free_actions": [], "actions": []},
@@ -850,6 +933,7 @@ def mcp_available_actions():
                 {
                     "action": "repair_tent",
                     "params": {"tent_id": int(tid)},
+                    "cost": CampingPlazaEngine.REPAIR_COST,
                     "description": f"维修{tid}号帐篷（{CampingPlazaEngine.REPAIR_COST}金币）",
                 }
                 for tid, t in state["tents"].items()
@@ -857,7 +941,17 @@ def mcp_available_actions():
             ]
             if broken_candidates:
                 submit_entry["repair_candidates"] = broken_candidates
-            actions.append(submit_entry)
+            temporary_event = _get_temporary_event_summary(eng)
+            if temporary_event is not None:
+                actions.append({
+                    "action": "resolve_temporary_conflict",
+                    "params": {"choice": "mediate"},
+                    "choices": temporary_event["choices"],
+                    "temporary_event": temporary_event,
+                    "description": "先立即处理临时事件，再提交本轮经营计划。",
+                })
+            else:
+                actions.append(submit_entry)
         if plan_submitted:
             actions.append({
                 "action": "advance_turn",
@@ -865,11 +959,12 @@ def mcp_available_actions():
             })
     else:
         # Turn 6 日终批处理模式
+        if not eng.state.day_end_completed:
+            next_calls.append({"action": "query_growth_projects"})
         if eng.state.day_end_completed:
-            actions = [{
-                "action": "start_next_day",
-                "description": "日终清单已完成，开启下一天",
-            }]
+            # 正常日终已由 /api/day/end 直接跨日；这里只保留异常/恢复状态，
+            # 不把兼容入口包装成 AI 的正式经营动作。
+            actions = []
         else:
             entry = {
                 "action": "submit_day_end_actions",
@@ -906,12 +1001,14 @@ def mcp_available_actions():
                 entry["greenery_candidate"] = {
                     "action": "manage_greenery",
                     "params": {"action": "maintain"},
+                    "cost": 50,
                     "description": "打理绿化",
                 }
             growth_candidates = [
                 {
                     "action": "purchase_growth_project",
                     "params": {"project_id": project["project_id"]},
+                    "cost": project["price"],
                     "description": f"购买{project['display_name']}（{project['price']}金币）",
                 }
                 for project in eng.get_growth_project_catalog()
@@ -923,7 +1020,13 @@ def mcp_available_actions():
                 entry["food_package_candidates"] = _food_package_action_entries()
             actions = [entry]
 
-    return {"available_actions": actions}
+    return {
+        "balance": eng.state.balance,
+        "day_end_completed": eng.state.day_end_completed,
+        "total_cost_must_not_exceed_balance": True,
+        "available_actions": actions,
+        "next_calls": next_calls,
+    }
 
 
 # =============================================================================
