@@ -206,6 +206,75 @@
         }
     }
 
+    function movePlayerMarkerToAnchor(anchorId) {
+        const anchor = ANCHORS[anchorId];
+        if (!els.playerMarker || !anchor) return false;
+        els.playerMarker.style.left = anchor.left + '%';
+        els.playerMarker.style.top = anchor.top + '%';
+        els.playerMarker.style.bottom = 'auto';
+        els.playerMarker.style.right = 'auto';
+        return true;
+    }
+
+    function tentAnchorId(target) {
+        const rawId = target && target.id;
+        const match = String(rawId == null ? '' : rawId).match(/(\d+)$/);
+        const tentId = match ? Number(match[1]) : NaN;
+        return tentId >= 1 && tentId <= 6 ? `tent${tentId}` : null;
+    }
+
+    function playerReplayAnchorIds(event) {
+        const targets = Array.isArray(event && event.targets) ? event.targets : [];
+        switch (event && event.action) {
+            case 'clean_tents':
+                return targets
+                    .filter(target => target && target.type === 'tent')
+                    .map(tentAnchorId)
+                    .filter(Boolean);
+            case 'repair_tent': {
+                const target = targets.find(item => item && item.type === 'tent');
+                const anchorId = tentAnchorId(target);
+                return anchorId ? [anchorId] : [];
+            }
+            case 'buy_food_package':
+                return ['dining'];
+            case 'make_post':
+            case 'improve_service':
+                return ['entrance'];
+            case 'campfire':
+                return ['bonfire'];
+            case 'clean_campsite':
+                return ['campsite'];
+            case 'purchase_growth_project': {
+                const target = targets[0] || {};
+                if (target.type === 'tent') {
+                    const anchorId = tentAnchorId(target);
+                    return anchorId ? [anchorId] : [];
+                }
+                return {
+                    dining: ['dining'],
+                    entertainment: ['entertainment'],
+                    hot_spring: ['onsenLocked']
+                }[target.type] || [];
+            }
+            default:
+                return [];
+        }
+    }
+
+    async function playPlayerReplayMovement(event, duration = 700) {
+        const anchorIds = playerReplayAnchorIds(event);
+        if (anchorIds.length === 0) {
+            await new Promise(resolve => window.setTimeout(resolve, duration));
+            return;
+        }
+        const interval = duration / anchorIds.length;
+        for (let index = 0; index < anchorIds.length; index += 1) {
+            movePlayerMarkerToAnchor(anchorIds[index]);
+            await new Promise(resolve => window.setTimeout(resolve, interval));
+        }
+    }
+
     function applyPolledState(state) {
         if (!state) return;
         currentState = state;
@@ -222,7 +291,7 @@
         const event = pendingPlayerEvents.shift();
         try {
             renderPlayerReplayEvent(event);
-            await new Promise(resolve => window.setTimeout(resolve, 700));
+            await playPlayerReplayMovement(event);
         } catch (err) {
             console.warn('播放玩家事件失败：', err);
         } finally {
