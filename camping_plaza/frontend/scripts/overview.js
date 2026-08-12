@@ -127,6 +127,14 @@
 
     async function fetchState(options = {}) {
         const skipEvents = options.skipEvents === true;
+        const candidates = ensureRepairCandidate(currentActions && currentActions.day_end_action_candidates || []);
+        const budget = dayEndBudgetInfo(candidates);
+        if (budget.shortfall > 0) {
+            setActionMessage(`金币不足，还差${budget.shortfall}金币`, 'action-error');
+            if (btn) btn.disabled = false;
+            return;
+        }
+
         try {
             const res = await fetch('/api/state', { method: 'GET' });
             if (!res.ok) {
@@ -802,6 +810,22 @@
         };
     }
 
+    function dayEndBudgetInfo(candidates, selections = selectedDayEndActions) {
+        const byKey = new Map((candidates || []).map(candidate => [actionKey(candidate), candidate]));
+        const greeneryUpgradeSelected = selections.some(item => {
+            const candidate = byKey.get(actionKey(item));
+            return candidate && candidate.action === 'purchase_growth_project'
+                && String(candidate.params && candidate.params.project_id || '').startsWith('greenery_');
+        });
+        const total = selections.reduce((sum, item) => {
+            const candidate = byKey.get(actionKey(item));
+            if (!candidate || (greeneryUpgradeSelected && candidate.action === 'manage_greenery')) return sum;
+            return sum + Math.max(0, Number(candidate.cost) || 0);
+        }, 0);
+        const balance = Math.max(0, Number(currentState && currentState.balance) || 0);
+        return { total, balance, shortfall: Math.max(0, total - balance), byKey, greeneryUpgradeSelected };
+    }
+
     function displayActionLabel(candidate) {
         if (candidate && candidate.action === 'clean_tents') {
             return '清洁帐篷';
@@ -988,6 +1012,7 @@
         ));
         const candidateKeys = new Set(allCandidates.map(actionKey));
         selectedDayEndActions = selectedDayEndActions.filter(item => candidateKeys.has(actionKey(item)));
+        const budget = dayEndBudgetInfo(allCandidates);
         renderDayEndSelectionSummary(actions);
 
         candidates.forEach(candidate => {
@@ -1001,7 +1026,13 @@
             btn.type = 'button';
             btn.textContent = `${isSelected ? '已选：' : ''}${displayActionLabel(candidate)}`;
             const blockedByGreeneryUpgrade = candidate.action === 'manage_greenery' && greeneryUpgradeSelected;
-            btn.disabled = !candidate.enabled || blockedByGreeneryUpgrade;
+            const candidateCost = Math.max(0, Number(candidate.cost) || 0);
+            const overBudget = !isSelected && candidate.enabled
+                && budget.total + candidateCost > budget.balance;
+            btn.disabled = !isSelected && (!candidate.enabled || blockedByGreeneryUpgrade || overBudget);
+            if (overBudget) {
+                btn.title = `金币不足，还差${budget.total + candidateCost - budget.balance}金币`;
+            }
             btn.title = candidate.action === 'manage_greenery' && candidate.reason === '已满级'
                 ? '已满级'
                 : (blockedByGreeneryUpgrade
@@ -1095,6 +1126,8 @@
         const projects = growth && Array.isArray(growth.projects) ? growth.projects : [];
         const purchaseCandidates = (currentActions && currentActions.day_end_action_candidates || [])
             .filter(candidate => candidate.action === 'purchase_growth_project');
+        const allCandidates = ensureRepairCandidate(currentActions && currentActions.day_end_action_candidates || []);
+        const budget = dayEndBudgetInfo(allCandidates);
         const routes = [
             ['tent', '帐篷'],
             ['dining', '餐饮'],
@@ -1174,6 +1207,11 @@
                 item => actionKey(item) === actionKey(requestAction)
             );
             const isSelected = selectedIndex !== -1;
+            const candidateCost = Math.max(0, Number(candidate.cost) || 0);
+            const overBudget = !isSelected && candidate.enabled
+                && budget.total + candidateCost > budget.balance;
+            btn.disabled = !isSelected && (!candidate.enabled || overBudget);
+            if (overBudget) btn.title = `金币不足，还差${budget.total + candidateCost - budget.balance}金币`;
             if (isSelected) {
                 btn.classList.add('primary');
                 btn.textContent = `已选：${project.display_name}`;
