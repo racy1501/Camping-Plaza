@@ -2327,6 +2327,7 @@ class CampingPlazaEngine:
             self.state.turn += 1
             self._restore_active_npc_base_locations()
             self._settle_current_turn_arrivals()
+            self._record_current_turn_dining_shortage_preview()
         else:
             if self.state.day_end_completed:
                 result["events"].append("日终清单已完成，请调用 start_next_day 开启下一天")
@@ -2550,10 +2551,7 @@ class CampingPlazaEngine:
                         f"{npc.group_size}人客人想在餐饮区用餐，但食材不足："
                         f"需要{required_portions}份，当前只有{current_stock}份。{reaction}"
                     )
-                    self._record_business_event(
-                        self.state.day, self.state.turn, "dining_shortage",
-                        guest_ids=[npc.id],
-                    )
+                    self._record_dining_shortage_if_new([npc.id])
                     continue
 
                 spend = menu["price_per_person"] * npc.group_size
@@ -2564,6 +2562,20 @@ class CampingPlazaEngine:
 
                 self._complete_dining_action(npc, action, menu, spend, result)
         return
+
+    def _record_dining_shortage_if_new(self, guest_ids: list[int]) -> None:
+        for event in self.state.event_history:
+            if (
+                event.get("day") == self.state.day
+                and event.get("turn") == self.state.turn
+                and event.get("event_type") == "dining_shortage"
+                and set(guest_ids).issubset(set(event.get("guest_ids", [])) )
+            ):
+                return
+        self._record_business_event(
+            self.state.day, self.state.turn, "dining_shortage",
+            guest_ids=guest_ids, merge=False,
+        )
 
     def _get_temperament_service_reaction(
         self, npc: NPCGroup, failure_type: str
@@ -3896,6 +3908,43 @@ class CampingPlazaEngine:
 
     def _has_available_capacity(self) -> bool:
         return any(t.status == "available" for t in self._get_unlocked_tents())
+
+    def _record_current_turn_dining_shortage_preview(self) -> None:
+        """进入经营 Turn 后按正式顺序预判食材不足，仅记录一次提示。"""
+        simulated_stock = self.state.food_stock
+        shortage_ids = []
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
+                continue
+            npc = self._find_npc(entry.get("npc_id"))
+            if npc is None or npc.has_left or entry.get("arrival_status") != "arrived":
+                continue
+            for action in entry.get("planned_actions", []):
+                if (
+                    action.get("action") != "dining"
+                    or action.get("planned_turn") != self.state.turn
+                    or action.get("status") != "pending"
+                    or self._has_consumed_dining_today(npc)
+                ):
+                    continue
+                if simulated_stock < npc.group_size:
+                    shortage_ids.append(npc.id)
+                else:
+                    simulated_stock -= npc.group_size
+        if not shortage_ids:
+            return
+        for event in self.state.event_history:
+            if (
+                event.get("day") == self.state.day
+                and event.get("turn") == self.state.turn
+                and event.get("event_type") == "dining_shortage"
+                and set(event.get("guest_ids", [])) == set(shortage_ids)
+            ):
+                return
+        self._record_business_event(
+            self.state.day, self.state.turn, "dining_shortage",
+            guest_ids=shortage_ids, merge=False,
+        )
 
     def _find_npc(self, npc_id: int) -> Optional[NPCGroup]:
         for npc in self.npc_pool:

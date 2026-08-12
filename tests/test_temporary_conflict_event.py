@@ -323,6 +323,68 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.assertEqual(len(shortage_entries), 1)
         self.assertIn("1、2号营位客人", shortage_entries[0]["text"])
 
+    def _set_current_turn_dining(self, guests, food_stock, turns=None):
+        self.engine.state.turn = 3
+        self.engine.state.food_stock = food_stock
+        self.engine.npc_pool.extend(guests)
+        self.engine.state.today_arrival_plan = [
+            {
+                "npc_id": guest.id,
+                "planned_day": self.engine.state.day,
+                "arrival_status": "arrived",
+                "planned_actions": [{
+                    "action": "dining", "menu_key": "basic", "status": "pending",
+                    "planned_turn": (turns or {}).get(guest.id, 3),
+                }],
+            }
+            for guest in guests
+        ]
+
+    def test_dining_shortage_preview_records_once_without_mutating_plan(self):
+        guest = NPCGroup(id=301, group_size=2, visit_type="day", campsite_slot=8)
+        self._set_current_turn_dining([guest], 0)
+
+        self.engine._record_current_turn_dining_shortage_preview()
+        self.engine._record_current_turn_dining_shortage_preview()
+
+        shortages = [e for e in self.engine.state.event_history if e["event_type"] == "dining_shortage"]
+        self.assertEqual(len(shortages), 1)
+        self.assertIn("8号营位客人", shortages[0]["text"])
+        self.assertEqual(self.engine.state.food_stock, 0)
+        self.assertEqual(self.engine.state.today_arrival_plan[0]["planned_actions"][0]["status"], "pending")
+
+    def test_dining_shortage_preview_ignores_future_turn_and_simulates_order(self):
+        first = NPCGroup(id=302, group_size=2, visit_type="day", campsite_slot=1)
+        second = NPCGroup(id=303, group_size=2, visit_type="day", campsite_slot=2)
+        future = NPCGroup(id=304, group_size=1, visit_type="day", campsite_slot=3)
+        self._set_current_turn_dining([first, second, future], 3, {304: 4})
+
+        self.engine._record_current_turn_dining_shortage_preview()
+
+        shortage = next(e for e in self.engine.state.event_history if e["event_type"] == "dining_shortage")
+        self.assertEqual(shortage["guest_ids"], [303])
+
+    def test_dining_shortage_preview_does_not_duplicate_formal_settlement(self):
+        guest = NPCGroup(id=305, group_size=2, visit_type="day", campsite_slot=4)
+        self._set_current_turn_dining([guest], 0)
+        self.engine._record_current_turn_dining_shortage_preview()
+
+        self.engine._process_dining({"events": []})
+
+        shortages = [e for e in self.engine.state.event_history if e["event_type"] == "dining_shortage"]
+        self.assertEqual(len(shortages), 1)
+
+    def test_dining_plan_restock_completes_without_waiting_status(self):
+        guest = NPCGroup(id=306, group_size=2, visit_type="day", campsite_slot=5)
+        self._set_current_turn_dining([guest], 0)
+        self.engine._record_current_turn_dining_shortage_preview()
+        self.engine._buy_food_package("small")
+
+        self.engine._process_dining({"events": []})
+
+        action = self.engine.state.today_arrival_plan[0]["planned_actions"][0]
+        self.assertEqual(action["status"], "completed")
+
     def test_partial_dining_success_and_food_shortage_keep_both_logs(self):
         history = self._run_dining_turn_for_logging(
             [
