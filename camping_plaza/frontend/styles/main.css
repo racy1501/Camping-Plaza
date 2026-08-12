@@ -689,6 +689,10 @@ button:disabled {
     aspect-ratio: 4 / 3;
     min-height: 420px;
     background: var(--cream-dark);
+    background-image: url('../assets/底图.png');
+    background-size: 100% 100%;
+    background-position: center;
+    background-repeat: no-repeat;
     border: 2px solid var(--sand);
     border-radius: 14px;
     overflow: hidden;
@@ -799,7 +803,7 @@ button:disabled {
 
 /* 营地服务站：复用入口锚点，简单 CSS 占位 */
 .service-station-shape {
-    display: block;
+    display: none;
     width: 30px;
     height: 22px;
     background: var(--cream);
@@ -881,6 +885,16 @@ button:disabled {
     inset: 0;
     pointer-events: none;
     z-index: 2;
+}
+
+/* 临时试装底图：保留旧结构，隐藏纯视觉底层 */
+.map-ground,
+.terrain-patch,
+.entrance-road,
+.entrance-sign,
+.nature-path,
+.scenery {
+    display: none;
 }
 
 .tree {
@@ -984,46 +998,55 @@ button:disabled {
     position: absolute;
     width: 22px;
     height: 16px;
-    background: var(--earth);
-    border: 2px solid rgba(90, 82, 73, 0.22);
-    border-radius: 6px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
     transform: translate(-50%, -50%);
-    box-shadow: inset 0 0 0 2px rgba(247, 243, 237, 0.25);
-}
-
-.campsite-slot::before {
-    content: "";
-    position: absolute;
-    top: -5px;
-    left: 3px;
-    width: 3px;
-    height: 6px;
-    background: var(--wood);
-    border-radius: 1px;
+    box-shadow: none;
 }
 
 .campsite-slot::after {
     content: attr(data-slot);
     position: absolute;
-    inset: 0;
+    left: -8px;
+    bottom: -12px;
+    width: 24px;
+    height: 14px;
     display: grid;
     place-items: center;
-    color: var(--ink);
-    font-size: 10px;
-    font-weight: 700;
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 800;
     line-height: 1;
+    z-index: 4;
+    background: rgba(250, 248, 245, 0.84);
+    border: 1px solid rgba(90, 82, 73, 0.18);
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(90, 82, 73, 0.14);
 }
 
-.campsite-slot[data-slot="1"] { left: 27%; top: 44%; transform: translate(-50%, -50%) rotate(-5deg); }
-.campsite-slot[data-slot="2"] { left: 36%; top: 41%; transform: translate(-50%, -50%) rotate(4deg); }
-.campsite-slot[data-slot="3"] { left: 44%; top: 43%; transform: translate(-50%, -50%) rotate(-3deg); }
-.campsite-slot[data-slot="4"] { left: 58%; top: 42%; transform: translate(-50%, -50%) rotate(6deg); }
-.campsite-slot[data-slot="5"] { left: 68%; top: 45%; transform: translate(-50%, -50%) rotate(-4deg); }
-.campsite-slot[data-slot="6"] { left: 24%; top: 55%; transform: translate(-50%, -50%) rotate(3deg); }
-.campsite-slot[data-slot="7"] { left: 34%; top: 61%; transform: translate(-50%, -50%) rotate(-5deg); }
-.campsite-slot[data-slot="8"] { left: 45%; top: 66%; transform: translate(-50%, -50%) rotate(5deg); }
-.campsite-slot[data-slot="9"] { left: 58%; top: 63%; transform: translate(-50%, -50%) rotate(-2deg); }
-.campsite-slot[data-slot="10"] { left: 70%; top: 56%; transform: translate(-50%, -50%) rotate(4deg); }
+.campsite-slot[data-slot="1"] { left: 23%; top: 48%; transform: translate(-50%, -50%) rotate(-5deg); }
+.campsite-slot[data-slot="2"] { left: 33%; top: 40%; transform: translate(-50%, -50%) rotate(4deg); }
+.campsite-slot[data-slot="3"] { left: 43%; top: 39%; transform: translate(-50%, -50%) rotate(-3deg); }
+.campsite-slot[data-slot="4"] { left: 57%; top: 39%; transform: translate(-50%, -50%) rotate(6deg); }
+.campsite-slot[data-slot="5"] { left: 69%; top: 44%; transform: translate(-50%, -50%) rotate(-4deg); }
+.campsite-slot[data-slot="6"] { left: 79%; top: 54%; transform: translate(-50%, -50%) rotate(4deg); }
+.campsite-slot[data-slot="7"] { left: 22%; top: 60%; transform: translate(-50%, -50%) rotate(3deg); }
+.campsite-slot[data-slot="8"] { left: 34%; top: 58%; transform: translate(-50%, -50%) rotate(-5deg); }
+.campsite-slot[data-slot="9"] { left: 67%; top: 64%; transform: translate(-50%, -50%) rotate(-2deg); }
+.campsite-slot[data-slot="10"] { left: 78%; top: 60%; transform: translate(-50%, -50%) rotate(4deg); }
+
+/* 营位编号视觉偏移：避开桌椅主体，保留同一 slot 作为 semantic anchor */
+.campsite-slot[data-slot="1"]::after { left: -20px; bottom: -18px; }
+.campsite-slot[data-slot="2"]::after { left: -18px; bottom: -22px; }
+.campsite-slot[data-slot="3"]::after { left: -8px; bottom: -22px; }
+.campsite-slot[data-slot="4"]::after { left: 10px; bottom: -22px; }
+.campsite-slot[data-slot="5"]::after { left: 14px; bottom: -18px; }
+.campsite-slot[data-slot="6"]::after { left: 14px; bottom: -16px; }
+.campsite-slot[data-slot="7"]::after { left: -22px; bottom: -18px; }
+.campsite-slot[data-slot="8"]::after { left: -20px; bottom: -22px; }
+.campsite-slot[data-slot="9"]::after { left: 10px; bottom: -20px; }
+.campsite-slot[data-slot="10"]::after { left: 14px; bottom: -18px; }
 
 /* 地图锚点 */
 .anchor {
@@ -1035,6 +1058,31 @@ button:disabled {
     transform: translate(-50%, -50%);
     cursor: default;
     z-index: 5;
+}
+
+.lock-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.tent-lock {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+}
+
+.anchor.locked .anchor-label {
+    opacity: 1;
+}
+
+.anchor-onsen-locked .onsen-lock {
+    position: absolute;
+    left: 34px;
+    top: 8px;
 }
 
 .anchor-label {
@@ -1050,7 +1098,22 @@ button:disabled {
 }
 
 /* 入口与营位锚点（透明占位，供瞬移使用） */
-.anchor-entrance { left: 28%; top: 82%; }
+.anchor-entrance { left: 35%; top: 90%; }
+.service-station-label {
+    position: absolute;
+    left: 24%;
+    top: 93%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    font-size: 9px;
+    color: var(--text);
+    background: rgba(247, 243, 237, 0.88);
+    padding: 1px 5px;
+    border: 1px solid var(--sand);
+    border-radius: 3px;
+    white-space: nowrap;
+    box-shadow: 1px 1px 0 rgba(90, 82, 73, 0.08);
+}
 .entrance-shape,
 .campsite-shape {
     display: block;
@@ -1061,65 +1124,35 @@ button:disabled {
     border: 2px solid rgba(90, 82, 73, 0.18);
 }
 
-.anchor-campsite { left: 48%; top: 57%; }
+.anchor-campsite { left: 50%; top: 60%; }
+.anchor-campsite .anchor-label { display: none; }
 
 /* 帐篷区：6 个固定锚点，以可见帐篷中心定位，标签跟随 */
-.anchor-tent1 { left: 35%; top: 23%; }
-.anchor-tent2 { left: 48%; top: 13%; }
-.anchor-tent3 { left: 57%; top: 29%; }
-.anchor-tent4 { left: 68%; top: 17%; }
-.anchor-tent5 { left: 78%; top: 35%; }
-.anchor-tent6 { left: 84%; top: 49%; }
+.anchor-tent1 { left: 41%; top: 18%; }
+.anchor-tent2 { left: 54%; top: 11%; }
+.anchor-tent3 { left: 51%; top: 28%; }
+.anchor-tent4 { left: 59%; top: 20%; }
+.anchor-tent5 { left: 69%; top: 17%; }
+.anchor-tent6 { left: 79%; top: 27%; }
 
-.tent-shape {
-    display: block;
-    width: 34px;
-    height: 28px;
-    position: relative;
-    clip-path: polygon(50% 0, 100% 100%, 0 100%);
-    border-radius: 2px 2px 0 0;
-    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.12);
-}
-
-.tent-shape::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%);
-}
-
-.tent-shape::after {
-    content: "";
-    position: absolute;
-    bottom: -4px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 38px;
-    height: 6px;
-    background: rgba(90, 82, 73, 0.12);
-    border-radius: 50%;
-}
-
-.tent-color-1 { background: var(--tent-1); }
-.tent-color-2 { background: var(--tent-2); }
-.tent-color-3 { background: var(--tent-3); }
-
-/* 帐篷统一视觉定位：不再单独漂移，标签跟随帐篷 */
-.anchor-tent1 .tent-shape,
 .anchor-tent1 .anchor-label,
-.anchor-tent2 .tent-shape,
 .anchor-tent2 .anchor-label,
-.anchor-tent3 .tent-shape,
 .anchor-tent3 .anchor-label,
-.anchor-tent4 .tent-shape,
 .anchor-tent4 .anchor-label,
-.anchor-tent5 .tent-shape,
 .anchor-tent5 .anchor-label,
-.anchor-tent6 .tent-shape,
-.anchor-tent6 .anchor-label { transform: none; }
+.anchor-tent6 .anchor-label {
+    position: absolute;
+    z-index: 3;
+}
+.anchor-tent1 .anchor-label { left: -24px; top: 18px; }
+.anchor-tent2 .anchor-label { left: -20px; top: 24px; }
+.anchor-tent3 .anchor-label { left: -12px; top: 22px; }
+.anchor-tent4 .anchor-label { left: -12px; top: 22px; }
+.anchor-tent5 .anchor-label { left: -14px; top: 20px; }
+.anchor-tent6 .anchor-label { left: -24px; top: 20px; }
 
 /* 篝火：视觉中心，无动画 */
-.anchor-bonfire { left: 50%; top: 48%; z-index: 6; }
+.anchor-bonfire { left: 50%; top: 52%; z-index: 6; }
 
 .bonfire-shape {
     display: block;
@@ -1154,10 +1187,11 @@ button:disabled {
 
 .anchor-bonfire .anchor-label {
     color: var(--terracotta-dark);
+    transform: translateY(18px);
 }
 
 /* 温泉：锁定建设区 */
-.anchor-onsen-locked { left: 14%; top: 30%; }
+.anchor-onsen-locked { left: 17%; top: 24%; }
 
 .onsen-shape {
     display: block;
@@ -1190,54 +1224,23 @@ button:disabled {
 
 .anchor-onsen-locked .anchor-label {
     color: var(--locked);
+    position: absolute;
+    left: -12px;
+    top: 54px;
+}
+
+.anchor-onsen-locked.built .anchor-label,
+.anchor-onsen-locked.built .onsen-shape {
+    display: none;
 }
 
 /* 功能建筑：松散三角 */
-.anchor-entertainment { left: 45%; top: 76%; }
-.anchor-dining { left: 70%; top: 82%; }
+.anchor-entertainment { left: 51%; top: 83%; }
+.anchor-dining { left: 78%; top: 83%; }
 
-.cabin-shape {
-    display: block;
-    width: 42px;
-    height: 32px;
-    position: relative;
-    border-radius: 3px;
-    box-shadow: 2px 2px 0 rgba(90, 82, 73, 0.12);
-}
-
-.cabin-shape::before {
-    content: "";
-    position: absolute;
-    top: -12px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 50px;
-    height: 16px;
-    background: var(--wood-dark);
-    clip-path: polygon(50% 0, 100% 100%, 0 100%);
-    border-radius: 2px;
-}
-
-.cabin-shape::after {
-    content: "";
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 11px;
-    height: 14px;
-    background: rgba(247, 243, 237, 0.65);
-    border-radius: 2px;
-}
-
-.cabin-entertainment { background: var(--tent-2); }
-.cabin-dining { background: var(--tent-1); }
-
-/* 建筑微微错落，不贴同一水平线 */
-.anchor-entertainment .cabin-shape { transform: translateY(4px); }
-.anchor-entertainment .anchor-label { transform: translateY(4px); }
-.anchor-dining .cabin-shape { transform: translateY(-6px); }
-.anchor-dining .anchor-label { transform: translateY(-6px); }
+.anchor-entertainment .anchor-label,
+.anchor-dining .anchor-label,
+.anchor-entrance .anchor-label { transform: translateY(25px); }
 
 /* 玩家标记 */
 .player-marker {

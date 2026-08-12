@@ -9,18 +9,18 @@
 
     // 锚点坐标（百分比，以地图左上角为原点）
     const ANCHORS = {
-        entrance: { top: 82, left: 28 },
-        tent1: { top: 23, left: 35 },
-        tent2: { top: 13, left: 48 },
-        tent3: { top: 29, left: 57 },
-        tent4: { top: 17, left: 68 },
-        tent5: { top: 35, left: 78 },
-        tent6: { top: 49, left: 84 },
-        campsite: { top: 57, left: 48 },
-        bonfire: { top: 48, left: 50 },
-        onsenLocked: { top: 30, left: 14 },
-        entertainment: { top: 76, left: 45 },
-        dining: { top: 82, left: 70 }
+        entrance: { top: 90, left: 35 },
+        tent1: { top: 18, left: 41 },
+        tent2: { top: 11, left: 54 },
+        tent3: { top: 28, left: 51 },
+        tent4: { top: 20, left: 59 },
+        tent5: { top: 17, left: 69 },
+        tent6: { top: 27, left: 79 },
+        campsite: { top: 60, left: 50 },
+        bonfire: { top: 52, left: 50 },
+        onsenLocked: { top: 24, left: 17 },
+        entertainment: { top: 83, left: 51 },
+        dining: { top: 83, left: 78 }
     };
 
     // 后端 NPC location → 前端锚点标识
@@ -464,17 +464,26 @@
             const tent = tents[String(i)];
             const anchor = els.tentAnchors[i];
             if (!anchor) continue;
+            const lock = anchor.querySelector('.tent-lock');
             if (tent && tent.unlocked) {
                 anchor.classList.remove('locked');
-                anchor.style.opacity = '';
-                anchor.style.filter = '';
+                if (lock) lock.hidden = true;
                 anchor.title = `${i}号帐篷 · ${tent.status || 'unknown'} · 容量${tent.capacity ?? '?'}`;
             } else {
                 anchor.classList.add('locked');
-                anchor.style.opacity = '0.35';
-                anchor.style.filter = 'grayscale(0.6)';
+                if (lock) lock.hidden = false;
                 anchor.title = `${i}号帐篷 · 未解锁`;
             }
+        }
+        const hotSpring = state.hot_spring || {};
+        const onsen = document.querySelector('.anchor-onsen-locked');
+        if (onsen) {
+            const lock = onsen.querySelector('.onsen-lock');
+            const label = onsen.querySelector('.anchor-label');
+            const built = hotSpring.built === true;
+            onsen.classList.toggle('built', built);
+            if (lock) lock.hidden = built;
+            if (label) label.hidden = built;
         }
     }
 
@@ -483,8 +492,8 @@
             const anchor = els.tentAnchors[i];
             if (!anchor) continue;
             anchor.classList.add('locked');
-            anchor.style.opacity = '0.35';
-            anchor.style.filter = 'grayscale(0.6)';
+            const lock = anchor.querySelector('.tent-lock');
+            if (lock) lock.hidden = false;
             anchor.title = `${i}号帐篷 · 未解锁`;
         }
     }
@@ -514,8 +523,41 @@
             const pos = campsitePos || ANCHORS[anchorId];
             const sameSpot = byLocation[anchorId];
             const index = sameSpot.indexOf(npc);
-            const offsetX = campsitePos ? 0 : (index % 2 === 1 ? 1 : -1) * Math.ceil(index / 2) * 14;
-            const offsetY = campsitePos ? 0 : index * -10;
+            const isTent = /^tent\d+$/.test(anchorId);
+            const isCampsite = Boolean(campsitePos);
+            const campsiteBadgeOffsets = {
+                1: { x: 18, y: -22 },
+                2: { x: 16, y: -20 },
+                3: { x: 18, y: -22 },
+                4: { x: 20, y: -20 },
+                5: { x: 18, y: -20 },
+                6: { x: 18, y: -18 },
+                7: { x: 18, y: -22 },
+                8: { x: 16, y: -22 },
+                9: { x: 20, y: -20 },
+                10: { x: 18, y: -18 }
+            };
+            const campsiteSlot = Number(npc.campsite_slot);
+            const campsiteBadge = campsiteBadgeOffsets[campsiteSlot] || { x: 18, y: -18 };
+            const tentBadgeOffsets = {
+                tent1: { x: 18, y: -18 },
+                tent2: { x: 18, y: -18 },
+                tent3: { x: -18, y: -20 },
+                tent4: { x: 22, y: -14 },
+                tent5: { x: 18, y: -18 },
+                tent6: { x: 18, y: -18 }
+            };
+            const baseOffset = tentBadgeOffsets[anchorId];
+            const offsetX = isTent
+                ? baseOffset.x + index * 8
+                : isCampsite
+                    ? campsiteBadge.x + index * 8
+                : (index % 2 === 1 ? 1 : -1) * Math.ceil(index / 2) * 14;
+            const offsetY = isTent
+                ? baseOffset.y - index * 8
+                : isCampsite
+                    ? campsiteBadge.y - index * 8
+                : index * -10;
 
             const marker = document.createElement('div');
             marker.className = 'npc-marker';
