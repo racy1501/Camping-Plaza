@@ -1017,11 +1017,40 @@ class CampingPlazaEngine:
             result = self.go_stargazing(consume_decision=False)
         else:
             result = self.improve_service(consume_decision=False)
+        affected_ids = result.get("affected_npc_ids", [])
+        replay_targets = self._capture_player_action_targets(action_data, affected_ids)
         return {
             "action": action_name,
             "success": bool(result.get("success")),
             "message": result.get("message", ""),
+            "_replay_targets": replay_targets,
+            "affected_npc_ids": result.get("affected_npc_ids", []),
         }
+
+    def _npc_replay_target(self, npc) -> dict:
+        location = getattr(npc, "location", None)
+        if isinstance(location, str) and location.startswith("tent_"):
+            try:
+                return {"type": "tent", "id": int(location.split("_", 1)[1])}
+            except ValueError:
+                pass
+        if location == "campsite":
+            return {"type": "campsite", "id": getattr(npc, "campsite_slot", None)}
+        return {"type": "facility", "id": location or "campground"}
+
+    def _capture_player_action_targets(self, action_data: dict, affected_ids=None) -> list[dict]:
+        action = action_data.get("action")
+        if action in {"improve_service", "clean_campsite", "campfire", "stargazing"}:
+            wanted = set(affected_ids or [])
+            return [self._npc_replay_target(npc) for npc in self.npc_pool if not npc.has_left and npc.id in wanted]
+        if action in {"clean_tents", "repair_tent"}:
+            ids = action_data.get("tent_ids") if action == "clean_tents" else [action_data.get("tent_id")]
+            return [{"type": "tent", "id": tid} for tid in (ids or []) if tid is not None]
+        if action == "make_post":
+            return [{"type": "service_station"}]
+        if action == "buy_food_package":
+            return [{"type": "facility", "id": "dining"}]
+        return []
 
     def _buy_food_package(self, package_key: str) -> dict:
         package = self.FOOD_PACKAGES.get(package_key)
@@ -1105,15 +1134,14 @@ class CampingPlazaEngine:
 
     def _record_turn_plan_action_event(self, action_data: dict, action_result: dict) -> None:
         """把玩家经营动作写入统一日志；无实际信息的动作不单独记录。"""
-        if action_data.get("action") != "buy_food_package":
-            return
+        action = action_data.get("action")
+        targets = action_result.pop("_replay_targets", []) or action_result.pop("replay_targets", [])
+        event_type = {"buy_food_package": "food_restock", "improve_service": "improve_service", "clean_campsite": "clean_campsite", "campfire": "campfire", "stargazing": "stargazing"}.get(action, action)
         package = self.FOOD_PACKAGES.get(action_data.get("package_key"))
-        if package is None:
+        data = {"name": package["name"], "portions": package["portions"]} if package else {}
+        if event_type in {"improve_service", "clean_campsite", "campfire", "stargazing"}:
             return
-        self._record_business_event(
-            self.state.day, self.state.turn, "food_restock",
-            data={"name": package["name"], "portions": package["portions"]},
-        )
+        self._record_business_event(self.state.day, self.state.turn, event_type, guest_ids=action_result.get("affected_npc_ids", []), data=data, kind="action", merge=False, actor="player", action=action, targets=targets)
 
     def _apply_opening_food_gift(self):
         package = self.FOOD_PACKAGES[self.OPENING_FOOD_GIFT_PACKAGE]
@@ -1859,6 +1887,8 @@ class CampingPlazaEngine:
     def _record_business_event(
         self, day: int, turn: int, event_type: str, *, guest_ids: Optional[list[int]] = None,
         data: Optional[dict] = None, kind: str = "world", merge: bool = True,
+        actor: Optional[str] = None, action: Optional[str] = None,
+        targets: Optional[list[dict]] = None,
     ) -> None:
         """统一记录、聚合、格式化经营日志；只接受结构化事实，不接受调用方拼文案。"""
         guest_ids = list(guest_ids or [])
@@ -1879,6 +1909,8 @@ class CampingPlazaEngine:
                 previous["text"] = self._format_business_event(event_type, merged_guests, previous.get("data", data))
                 return
         self._append_event_history(day, turn, text, kind, event_type, guest_ids, data)
+        if actor is not None:
+            self.state.event_history[-1].update({"actor": actor, "action": action, "targets": list(targets or [])})
 
     def _append_event_history(
         self, day: int, turn: int, text: str, kind: str,
@@ -3230,6 +3262,24 @@ class CampingPlazaEngine:
             ):
                 greenery_upgrade_succeeded = True
             if item_result.get("success"):
+                if not item_result.get("skipped"):
+                    params = item_result.get("params") or {}
+                    targets = []
+                    if action_name in {"clean_tents", "repair_tent"}:
+                        ids = params.get("tent_ids") if action_name == "clean_tents" else [params.get("tent_id")]
+                        targets = [{"type": "tent", "id": tid} for tid in (ids or []) if tid is not None]
+                    elif action_name == "manage_greenery":
+                        targets = [{"type": "facility", "id": "greenery"}]
+                    elif action_name == "buy_food_package":
+                        targets = [{"type": "facility", "id": "dining"}]
+                    elif action_name == "purchase_growth_project":
+                        category = item_result.get("category")
+                        targets = [{"type": category, "id": item_result.get("project_id") or params.get("project_id")}]
+                    data = {"params": params}
+                    if action_name == "purchase_growth_project":
+                        data.update({"category": item_result.get("category"), "project_id": item_result.get("project_id") or params.get("project_id")})
+                    self._append_event_history(executed_day, executed_turn, item_result.get("message", action_name), "action", action_name, data=data)
+                    self.state.event_history[-1].update({"actor": "player", "action": action_name, "targets": targets})
                 balance_change = self.state.balance - balance_before
                 if not item_result.get("skipped"):
                     successful_action_labels.append(
@@ -3384,8 +3434,10 @@ class CampingPlazaEngine:
             self.state.decisions_left -= 1
         self.state.improve_service_uses_today += 1
         affected = []
+        targets = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.3:
+                targets.append(self._npc_replay_target(npc))
                 npc.total_satisfaction = min(100, npc.total_satisfaction + 5)
                 npc.received_service_boost = True
                 affected.append(npc.id)
@@ -3393,12 +3445,10 @@ class CampingPlazaEngine:
         if affected:
             labels = [self._visible_guest_label(npc_id) for npc_id in affected]
             message = f"服务提升，{'、'.join(labels)}满意度+5。"
-            self._record_business_event(
-                self.state.day, self.state.turn, "improve_service", guest_ids=affected
-            )
+            self._record_business_event(self.state.day, self.state.turn, "improve_service", guest_ids=affected, actor="player", action="improve_service", targets=targets, merge=False)
         else:
             message = f"服务提升，{len(affected)}组客人满意度+5"
-        return {"success": True, "message": message}
+        return {"success": True, "message": message, "affected_npc_ids": affected, "replay_targets": targets}
 
     def _active_guest_ids(self) -> list[int]:
         return [npc.id for npc in self.npc_pool if not npc.has_left]
@@ -3411,8 +3461,10 @@ class CampingPlazaEngine:
         if self.state.clean_campsite_uses_today >= 2:
             return {"success": False, "message": "今日清洁营地次数已达到上限"}
         affected = []
+        targets = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.7:
+                targets.append(self._npc_replay_target(npc))
                 npc.total_satisfaction = min(100, npc.total_satisfaction + 2)
                 affected.append(npc.id)
         if consume_decision:
@@ -3423,11 +3475,8 @@ class CampingPlazaEngine:
             f"清洁营地，{'、'.join(labels)}满意度+2。"
             if labels else "清洁营地完成。"
         )
-        if affected:
-            self._record_business_event(
-                self.state.day, self.state.turn, "clean_campsite", guest_ids=affected
-            )
-        return {"success": True, "message": message, "affected_npc_ids": affected}
+        self._record_business_event(self.state.day, self.state.turn, "clean_campsite", guest_ids=affected, actor="player", action="clean_campsite", targets=targets, merge=False)
+        return {"success": True, "message": message, "affected_npc_ids": affected, "replay_targets": targets}
 
     def make_post(self) -> dict:
         if self.state.turn not in (2, 3, 4, 5):
@@ -3453,15 +3502,17 @@ class CampingPlazaEngine:
             return {"success": False, "message": "篝火只能在 Turn 4 进行"}
         if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
-        affected = [npc.id for npc in self.npc_pool if not npc.has_left and random.random() < 0.6]
+        affected = []
+        targets = []
+        for npc in self.npc_pool:
+            if not npc.has_left and random.random() < 0.6:
+                affected.append(npc.id)
+                targets.append(self._npc_replay_target(npc))
         self.state.campfire_affected_npc_ids = affected
         if consume_decision:
             self.state.decisions_left -= 1
         labels = [self._visible_guest_label(npc_id) for npc_id in affected]
-        if affected:
-            self._record_business_event(
-                self.state.day, self.state.turn, "campfire", guest_ids=affected
-            )
+        self._record_business_event(self.state.day, self.state.turn, "campfire", guest_ids=affected, actor="player", action="campfire", targets=targets, merge=False)
         return {"success": True, "message": f"篝火进行，{'、'.join(labels)}享受了篝火。" if labels else "篝火进行。"}
 
     def go_stargazing(self, *, consume_decision: bool = True) -> dict:
@@ -3469,15 +3520,17 @@ class CampingPlazaEngine:
             return {"success": False, "message": "星空只能在 Turn 5 进行"}
         if consume_decision and self.state.decisions_left <= 0:
             return {"success": False, "message": "今日决策点已用完"}
-        affected = [npc.id for npc in self.npc_pool if not npc.has_left and random.random() < 0.6]
+        affected = []
+        targets = []
+        for npc in self.npc_pool:
+            if not npc.has_left and random.random() < 0.6:
+                affected.append(npc.id)
+                targets.append(self._npc_replay_target(npc))
         self.state.stargazing_affected_npc_ids = affected
         if consume_decision:
             self.state.decisions_left -= 1
         labels = [self._visible_guest_label(npc_id) for npc_id in affected]
-        if affected:
-            self._record_business_event(
-                self.state.day, self.state.turn, "stargazing", guest_ids=affected
-            )
+        self._record_business_event(self.state.day, self.state.turn, "stargazing", guest_ids=affected, actor="player", action="stargazing", targets=targets, merge=False)
         return {"success": True, "message": f"星空体验，{'、'.join(labels)}感受了星空。" if labels else "星空体验开始。"}
 
     def _settle_tips(self, result: dict) -> None:
