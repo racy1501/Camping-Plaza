@@ -340,12 +340,13 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                 })
 
             greenery_value = state.get("greenery", {})
+            greenery_max_level = greenery_value.get("level", 0) >= 2
             if (
-                not eng.state.greenery_processed_today
-                and greenery_value.get("value", 0) > 0
+                greenery_value.get("value", 0) > 0
                 and "manage_greenery" in CampingPlazaEngine.DAY_END_ACTIONS
+                and (greenery_max_level or not eng.state.greenery_processed_today)
             ):
-                enabled = balance >= 50
+                enabled = balance >= 50 and not greenery_max_level
                 day_end_action_candidates.append({
                     "action": "manage_greenery",
                     "params": {"action": "maintain"},
@@ -353,7 +354,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
                     "label": "打理绿化",
                     "kind": "day_end",
                     "enabled": enabled,
-                    "reason": "" if enabled else "金币不足",
+                    "reason": "已满级" if greenery_max_level else ("" if enabled else "金币不足"),
                 })
 
             if (

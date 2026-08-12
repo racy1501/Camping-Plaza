@@ -566,7 +566,9 @@
         if (els.greeneryState) {
             const value = Number.isFinite(Number(greenery.value)) ? Number(greenery.value).toFixed(1) : '--';
             const max = Number.isFinite(Number(greenery.max)) ? Number(greenery.max).toFixed(1) : '--';
-            const maintenance = greenery.maintained_today ? '已维护' : '未维护';
+            const maintenance = Number(greenery.level) >= 2
+                ? '已满级'
+                : (greenery.maintained_today ? '已维护' : '未维护');
             els.greeneryState.textContent = `${value} / ${max}｜${maintenance}`;
         }
         if (els.bonfireKitchenState) els.bonfireKitchenState.textContent = `Lv.${facilityLevel('dining') ?? '--'}`;
@@ -931,9 +933,11 @@
             btn.textContent = `${isSelected ? '已选：' : ''}${displayActionLabel(candidate)}`;
             const blockedByGreeneryUpgrade = candidate.action === 'manage_greenery' && greeneryUpgradeSelected;
             btn.disabled = !candidate.enabled || blockedByGreeneryUpgrade;
-            btn.title = blockedByGreeneryUpgrade
+            btn.title = candidate.action === 'manage_greenery' && candidate.reason === '已满级'
+                ? '已满级'
+                : (blockedByGreeneryUpgrade
                 ? '绿化升级已包含当日维护，无需重复打理。'
-                : (candidate.reason || '');
+                : (candidate.reason || ''));
             btn.addEventListener('click', () => {
                 if (isSelected) {
                     selectedDayEndActions.splice(selectedIndex, 1);
@@ -1034,15 +1038,28 @@
             if (current) {
                 appendGrowthProject(grid, label, current, purchaseCandidates);
             } else if (routeProjects.length) {
-                appendGrowthStatus(grid, label, '已完成');
+                appendGrowthStatus(grid, label, growthCompletionStatus(category));
             }
         });
 
         const hotSpring = projects.find(project => project.project_id === 'hot_spring');
         if (hotSpring) {
-            appendGrowthProject(grid, '温泉', hotSpring, purchaseCandidates);
+            if (hotSpring.completed) {
+                appendGrowthStatus(grid, '温泉', '已建设');
+            } else {
+                appendGrowthProject(grid, '温泉', hotSpring, purchaseCandidates);
+            }
         }
         panel.appendChild(section);
+    }
+
+    function growthCompletionStatus(category) {
+        return {
+            tent: '已购完',
+            dining: '已满级',
+            entertainment: '已满级',
+            greenery: '已满级'
+        }[category] || '已完成';
     }
 
     function appendGrowthStatus(container, label, status) {
