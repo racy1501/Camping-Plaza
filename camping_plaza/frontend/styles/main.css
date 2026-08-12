@@ -130,7 +130,8 @@ button:disabled {
     height: 38px;
     display: inline-grid;
     place-items: center;
-    font-size: 22px;
+    object-fit: contain;
+    image-rendering: pixelated;
     color: var(--sage-dark);
     background: rgba(255, 255, 255, 0.55);
     border-radius: 12px;
@@ -186,7 +187,10 @@ button:disabled {
 }
 
 .notice-bell {
-    font-size: 16px;
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    image-rendering: pixelated;
     text-align: center;
 }
 
