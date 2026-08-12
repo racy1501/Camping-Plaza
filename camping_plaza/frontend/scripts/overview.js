@@ -47,6 +47,10 @@
     let selectedDecisionActions = [];
     let selectedDayEndActions = [];
     let selectedConflictChoice = null;
+    let lastSeenEventSequence = null;
+    let pendingPlayerEvents = [];
+    let statePollTimer = null;
+    let statePollInFlight = false;
 
     function init() {
         cacheElements();
@@ -121,11 +125,48 @@
             renderConnected();
             renderAll(state);
             await fetchActions();
+            initializeEventPolling(state);
         } catch (err) {
             apiConnected = false;
             actionsConnected = false;
             console.warn('无法连接游戏后端：', err);
             setDisconnected();
+        }
+    }
+
+    function initializeEventPolling(state) {
+        if (lastSeenEventSequence === null) {
+            const history = Array.isArray(state.event_history) ? state.event_history : [];
+            lastSeenEventSequence = history.reduce(
+                (max, event) => Math.max(max, Number(event && event.sequence) || 0),
+                0,
+            );
+        }
+        if (statePollTimer === null) {
+            statePollTimer = window.setInterval(pollForPlayerEvents, 500);
+        }
+    }
+
+    async function pollForPlayerEvents() {
+        if (statePollInFlight) return;
+        statePollInFlight = true;
+        try {
+            const res = await fetch('/api/state', { method: 'GET' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const state = await res.json();
+            const history = Array.isArray(state.event_history) ? state.event_history : [];
+            const newEvents = history
+                .filter(event => (Number(event && event.sequence) || 0) > lastSeenEventSequence)
+                .sort((left, right) => (Number(left.sequence) || 0) - (Number(right.sequence) || 0));
+            pendingPlayerEvents.push(...newEvents.filter(event => event && event.actor === 'player'));
+            lastSeenEventSequence = history.reduce(
+                (max, event) => Math.max(max, Number(event && event.sequence) || 0),
+                lastSeenEventSequence,
+            );
+        } catch (err) {
+            console.warn('轮询事件失败：', err);
+        } finally {
+            statePollInFlight = false;
         }
     }
 
