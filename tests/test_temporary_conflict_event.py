@@ -313,14 +313,17 @@ class TemporaryConflictEventTests(unittest.TestCase):
         )
 
     def test_multiple_shortage_dining_actions_are_one_summary(self):
-        history = self._run_dining_turn_for_logging(
-            [
-                NPCGroup(id=201, group_size=1, visit_type="day"),
-                NPCGroup(id=202, group_size=1, visit_type="day"),
-            ], 0
-        )
+        guests = [
+            NPCGroup(id=201, group_size=1, visit_type="day", campsite_slot=1),
+            NPCGroup(id=202, group_size=1, visit_type="day", campsite_slot=2),
+        ]
+        self._set_current_turn_dining(guests, 0)
+        self.engine._record_current_turn_dining_shortage_preview()
+        self.engine._process_dining({"events": []})
+        history = self.engine.state.event_history
         shortage_entries = [entry for entry in history if "因食材不足未能提供" in entry["text"]]
         self.assertEqual(len(shortage_entries), 1)
+        self.assertEqual(shortage_entries[0]["guest_ids"], [201, 202])
         self.assertIn("1、2号营位客人", shortage_entries[0]["text"])
 
     def _set_current_turn_dining(self, guests, food_stock, turns=None):
@@ -435,6 +438,13 @@ class TemporaryConflictEventTests(unittest.TestCase):
         with mock.patch("game_engine.random.random", return_value=1.0):
             result = self.engine.improve_service(consume_decision=False)
         self.assertEqual(result["message"], "服务提升，0组客人满意度+5")
+        events = [
+            event for event in self.engine.state.event_history
+            if event.get("actor") == "player" and event.get("action") == "improve_service"
+        ]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["targets"], [])
+        self.assertEqual(events[0].get("guest_ids", []), [])
 
     def test_clean_and_campfire_include_turn_four_arrival(self):
         guest = NPCGroup(id=501, group_size=1, visit_type="day")

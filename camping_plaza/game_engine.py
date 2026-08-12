@@ -3461,6 +3461,7 @@ class CampingPlazaEngine:
             self._record_business_event(self.state.day, self.state.turn, "improve_service", guest_ids=affected, actor="player", action="improve_service", targets=targets, merge=False)
         else:
             message = f"服务提升，{len(affected)}组客人满意度+5"
+            self._record_business_event(self.state.day, self.state.turn, "improve_service", guest_ids=[], actor="player", action="improve_service", targets=[], merge=False)
         return {"success": True, "message": message, "affected_npc_ids": affected, "replay_targets": targets}
 
     def _active_guest_ids(self) -> list[int]:
