@@ -51,6 +51,10 @@
     let pendingPlayerEvents = [];
     let statePollTimer = null;
     let statePollInFlight = false;
+    let isReplayingPlayerEvent = false;
+    let latestPolledState = null;
+    let replayStatePending = false;
+    let eventsRenderDeferred = false;
 
     function init() {
         cacheElements();
@@ -113,7 +117,16 @@
         }
     }
 
-    async function fetchState() {
+    function maxEventSequence(state) {
+        const history = Array.isArray(state && state.event_history) ? state.event_history : [];
+        return history.reduce(
+            (max, event) => Math.max(max, Number(event && event.sequence) || 0),
+            0,
+        );
+    }
+
+    async function fetchState(options = {}) {
+        const skipEvents = options.skipEvents === true;
         try {
             const res = await fetch('/api/state', { method: 'GET' });
             if (!res.ok) {
@@ -123,7 +136,8 @@
             apiConnected = true;
             currentState = state;
             renderConnected();
-            renderAll(state);
+            renderAll(state, { skipEvents });
+            if (skipEvents) eventsRenderDeferred = true;
             await fetchActions();
             initializeEventPolling(state);
         } catch (err) {
@@ -136,11 +150,7 @@
 
     function initializeEventPolling(state) {
         if (lastSeenEventSequence === null) {
-            const history = Array.isArray(state.event_history) ? state.event_history : [];
-            lastSeenEventSequence = history.reduce(
-                (max, event) => Math.max(max, Number(event && event.sequence) || 0),
-                0,
-            );
+            lastSeenEventSequence = maxEventSequence(state);
         }
         if (statePollTimer === null) {
             statePollTimer = window.setInterval(pollForPlayerEvents, 500);
@@ -158,7 +168,19 @@
             const newEvents = history
                 .filter(event => (Number(event && event.sequence) || 0) > lastSeenEventSequence)
                 .sort((left, right) => (Number(left.sequence) || 0) - (Number(right.sequence) || 0));
-            pendingPlayerEvents.push(...newEvents.filter(event => event && event.actor === 'player'));
+            const newPlayerEvents = newEvents.filter(event => event && event.actor === 'player');
+            latestPolledState = state;
+            if (newPlayerEvents.length) {
+                pendingPlayerEvents.push(...newPlayerEvents);
+                replayStatePending = true;
+                pumpPlayerEventReplay();
+            } else if (
+                !isReplayingPlayerEvent
+                && pendingPlayerEvents.length === 0
+                && (newEvents.length || eventsRenderDeferred)
+            ) {
+                applyPolledState(state);
+            }
             lastSeenEventSequence = history.reduce(
                 (max, event) => Math.max(max, Number(event && event.sequence) || 0),
                 lastSeenEventSequence,
@@ -167,6 +189,53 @@
             console.warn('轮询事件失败：', err);
         } finally {
             statePollInFlight = false;
+        }
+    }
+
+    function renderPlayerReplayEvent(event) {
+        if (els.logList) {
+            els.logList.innerHTML = '';
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.textContent = `Day ${event.day} 路 Turn ${event.turn}\n${event.text}`;
+            els.logList.appendChild(entry);
+        }
+        if (els.noticeList) {
+            els.noticeList.innerHTML =
+                `<span class="notice-chip">${escapeHtml(String(event.text || ''))}</span>`;
+        }
+    }
+
+    function applyPolledState(state) {
+        if (!state) return;
+        currentState = state;
+        apiConnected = true;
+        renderConnected();
+        renderAll(state);
+        eventsRenderDeferred = false;
+        fetchActions();
+    }
+
+    async function pumpPlayerEventReplay() {
+        if (isReplayingPlayerEvent || pendingPlayerEvents.length === 0) return;
+        isReplayingPlayerEvent = true;
+        const event = pendingPlayerEvents.shift();
+        try {
+            renderPlayerReplayEvent(event);
+            await new Promise(resolve => window.setTimeout(resolve, 700));
+        } catch (err) {
+            console.warn('播放玩家事件失败：', err);
+        } finally {
+            isReplayingPlayerEvent = false;
+        }
+
+        if (pendingPlayerEvents.length) {
+            pumpPlayerEventReplay();
+            return;
+        }
+        if (replayStatePending) {
+            replayStatePending = false;
+            applyPolledState(latestPolledState);
         }
     }
 
@@ -242,7 +311,7 @@
         if (els.playerLabel) els.playerLabel.textContent = '小克';
     }
 
-    function renderAll(state) {
+    function renderAll(state, options = {}) {
         renderTopCards(state);
         renderMorningReview(state);
         renderMap(state);
@@ -251,7 +320,9 @@
         renderReviewBook(state.review_history || []);
         renderOverview(state);
         renderReminders(state);
-        renderEvents(state.event_history || [], state.today_events || []);
+        if (options.skipEvents !== true) {
+            renderEvents(state.event_history || [], state.today_events || []);
+        }
         showPlayerMarker();
     }
 
@@ -753,7 +824,7 @@
                         throw new Error(result.message || `请求失败 (${res.status})`);
                     }
                     selectedConflictChoice = null;
-                    await fetchState();
+                    await fetchState({ skipEvents: true });
                     setActionMessage(result.message || '临时事件已处理。');
                 } catch (err) {
                     buttons.forEach(item => { item.disabled = false; });
@@ -1080,7 +1151,7 @@
                 throw new Error(result.message || `请求失败 (${res.status})`);
             }
             selectedDayEndActions = [];
-            await fetchState();
+            await fetchState({ skipEvents: true });
             setActionMessage(result.message || '日终清单已提交，已开启新的一天');
         } catch (err) {
             console.warn('提交日终清单失败：', err);
@@ -1103,7 +1174,7 @@
             if (!res.ok || result.success === false) {
                 throw new Error(result.message || `请求失败 (${res.status})`);
             }
-            await fetchState();
+            await fetchState({ skipEvents: true });
         } catch (err) {
             console.warn('开启新的一天失败：', err);
             setActionMessage('开启新的一天失败：' + err.message, 'action-error');
@@ -1137,7 +1208,7 @@
             selectedFreeActions = [];
             selectedDecisionActions = [];
             selectedConflictChoice = null;
-            await fetchState();
+            await fetchState({ skipEvents: true });
             setActionMessage('本轮计划已执行，已进入下一经营轮次。');
         } catch (err) {
             console.warn('提交 Turn Plan 失败：', err);
@@ -1176,7 +1247,7 @@
                 throw new Error(result.message || `请求失败 (${res.status})`);
             }
             setActionMessage('已进入营业阶段');
-            await fetchState();
+            await fetchState({ skipEvents: true });
             await fetchActions();
         } catch (err) {
             console.warn('推进回合失败：', err);
