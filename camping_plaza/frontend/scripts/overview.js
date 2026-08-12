@@ -1138,7 +1138,7 @@
             const routeProjects = projects.filter(project => project.category === category);
             const current = routeProjects.find(project => !project.completed);
             if (current) {
-                appendGrowthProject(grid, label, current, purchaseCandidates);
+                appendGrowthProject(grid, label, current, purchaseCandidates, budget);
             } else if (routeProjects.length) {
                 appendGrowthStatus(grid, label, growthCompletionStatus(category));
             }
@@ -1149,7 +1149,7 @@
             if (hotSpring.completed) {
                 appendGrowthStatus(grid, '温泉', '已建设');
             } else {
-                appendGrowthProject(grid, '温泉', hotSpring, purchaseCandidates);
+                appendGrowthProject(grid, '温泉', hotSpring, purchaseCandidates, budget);
             }
         }
         panel.appendChild(section);
@@ -1173,7 +1173,7 @@
         container.appendChild(btn);
     }
 
-    function appendGrowthProject(container, label, project, purchaseCandidates) {
+    function appendGrowthProject(container, label, project, purchaseCandidates, budget) {
         const status = project.completed
             ? '已完成'
             : project.can_purchase_now
