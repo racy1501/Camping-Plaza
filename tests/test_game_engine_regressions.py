@@ -4655,11 +4655,29 @@ class EventHistoryTests(unittest.TestCase):
         logs = [
             item for item in engine.state.event_history
             if item["day"] == engine.state.day and item["turn"] == 2
-            and item.get("event_type") == "arrival_overnight"
+            and item.get("event_type") == "arrival"
         ]
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["guest_ids"], [201, 202])
         self.assertNotIn("金币", logs[0]["text"])
+
+    def test_mixed_turn_arrivals_use_one_combined_log_and_are_idempotent(self):
+        engine = self._empty_business_engine(3)
+        self._add_arrival_entry(engine, 301, visit_type="day")
+        self._add_arrival_entry(engine, 302, visit_type="overnight")
+        self._add_arrival_entry(engine, 303, visit_type="day")
+        engine._settle_current_turn_arrivals()
+        engine._settle_current_turn_arrivals()
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day
+            and item["turn"] == engine.state.turn
+            and item.get("event_type") == "arrival"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [301, 302, 303])
+        self.assertIn("营位客人到达营地", logs[0]["text"])
+        self.assertIn("帐篷住客入住营地", logs[0]["text"])
     def test_multiple_dining_actions_are_summarized_with_income_delta(self):
         engine = self._empty_business_engine(2)
         for npc_id, campsite_slot in ((301, 3), (302, 5)):

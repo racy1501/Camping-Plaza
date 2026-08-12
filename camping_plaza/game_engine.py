@@ -1858,6 +1858,23 @@ class CampingPlazaEngine:
             return f"{guests}到达营地。"
         if event_type == "arrival_overnight":
             return f"{guests}入住营地。"
+        if event_type == "arrival":
+            campsite_slots = []
+            tent_ids = []
+            for npc_id in guest_ids:
+                npc = self._find_npc(npc_id)
+                if npc is not None and npc.visit_type == "day" and isinstance(npc.campsite_slot, int):
+                    campsite_slots.append(npc.campsite_slot)
+                else:
+                    tent = self._find_occupied_tent_for_npc(npc_id)
+                    if tent is not None:
+                        tent_ids.append(tent.id)
+            parts = []
+            if campsite_slots:
+                parts.append(f"{'、'.join(str(slot) for slot in sorted(set(campsite_slots)))}号营位客人到达营地")
+            if tent_ids:
+                parts.append(f"{'、'.join(str(tent_id) for tent_id in sorted(set(tent_ids)))}号帐篷住客入住营地")
+            return "；".join(parts) + "。"
         if event_type == "dining_completed":
             return f"{guests}完成用餐。"
         if event_type == "dining_shortage":
@@ -4138,17 +4155,13 @@ class CampingPlazaEngine:
             and entry.get("arrival_status") == "arrived"
             and not entry.get("arrival_log_recorded")
         ]
-        for event_type, entries in (
-            ("arrival_day", [entry for entry in arrived if entry.get("visit_type") == "day"]),
-            ("arrival_overnight", [entry for entry in arrived if entry.get("visit_type") == "overnight"]),
-        ):
-            if entries:
-                self._record_business_event(
-                    self.state.day, self.state.turn, event_type,
-                    guest_ids=[entry["npc_id"] for entry in entries],
-                )
-                for entry in entries:
-                    entry["arrival_log_recorded"] = True
+        if arrived:
+            self._record_business_event(
+                self.state.day, self.state.turn, "arrival",
+                guest_ids=[entry["npc_id"] for entry in arrived],
+            )
+            for entry in arrived:
+                entry["arrival_log_recorded"] = True
 
     def _has_consumed_dining_today(self, npc: NPCGroup) -> bool:
         return npc.last_dining_day == self.state.day
