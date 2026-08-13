@@ -655,6 +655,12 @@ def mcp_query_growth_projects():
     return get_growth()
 
 
+@app.get("/mcp/query_debt")
+def mcp_query_debt():
+    """MCP 只读查询：返回当前启动债务事实。"""
+    return get_engine().get_debt_summary()
+
+
 @app.get("/api/actions")
 def get_human_actions():
     """人类网页专用只读动作目录。不执行操作，不修改存档。"""
@@ -835,6 +841,17 @@ def do_action(req: ActionRequest):
             "day_end_batch_required",
             f"Turn 6 日终阶段请使用 /api/day/end 统一提交经营清单，不再支持逐项调用 {req.action}",
         )
+
+    if req.action == "repay_debt":
+        if eng.state.turn != 6 or eng.state.day_end_completed:
+            _raise_action_request_error(
+                "repayment_turn_not_allowed",
+                "主动偿还启动负债仅能在 Turn 6 日终决策完成前进行",
+            )
+        amount = (req.params or {}).get("amount")
+        result = eng.repay_debt(amount)
+        eng.save_state()
+        return result
 
     if req.action in TURN_PLAN_IMMEDIATE_ACTIONS and eng.state.turn <= 5:
         result = {
@@ -1038,6 +1055,20 @@ def mcp_available_actions():
     else:
         # Turn 6 日终批处理模式
         if not eng.state.day_end_completed:
+            actions.append({
+                "action": "repay_debt",
+                "params": {"amount": None},
+                "required_params": [{
+                    "name": "amount",
+                    "type": "integer",
+                    "required": True,
+                }],
+                "description": (
+                    "主动偿还启动负债；仅 Turn 6 日终决策完成前可用，"
+                    "金额须为正整数且不超过当前余额或剩余债务；"
+                    "不占经营决策位，启动负债无利息。"
+                ),
+            })
             next_calls.append({"action": "query_growth_projects"})
         if eng.state.day_end_completed:
             # 正常日终已由 /api/day/end 直接跨日；这里只保留异常/恢复状态，
@@ -1096,7 +1127,23 @@ def mcp_available_actions():
                 entry["growth_candidates"] = growth_candidates
             if eng.state.last_food_preorder_day != eng.state.day:
                 entry["food_package_candidates"] = _food_package_action_entries()
-            actions = [entry]
+            actions = [
+                {
+                    "action": "repay_debt",
+                    "params": {"amount": None},
+                    "required_params": [{
+                        "name": "amount",
+                        "type": "integer",
+                        "required": True,
+                    }],
+                    "description": (
+                        "主动偿还启动负债；仅 Turn 6 日终决策完成前可用，"
+                        "金额须为正整数且不超过当前余额或剩余债务；"
+                        "不占经营决策位，启动负债无利息。"
+                    ),
+                },
+                entry,
+            ]
 
     return {
         "balance": eng.state.balance,
