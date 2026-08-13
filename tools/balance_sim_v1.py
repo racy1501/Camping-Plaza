@@ -29,6 +29,14 @@ from game_engine import CampingPlazaEngine  # noqa: E402
 
 STRATEGIES = ("growth_priority", "balanced", "quality_priority")
 CHECKPOINT_DAYS = (15, 17, 20, 25, 30)
+RATING_SCENARIOS = {
+    "baseline": (75, 90),
+    "five_star_relief": (75, 88),
+    "four_star_relief": (74, 90),
+    "combined_mild": (74, 88),
+    "combined_stronger": (73, 87),
+}
+FORMAL_RATING_THRESHOLDS = (75, 90)
 REAL_DAY17 = {
     "gold": 5050,
     "average_rating": 3.2826,
@@ -201,12 +209,33 @@ def day_snapshot(
     }
 
 
-def simulate_run(days: int, seed: int, strategy: str) -> dict[str, Any]:
+def rating_function(four_star_threshold: int, five_star_threshold: int):
+    def calculate_rating(satisfaction: float) -> int:
+        if satisfaction >= five_star_threshold:
+            return 5
+        if satisfaction >= four_star_threshold:
+            return 4
+        if satisfaction >= 60:
+            return 3
+        if satisfaction >= 45:
+            return 2
+        return 1
+    return calculate_rating
+
+
+def simulate_run(
+    days: int, seed: int, strategy: str,
+    rating_thresholds: tuple[int, int] = FORMAL_RATING_THRESHOLDS,
+) -> dict[str, Any]:
     random.seed(seed)
     SIM_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
     temp_dir = tempfile.mkdtemp(prefix="run-", dir=SIM_TEMP_ROOT)
+    engine = None
+    original_rating = None
     try:
         engine = CampingPlazaEngine(str(Path(temp_dir) / "run.sqlite"))
+        original_rating = engine._calculate_rating
+        engine._calculate_rating = rating_function(*rating_thresholds)  # type: ignore[method-assign]
         final_satisfaction: Counter[int] = Counter()
         review_stars: Counter[int] = Counter()
         tent_failures = 0
@@ -284,6 +313,8 @@ def simulate_run(days: int, seed: int, strategy: str) -> dict[str, Any]:
                 "first_rating_days": first_rating_days, "pressure": pressure,
                 "completed_all_growth": completed_all, "last_purchase_day": last_purchase_day}
     finally:
+        if engine is not None and original_rating is not None:
+            engine._calculate_rating = original_rating  # type: ignore[method-assign]
         # Windows sandbox may retain a transient file handle. It must not change
         # simulation results or cause a successful run to be reported as failed.
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -294,7 +325,7 @@ def summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     for run in runs:
         for row in run["daily"]:
             by_day[row["day"]].append(row)
-    metrics = ("gold", "average_rating", "daily_net", "daytime_natural_demand", "overnight_natural_demand", "cumulative_service_groups")
+    metrics = ("gold", "average_rating", "daily_income", "daily_expense", "daily_net", "daytime_natural_demand", "overnight_natural_demand", "cumulative_service_groups")
     daily_summary = {}
     for day, rows in sorted(by_day.items()):
         daily_summary[day] = {metric: quantiles([float(r[metric]) for r in rows if r[metric] is not None]) for metric in metrics}
@@ -312,6 +343,21 @@ def summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         checkpoints[day] = {
             "gold": quantiles([float(r["gold"]) for r in rows]),
             "star_proportions": {str(n): (stars[f"stars_{n}"] / total if total else 0.0) for n in range(1, 6)},
+            "rating": quantiles([float(r["average_rating"]) for r in rows if r["average_rating"] is not None]),
+            "state_completion": {
+                "tent_2": sum(r["unlocked_tent_count"] >= 2 for r in rows) / len(rows),
+                "tent_3": sum(r["unlocked_tent_count"] >= 3 for r in rows) / len(rows),
+                "tent_4": sum(r["unlocked_tent_count"] >= 4 for r in rows) / len(rows),
+                "tent_5": sum(r["unlocked_tent_count"] >= 5 for r in rows) / len(rows),
+                "tent_6": sum(r["unlocked_tent_count"] >= 6 for r in rows) / len(rows),
+                "dining_lv1": sum(r["dining_level"] >= 1 for r in rows) / len(rows),
+                "dining_lv2": sum(r["dining_level"] >= 2 for r in rows) / len(rows),
+                "entertainment_lv1": sum(r["entertainment_level"] >= 1 for r in rows) / len(rows),
+                "entertainment_lv2": sum(r["entertainment_level"] >= 2 for r in rows) / len(rows),
+                "greenery_lv1": sum(r["greenery_level"] >= 1 for r in rows) / len(rows),
+                "greenery_lv2": sum(r["greenery_level"] >= 2 for r in rows) / len(rows),
+                "hot_spring": sum(bool(r["hot_spring_built"]) for r in rows) / len(rows),
+            },
         }
     hot_values = [float(run["purchases"].get("hot_spring")) for run in runs if run["purchases"].get("hot_spring") is not None]
     rating_thresholds = {}
@@ -332,11 +378,40 @@ def summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "pressure": pressure_summary, "completion": completion}
 
 
+def scenario_delta(summary: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    day = 30
+    current = summary["daily"].get(day, {})
+    reference = baseline["daily"].get(day, {})
+    def delta(metric: str) -> float | None:
+        a = current.get(metric, {}).get("median")
+        b = reference.get(metric, {}).get("median")
+        return None if a is None or b is None else a - b
+    current_stars = summary["checkpoints"].get(day, {}).get("star_proportions", {})
+    base_stars = baseline["checkpoints"].get(day, {}).get("star_proportions", {})
+    return {
+        "average_rating": delta("average_rating"),
+        "five_star_proportion": current_stars.get("5", 0) - base_stars.get("5", 0),
+        "daytime_demand": delta("daytime_natural_demand"),
+        "overnight_demand": delta("overnight_natural_demand"),
+        "gold": delta("gold"),
+        "cumulative_service_groups": delta("cumulative_service_groups"),
+        "last_growth_purchase_day": (summary["completion"]["last_purchase_day"].get("median") or 0)
+            - (baseline["completion"]["last_purchase_day"].get("median") or 0),
+    }
+
+
 def write_report(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".csv":
         rows = []
-        for strategy, block in payload["strategies"].items():
+        blocks = []
+        if payload.get("mode") == "rating_sensitivity":
+            for scenario, scenario_block in payload["scenarios"].items():
+                for strategy, block in scenario_block["strategies"].items():
+                    blocks.append((f"{scenario}:{strategy}", block))
+        else:
+            blocks = list(payload["strategies"].items())
+        for strategy, block in blocks:
             for run in block["runs"]:
                 for row in run["daily"]:
                     rows.append({"strategy": strategy, "seed": run["seed"], **{k: v for k, v in row.items() if k != "satisfaction_distribution"}})
@@ -353,24 +428,45 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=20260813)
     parser.add_argument("--strategy", choices=STRATEGIES, action="append", help="omit to run all strategies")
+    parser.add_argument("--rating-sensitivity", action="store_true", help="run the five rating-threshold scenarios")
     parser.add_argument("--output", type=Path, help="write JSON, or CSV when suffix is .csv")
     args = parser.parse_args()
     if args.days < 1 or args.runs < 1:
         parser.error("--days and --runs must be positive")
     selected = args.strategy or list(STRATEGIES)
-    payload: dict[str, Any] = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "strategies": {}}
-    for index, strategy in enumerate(selected):
-        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy) for run_index in range(args.runs)]
-        payload["strategies"][strategy] = {"runs": runs, "summary": summarize_runs(runs)}
+    def run_strategy(index: int, strategy: str, thresholds: tuple[int, int]) -> dict[str, Any]:
+        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy, thresholds) for run_index in range(args.runs)]
+        return {"runs": runs, "summary": summarize_runs(runs)}
+
+    if args.rating_sensitivity:
+        payload = {"mode": "rating_sensitivity", "days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "scenarios": {}}
+        for scenario, thresholds in RATING_SCENARIOS.items():
+            strategies = {strategy: run_strategy(index, strategy, thresholds) for index, strategy in enumerate(selected)}
+            payload["scenarios"][scenario] = {"thresholds": thresholds, "strategies": strategies}
+        baseline = payload["scenarios"]["baseline"]["strategies"]
+        for scenario_block in payload["scenarios"].values():
+            for strategy, block in scenario_block["strategies"].items():
+                block["delta_vs_baseline_day30"] = scenario_delta(block["summary"], baseline[strategy]["summary"])
+    else:
+        payload = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "strategies": {}}
+        for index, strategy in enumerate(selected):
+            payload["strategies"][strategy] = run_strategy(index, strategy, FORMAL_RATING_THRESHOLDS)
     print(f"Balance Simulator v1 | days={args.days} runs={args.runs} seed={args.seed}")
     if 17 <= args.days:
         print("Day 17 benchmark: gold=5050 rating=3.2826 reviews=46 served=109 tents=1-4 dining=1 entertainment=2 greenery=2")
+    if args.rating_sensitivity:
+        for scenario, scenario_block in payload["scenarios"].items():
+            print(f"[{scenario}] thresholds={scenario_block['thresholds']}")
+            for strategy, block in scenario_block["strategies"].items():
+                end = block["summary"]["daily"][args.days]
+                print(f"{strategy} Day {args.days}: rating={end['average_rating']} 5star={block['summary']['checkpoints'].get(args.days, {}).get('star_proportions', {}).get('5', 0):.3f} gold={end['gold']} delta={block['delta_vs_baseline_day30']}")
+    else:
         for strategy, block in payload["strategies"].items():
-            summary = block["summary"]["daily"][17]
-            print(f"{strategy}: gold {summary['gold']} | rating {summary['average_rating']} | served {summary['cumulative_service_groups']}")
-    for strategy, block in payload["strategies"].items():
-        end = block["summary"]["daily"][args.days]
-        print(f"{strategy} Day {args.days}: gold={end['gold']} rating={end['average_rating']} net={end['daily_net']} day_demand={end['daytime_natural_demand']} overnight_demand={end['overnight_natural_demand']}")
+            if 17 <= args.days:
+                summary = block["summary"]["daily"][17]
+                print(f"{strategy}: gold {summary['gold']} | rating {summary['average_rating']} | served {summary['cumulative_service_groups']}")
+            end = block["summary"]["daily"][args.days]
+            print(f"{strategy} Day {args.days}: gold={end['gold']} rating={end['average_rating']} net={end['daily_net']} day_demand={end['daytime_natural_demand']} overnight_demand={end['overnight_natural_demand']}")
     if args.output:
         write_report(args.output, payload)
         print(f"report written: {args.output}")
