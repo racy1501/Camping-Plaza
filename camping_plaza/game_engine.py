@@ -118,6 +118,8 @@ class GameState:
         "greenery": 0,
         "repair": 0,
         "growth": 0,
+        "lodging_consumables": 0,
+        "hot_spring_operating": 0,
     })
     post_used_today: bool = False
     pending_post_reservation: Optional[dict] = None
@@ -1312,7 +1314,10 @@ class CampingPlazaEngine:
                     setattr(restored_state, key, value)
             restored_state.today_expenses = {
                 category: int((restored_state.today_expenses or {}).get(category, 0) or 0)
-                for category in ("food", "greenery", "repair", "growth")
+                for category in (
+                    "food", "greenery", "repair", "growth",
+                    "lodging_consumables", "hot_spring_operating",
+                )
             }
             restored_state.today_income = {
                 category: int((restored_state.today_income or {}).get(category, 0) or 0)
@@ -2397,6 +2402,7 @@ class CampingPlazaEngine:
                         data={"portions": discarded_food}, merge=False,
                     )
                 self.state.food_stock = 0
+                self._settle_daily_operating_costs()
             self.state.decisions_left = 3
 
             # 推进到下一回合
@@ -2420,6 +2426,35 @@ class CampingPlazaEngine:
         result["npcs"] = self._get_npcs_summary()
 
         return result
+
+    def _settle_daily_operating_costs(self) -> None:
+        """在 Turn 5 结束、进入 Turn 6 前结算当天已发生的经营耗损。"""
+        lodging_cost = 0
+        for entry in self.state.today_arrival_plan:
+            if (
+                entry.get("planned_day") != self.state.day
+                or entry.get("arrival_status") != "arrived"
+            ):
+                continue
+            npc = self._find_npc(entry.get("npc_id"))
+            if npc is None or npc.has_left or npc.visit_type != "overnight":
+                continue
+            tent = self._find_occupied_tent_for_npc(npc.id)
+            if tent is None:
+                continue
+            lodging_cost += int(self.TENT_PRICES[tent.id] * 0.10)
+
+        hot_spring_cost = 0
+        if self.state.hot_spring_built:
+            hot_spring_cost = int(
+                100 + self.state.today_income["hot_spring"] * 0.20
+            )
+
+        total_cost = lodging_cost + hot_spring_cost
+        if total_cost:
+            self.state.balance -= total_cost
+        self.state.today_expenses["lodging_consumables"] += lodging_cost
+        self.state.today_expenses["hot_spring_operating"] += hot_spring_cost
 
     def _process_business_turn(self, result: dict):
         """处理营业回合"""
@@ -4316,7 +4351,14 @@ class CampingPlazaEngine:
             "hot_spring": 0,
             "tip": 0,
         }
-        self.state.today_expenses = {"food": 0, "greenery": 0, "repair": 0, "growth": 0}
+        self.state.today_expenses = {
+            "food": 0,
+            "greenery": 0,
+            "repair": 0,
+            "growth": 0,
+            "lodging_consumables": 0,
+            "hot_spring_operating": 0,
+        }
         self.state.today_events = []
         self.state.decisions_left = 3
         self.state.improve_service_uses_today = 0
