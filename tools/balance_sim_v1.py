@@ -30,13 +30,11 @@ from game_engine import CampingPlazaEngine  # noqa: E402
 STRATEGIES = ("growth_priority", "balanced", "quality_priority")
 CHECKPOINT_DAYS = (15, 17, 20, 25, 30)
 RATING_SCENARIOS = {
-    "baseline": (75, 90),
-    "five_star_relief": (75, 88),
-    "four_star_relief": (74, 90),
-    "combined_mild": (74, 88),
+    "baseline": (74, 88),
+    "historical_control": (75, 90),
     "combined_stronger": (73, 87),
 }
-FORMAL_RATING_THRESHOLDS = (75, 90)
+FORMAL_RATING_THRESHOLDS = (74, 88)
 REAL_DAY17 = {
     "gold": 5050,
     "average_rating": 3.2826,

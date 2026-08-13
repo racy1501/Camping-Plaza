@@ -2054,6 +2054,22 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         engine.tents[1].next_breakdown_turn = 99999
         return npc
 
+    def test_rating_threshold_boundaries(self):
+        engine = make_engine()
+        expected = {
+            44: 1,
+            45: 2,
+            59: 2,
+            60: 3,
+            73: 3,
+            74: 4,
+            87: 4,
+            88: 5,
+        }
+        for satisfaction, rating in expected.items():
+            with self.subTest(satisfaction=satisfaction):
+                self.assertEqual(engine._calculate_rating(satisfaction), rating)
+
     @staticmethod
     def _set_review_plan_actions(engine, npc, actions):
         engine.state.today_arrival_plan = [{
