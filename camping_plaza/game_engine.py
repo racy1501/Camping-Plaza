@@ -94,6 +94,9 @@ class GameState:
     day: int = 1
     turn: int = 1  # 1-5 营业回合, 6 日终管理
     balance: int = 1000
+    initial_debt: int = 21000
+    debt_remaining: int = 21000
+    repayment_deadline_day: int = 30
     day_start_balance: Optional[int] = None
     previous_day_summary: Optional[dict] = None
     total_reviews: int = 0
@@ -583,6 +586,60 @@ class CampingPlazaEngine:
         if self.state.total_reviews <= 0:
             return None
         return self.state.total_rating_sum / self.state.total_reviews
+
+    def get_debt_summary(self) -> dict:
+        """返回启动负债的当前派生摘要。"""
+        debt_remaining = self.state.debt_remaining
+        return {
+            "balance": self.state.balance,
+            "initial_debt": self.state.initial_debt,
+            "debt_remaining": debt_remaining,
+            "debt_repaid_total": self.state.initial_debt - debt_remaining,
+            "repayment_deadline_day": self.state.repayment_deadline_day,
+            "days_until_deadline": max(
+                0, self.state.repayment_deadline_day - self.state.day
+            ),
+            "is_paid_off": debt_remaining == 0,
+            "is_overdue": (
+                self.state.day > self.state.repayment_deadline_day
+                and debt_remaining > 0
+            ),
+        }
+
+    def repay_debt(self, amount: int) -> dict:
+        """偿还无息启动负债；这是独立财务行为，不占经营决策位。"""
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            return {"success": False, "error_code": "invalid_repayment_amount", "message": "还款金额必须是整数"}
+        if amount <= 0:
+            return {"success": False, "error_code": "invalid_repayment_amount", "message": "还款金额必须大于0"}
+        if self.state.debt_remaining <= 0:
+            return {"success": False, "error_code": "debt_already_paid_off", "message": "启动负债已还清"}
+        if amount > self.state.balance:
+            return {"success": False, "error_code": "repayment_exceeds_balance", "message": "还款金额不能超过当前余额"}
+        if amount > self.state.debt_remaining:
+            return {"success": False, "error_code": "repayment_exceeds_debt", "message": "还款金额不能超过剩余负债"}
+
+        balance_before = self.state.balance
+        debt_before = self.state.debt_remaining
+        self.state.balance -= amount
+        self.state.debt_remaining -= amount
+        data = {
+            "amount": amount,
+            "balance_before": balance_before,
+            "balance_after": self.state.balance,
+            "debt_before": debt_before,
+            "debt_after": self.state.debt_remaining,
+        }
+        self._record_business_event(
+            self.state.day, self.state.turn, "repay_debt", data=data,
+            kind="action", merge=False, actor="player", action="repay_debt",
+        )
+        return {
+            "success": True,
+            "message": f"已偿还启动负债{amount}金币",
+            **data,
+            "debt_repaid_total": self.state.initial_debt - self.state.debt_remaining,
+        }
 
     def _get_average_rating_ratio(self) -> float:
         """客流计算使用平均星级比例；无评价时采用 3.0 星基准。"""
@@ -1883,6 +1940,8 @@ class CampingPlazaEngine:
             return f"{guests}参与收费娱乐。"
         if event_type == "hot_spring_completed":
             return f"{guests}使用温泉。"
+        if event_type == "repay_debt":
+            return f"偿还启动负债{data['amount']}金币。"
         if event_type == "improve_service":
             return f"服务提升，{guests}满意度+5。"
         if event_type == "clean_campsite":
@@ -4203,10 +4262,18 @@ class CampingPlazaEngine:
     def _new_day(self, result: Optional[dict] = None):
         """新的一天。修复 #5：绿化衰减逻辑"""
         income_total = sum(self.state.today_income.values())
+        debt_repayment_total = sum(
+            int(event.get("data", {}).get("amount", 0) or 0)
+            for event in self.state.event_history
+            if event.get("day") == self.state.day
+            and event.get("event_type") == "repay_debt"
+            and event.get("action") == "repay_debt"
+        )
         expense_total = (
             self.state.day_start_balance
             + income_total
             - self.state.balance
+            - debt_repayment_total
         )
         self.state.previous_day_summary = {
             "day": self.state.day,
