@@ -531,6 +531,12 @@ class HiddenPendingReviewApiTests(ApiPersistenceTestCase):
 
 
 class ReviewAndSummaryStateApiTests(ApiPersistenceTestCase):
+    def test_api_state_exposes_formal_debt_remaining(self):
+        self.assertEqual(game_api.get_state()["debt_remaining"], 21000)
+
+        self.engine.state.debt_remaining = 12345
+        self.assertEqual(game_api.get_state()["debt_remaining"], 12345)
+
     def test_api_state_exposes_review_history_and_day1_null_summary(self):
         state = game_api.get_state()
 

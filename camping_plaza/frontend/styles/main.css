@@ -194,6 +194,18 @@ button:disabled {
     text-align: center;
 }
 
+.debt-meta {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-light);
+    font-size: 11px;
+    font-weight: 400;
+}
+
+.debt-meta.hidden {
+    display: none;
+}
+
 .notice-list {
     display: flex;
     flex-wrap: wrap;

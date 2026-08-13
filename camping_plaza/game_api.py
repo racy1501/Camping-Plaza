@@ -577,6 +577,7 @@ def get_state():
     """获取完整游戏状态（给MCP用）"""
     eng = get_engine()
     state = eng.get_full_state()
+    state["debt_remaining"] = eng.state.debt_remaining
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
     state["arrival_plan"] = _get_arrival_plan_summary(eng)

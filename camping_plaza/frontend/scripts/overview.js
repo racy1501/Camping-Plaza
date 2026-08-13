@@ -71,6 +71,7 @@
         els.turnTotal = document.getElementById('turnTotal');
         els.phase = document.getElementById('phase');
         els.balance = document.getElementById('balance');
+        els.debtRemaining = document.getElementById('debtRemaining');
         els.reputation = document.getElementById('reputation');
         els.noticeList = document.getElementById('noticeList');
         els.logList = document.getElementById('logList');
@@ -429,7 +430,18 @@
 
     function renderTopCards(state) {
         if (els.day) els.day.textContent = state.day ?? '--';
-        if (els.balance) els.balance.textContent = state.balance ?? '--';
+        if (els.balance) {
+            const balance = state.balance;
+            els.balance.textContent = balance == null ? '--' : Number(balance).toLocaleString('zh-CN');
+        }
+        if (els.debtRemaining) {
+            const debtRemaining = Number(state.debt_remaining);
+            const hasDebt = Number.isFinite(debtRemaining) && debtRemaining > 0;
+            els.debtRemaining.textContent = hasDebt
+                ? `启动资金待还：${debtRemaining.toLocaleString('zh-CN')}`
+                : '';
+            els.debtRemaining.classList.toggle('hidden', !hasDebt);
+        }
         if (els.reputation) {
             const averageRating = state.average_rating;
             els.reputation.textContent = typeof averageRating === 'number'
