@@ -94,9 +94,9 @@ class GameState:
     day: int = 1
     turn: int = 1  # 1-5 营业回合, 6 日终管理
     balance: int = 1000
-    initial_debt: int = 21000
-    debt_remaining: int = 21000
-    repayment_deadline_day: int = 30
+    initial_debt: int = 6000
+    debt_remaining: int = 6000
+    repayment_deadline_day: int = 25
     day_start_balance: Optional[int] = None
     previous_day_summary: Optional[dict] = None
     total_reviews: int = 0

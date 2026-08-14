@@ -69,7 +69,7 @@ class DebtApiMcpTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(self.engine.state.balance, 300)
-        self.assertEqual(self.engine.state.debt_remaining, 20800)
+        self.assertEqual(self.engine.state.debt_remaining, 5800)
         save_state.assert_called_once()
 
     def test_api_invalid_amount_is_not_truncated(self):
