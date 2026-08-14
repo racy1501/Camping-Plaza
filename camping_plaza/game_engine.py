@@ -12,6 +12,11 @@ import sqlite3
 from typing import Optional
 from dataclasses import dataclass, field, asdict
 
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
 
 # =============================================================================
 # 数据结构
@@ -391,8 +396,12 @@ class CampingPlazaEngine:
     # 快照版本号，结构变更时递增
     SNAPSHOT_VERSION = 1
 
-    def __init__(self, db_path: str = "camping_plaza.db"):
+    def __init__(self, db_path: str = "camping_plaza.db", database_url: Optional[str] = None):
         self.db_path = db_path
+        if database_url is None:
+            database_url = os.environ.get("DATABASE_URL", "")
+        self.database_url = database_url.strip()
+        self.use_postgres = self.database_url.startswith(("postgres://", "postgresql://"))
         self.state = GameState()
         self.tents: dict[int, Tent] = {}
         self.npc_pool: list[NPCGroup] = []
@@ -402,7 +411,17 @@ class CampingPlazaEngine:
         self._init_game()
         self.state.day_start_balance = self.state.balance
         # 持久化：仅在明确新游戏时创建快照表；已有数据库先读后写
-        if not os.path.exists(self.db_path):
+        if self.use_postgres:
+            self._ensure_snapshot_table()
+            load_result = self.load_state()
+            if load_result == "no_snapshot":
+                self._apply_opening_food_gift()
+                self.save_state()
+            elif load_result == "load_error":
+                raise RuntimeError(
+                    "存档加载失败，游戏已停止启动，以避免覆盖现有存档。"
+                )
+        elif not os.path.exists(self.db_path):
             self._ensure_snapshot_table()
             self._apply_opening_food_gift()
             self.save_state()
@@ -1347,21 +1366,35 @@ class CampingPlazaEngine:
         )
 
     # -------------------------------------------------------------------------
-    # SQLite JSON 快照持久化（单行覆盖，runtime_snapshot 为唯一权威存档）
+    # JSON 快照持久化（单行覆盖，runtime_snapshot 为唯一权威存档）
     # -------------------------------------------------------------------------
 
     def _ensure_snapshot_table(self):
         """创建或确认 runtime_snapshot 表存在。失败不抛异常，不影响服务启动"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            if self.use_postgres:
+                if psycopg2 is None:
+                    raise RuntimeError("检测到 DATABASE_URL，但未安装 psycopg2-binary")
+                conn = psycopg2.connect(self.database_url)
+            else:
+                conn = sqlite3.connect(self.db_path)
             try:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS runtime_snapshot (
-                        id INTEGER PRIMARY KEY CHECK (id = 1),
-                        snapshot_json TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-                    )
-                """)
+                if self.use_postgres:
+                    conn.cursor().execute("""
+                        CREATE TABLE IF NOT EXISTS runtime_snapshot (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            snapshot_json TEXT NOT NULL,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                    """)
+                else:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS runtime_snapshot (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            snapshot_json TEXT NOT NULL,
+                            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                        )
+                    """)
                 conn.commit()
             finally:
                 conn.close()
@@ -1384,15 +1417,27 @@ class CampingPlazaEngine:
                 "npc_id_counter": self._npc_id_counter,
             }
             data = json.dumps(payload, ensure_ascii=False)
-            conn = sqlite3.connect(self.db_path)
+            if self.use_postgres:
+                conn = psycopg2.connect(self.database_url)
+            else:
+                conn = sqlite3.connect(self.db_path)
             try:
-                conn.execute("""
-                    INSERT INTO runtime_snapshot (id, snapshot_json, updated_at)
-                    VALUES (1, ?, datetime('now', 'localtime'))
-                    ON CONFLICT(id) DO UPDATE SET
-                        snapshot_json = excluded.snapshot_json,
-                        updated_at = excluded.updated_at
-                """, (data,))
+                if self.use_postgres:
+                    conn.cursor().execute("""
+                        INSERT INTO runtime_snapshot (id, snapshot_json, updated_at)
+                        VALUES (1, %s, NOW())
+                        ON CONFLICT(id) DO UPDATE SET
+                            snapshot_json = EXCLUDED.snapshot_json,
+                            updated_at = EXCLUDED.updated_at
+                    """, (data,))
+                else:
+                    conn.execute("""
+                        INSERT INTO runtime_snapshot (id, snapshot_json, updated_at)
+                        VALUES (1, ?, datetime('now', 'localtime'))
+                        ON CONFLICT(id) DO UPDATE SET
+                            snapshot_json = excluded.snapshot_json,
+                            updated_at = excluded.updated_at
+                    """, (data,))
                 conn.commit()
             finally:
                 conn.close()
@@ -1408,13 +1453,21 @@ class CampingPlazaEngine:
         save_state() 只写入完整的新游戏状态。
         """
         try:
-            if not os.path.exists(self.db_path):
+            if not self.use_postgres and not os.path.exists(self.db_path):
                 return "no_snapshot"
-            conn = sqlite3.connect(self.db_path)
+            if self.use_postgres:
+                conn = psycopg2.connect(self.database_url)
+            else:
+                conn = sqlite3.connect(self.db_path)
             try:
-                row = conn.execute(
-                    "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
-                ).fetchone()
+                if self.use_postgres:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT snapshot_json FROM runtime_snapshot WHERE id = %s", (1,))
+                    row = cursor.fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
+                    ).fetchone()
             finally:
                 conn.close()
             if not row:

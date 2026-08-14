@@ -113,11 +113,18 @@ python game_api.py
 
 ## 存档
 
-- 使用 SQLite 单行 JSON 快照（`runtime_snapshot` 表）保存完整运行状态。
-- 正式数据库路径：`camping_plaza/camping_plaza.db`（基于 `game_api.py` 所在目录，不依赖启动目录）。
-- 服务重启后自动从快照恢复；存档损坏或缺失时安全回退到新游戏，不影响启动。
-- 现有六张规范化表暂时保留，但不作为运行存档来源。
+- 使用 `runtime_snapshot` 单行 JSON 快照保存完整运行状态。
+- 配置 `DATABASE_URL` 且其为 `postgres://` 或 `postgresql://` 时，使用 PostgreSQL；启动时会执行 `CREATE TABLE IF NOT EXISTS`，不会覆盖已有存档。
+- 本地未配置 `DATABASE_URL` 时，使用 SQLite，默认路径为 `camping_plaza/camping_plaza.db`（基于 `game_api.py` 所在目录，不依赖启动目录）。
+- 服务重启后自动从快照恢复；存档损坏时停止启动，避免覆盖已有存档。
 - 单存档，无账号、多存档位或云同步。
+
+## Render 部署
+
+- Build Command：`pip install -r requirements.txt`
+- Start Command：`uvicorn game_api:app --host 0.0.0.0 --port $PORT`
+- Render 环境变量：`DATABASE_URL`（Neon PostgreSQL 连接地址）；`PORT` 由 Render 自动提供。
+- 本地不配置 `DATABASE_URL` 时继续使用 SQLite。云端正式存档使用 Neon PostgreSQL，不需要 Render Persistent Disk。
 
 ## 设计文档
 

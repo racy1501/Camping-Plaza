@@ -17,7 +17,7 @@ class RenderWebServiceTests(unittest.TestCase):
     def setUp(self):
         self.original_db_path = game_api.DB_PATH
         self.original_engine = game_api.engine
-        game_api.engine = CampingPlazaEngine(db_path=":memory:")
+        game_api.engine = CampingPlazaEngine(db_path=":memory:", database_url="")
         self.client = TestClient(game_api.app)
 
     def tearDown(self):
@@ -45,6 +45,19 @@ class RenderWebServiceTests(unittest.TestCase):
             self.assertEqual(
                 game_api._resolve_database_path(), os.path.abspath(configured_path)
             )
+
+    def test_database_url_selects_postgres_without_creating_sqlite_directory(self):
+        database_url = "postgresql://user:password@example.test/camping_plaza"
+        game_api.engine = None
+        with mock.patch.dict(os.environ, {"DATABASE_URL": database_url}):
+            with mock.patch.object(game_api, "CampingPlazaEngine") as engine_class:
+                instance = engine_class.return_value
+                self.assertIs(game_api.get_engine(), instance)
+
+        engine_class.assert_called_once_with(
+            db_path=game_api.DB_PATH,
+            database_url=database_url,
+        )
 
 
 if __name__ == "__main__":

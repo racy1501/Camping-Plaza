@@ -49,10 +49,12 @@ engine: Optional[CampingPlazaEngine] = None
 def get_engine() -> CampingPlazaEngine:
     global engine
     if engine is None:
-        database_dir = os.path.dirname(DB_PATH)
-        if database_dir:
-            os.makedirs(database_dir, exist_ok=True)
-        engine = CampingPlazaEngine(db_path=DB_PATH)
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        if not database_url.startswith(("postgres://", "postgresql://")):
+            database_dir = os.path.dirname(DB_PATH)
+            if database_dir:
+                os.makedirs(database_dir, exist_ok=True)
+        engine = CampingPlazaEngine(db_path=DB_PATH, database_url=database_url)
     return engine
 
 
