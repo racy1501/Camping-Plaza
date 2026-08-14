@@ -3756,7 +3756,7 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         )
         self.assertEqual(
             result["events"],
-            ["目前没有适合这组客人的帐篷，只能遗憾离开。"],
+            ["目前没有适合这组客人的帐篷，只能遗憾离开。客人有些失望，只能先离开。"],
         )
 
     def test_natural_overnight_guest_reports_no_available_suitable_tent(self):
@@ -3787,7 +3787,7 @@ class TentLockingAndCapacityTests(unittest.TestCase):
         )
         self.assertEqual(
             result["events"],
-            ["目前没有空余的合适帐篷，只能遗憾离开。"],
+            ["目前没有空余的合适帐篷，只能遗憾离开。客人有些失望，只能先离开。"],
         )
 
     def test_occupied_tent_does_not_block_natural_overnight_guest_generation(self):
@@ -4935,6 +4935,89 @@ class EventHistoryTests(unittest.TestCase):
             [item["text"] for item in engine.state.event_history].count(reservation_event),
             1,
         )
+
+
+class TemperamentFailureReactionTests(unittest.TestCase):
+    def test_full_campsite_arrival_feedback_uses_temperament(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        for slot in range(1, engine.DAY_CAMPSITE_CAPACITY + 1):
+            engine.npc_pool.append(NPCGroup(
+                id=slot, group_size=1, visit_type="day", campsite_slot=slot,
+            ))
+        engine.state.day_campsite_groups_served = engine.DAY_CAMPSITE_CAPACITY
+        engine.state.today_arrival_plan = [{
+            "npc_id": 100,
+            "group_size": 1,
+            "visit_type": "day",
+            "source": "natural_day",
+            "arrival_status": "pending",
+            "arrival_turn": 2,
+            "temperament": 2,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "total_satisfaction": 50,
+            "planned_day": engine.state.day,
+            "planned_actions": [],
+        }]
+        result = {"events": []}
+        engine._process_planned_arrivals(result)
+        self.assertIn("明显不满", result["events"][0])
+
+    def test_failure_reactions_vary_without_exposing_internal_value(self):
+        engine = make_engine()
+        guests = [
+            NPCGroup(id=1, group_size=1, visit_type="day", temperament=value)
+            for value in (0, 1, 2)
+        ]
+        reactions = [
+            engine._get_temperament_service_reaction(guest, "campsite_full")
+            for guest in guests
+        ]
+        self.assertEqual(len(set(reactions)), 3)
+        self.assertTrue(all("temperament" not in reaction for reaction in reactions))
+
+    def test_tent_failure_reaction_does_not_change_satisfaction_or_income(self):
+        engine = make_engine()
+        engine.state.day = 1
+        engine.state.turn = 2
+        engine.state.today_arrival_plan = [{
+            "npc_id": 1,
+            "group_size": 6,
+            "visit_type": "overnight",
+            "source": "natural_overnight",
+            "arrival_status": "pending",
+            "arrival_turn": 2,
+            "temperament": 2,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "total_satisfaction": 50,
+            "planned_day": 1,
+            "planned_actions": [],
+        }]
+        balance = engine.state.balance
+        result = {"events": []}
+        engine._process_planned_arrivals(result)
+        self.assertIn("不满", result["events"][0])
+        self.assertEqual(engine.state.balance, balance)
+        self.assertEqual(engine.state.today_income["accommodation"], 0)
+
+    def test_breakdown_reaction_does_not_change_existing_penalty_logic(self):
+        engine = make_engine()
+        guest = NPCGroup(
+            id=1, group_size=1, visit_type="overnight", location="tent_1",
+            total_satisfaction=50, temperament=1,
+        )
+        engine.npc_pool.append(guest)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = guest.id
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        satisfaction = guest.total_satisfaction
+        result = {"events": [], "next_actions": []}
+        engine._handle_breakdowns(result)
+        self.assertIn("失望", result["events"][0])
+        self.assertEqual(guest.total_satisfaction, satisfaction - 2)
+        self.assertEqual(engine.tents[1].status, "broken")
 
 
 if __name__ == "__main__":

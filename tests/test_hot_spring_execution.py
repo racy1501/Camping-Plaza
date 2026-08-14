@@ -32,13 +32,14 @@ class HotSpringExecutionTests(unittest.TestCase):
         except FileNotFoundError:
             pass
 
-    def _add_guest(self, *, group_size=2, visit_type="day", source="natural_day", planned_turn=None):
+    def _add_guest(self, *, group_size=2, visit_type="day", source="natural_day", planned_turn=None, temperament=0):
         npc = NPCGroup(
             id=self.engine._next_npc_id(),
             group_size=group_size,
             visit_type=visit_type,
             location="campsite",
             total_satisfaction=50,
+            temperament=temperament,
         )
         self.engine.npc_pool.append(npc)
         action = {
@@ -89,6 +90,17 @@ class HotSpringExecutionTests(unittest.TestCase):
         self.assertEqual(self.engine.state.balance, balance)
         self.assertEqual(npc.total_satisfaction, satisfaction)
         self.assertEqual(self.engine.state.hot_spring_people_served_today, 19)
+
+    def test_insufficient_capacity_adds_temperament_reaction_without_state_change(self):
+        self.engine.state.hot_spring_people_served_today = 19
+        npc, action = self._add_guest(group_size=2, temperament=2)
+        result = {"events": []}
+        self.engine._process_hot_spring(result)
+        self.assertIn("明显不满", result["events"][0])
+        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(self.engine.state.balance, 1000)
+        self.assertEqual(self.engine.state.hot_spring_people_served_today, 19)
+        self.assertNotIn("temperament", result["events"][0])
 
     def test_natural_overnight_and_reservation_guests_share_execution(self):
         for visit_type, source in (("overnight", "natural_overnight"), ("day", "reservation")):

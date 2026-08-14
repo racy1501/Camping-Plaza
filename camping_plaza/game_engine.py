@@ -2736,6 +2736,10 @@ class CampingPlazaEngine:
             self.npc_pool.append(npc)
         self._record_served_group_once(npc)
         self._unlock_achievement("first_overnight_group")
+        if was_broken:
+            result["events"].append(
+                self._get_temperament_service_reaction(npc, "tent_broken")
+            )
         result["events"].append(f"一组{npc.group_size}人入住{tent_id}号帐篷")
 
     def _apply_greenery_entry_bonus_once(self, npc: NPCGroup):
@@ -2836,13 +2840,17 @@ class CampingPlazaEngine:
     def _get_temperament_service_reaction(
         self, npc: NPCGroup, failure_type: str
     ) -> str:
-        if failure_type != "insufficient_food":
+        reactions = {
+            "insufficient_food": ("客人表示理解，愿意稍等补货。", "客人有些失望，决定先等等。", "客人明显不满，催促尽快补货。"),
+            "campsite_full": ("客人表示理解，只能遗憾离开。", "客人有些失望，只能先离开。", "客人明显不满，抱怨着离开。"),
+            "tent_unavailable": ("客人表示理解，只能遗憾离开。", "客人有些失望，只能先离开。", "客人明显不满，抱怨着离开。"),
+            "hot_spring_full": ("客人表示遗憾，愿意下次再试。", "客人有些失望，只能放弃泡汤。", "客人明显不满，抱怨温泉容量太小。"),
+            "tent_broken": ("客人表示理解，愿意等候维修。", "客人有些失望，希望尽快修好。", "客人明显不满，催促尽快维修。"),
+        }
+        failure_reactions = reactions.get(failure_type)
+        if failure_reactions is None:
             return ""
-        if npc.temperament == 0:
-            return "客人表示理解，愿意稍等补货。"
-        if npc.temperament == 2:
-            return "客人明显不满，催促尽快补货。"
-        return "客人有些失望，决定先等等。"
+        return failure_reactions[npc.temperament]
 
     def _complete_dining_action(
         self,
@@ -2958,6 +2966,7 @@ class CampingPlazaEngine:
                     action["people_served"] = 0
                     result["events"].append(
                         f"一组{npc.group_size}人的温泉需求失败：剩余容量{remaining_capacity}人，容量不足，未收费。"
+                        f"{self._get_temperament_service_reaction(npc, 'hot_spring_full')}"
                     )
                     continue
 
@@ -3196,17 +3205,26 @@ class CampingPlazaEngine:
                 )
         elif successful_count:
             failed_count = total_count - successful_count
+            failed_reactions = " ".join(
+                self._get_temperament_service_reaction(guest, "tent_unavailable")
+                for guest in candidate_guests
+                if guest.id not in matches
+            )
             failed_text = (
                 "另一组未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
                 if failed_count == 1
                 else f"另外{failed_count}组未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
             )
             result["events"].append(
-                f"傍晚，有{total_count}组日间客决定留下过夜，其中{successful_count}组入住了{tent_text}帐篷；{failed_text}"
+                f"傍晚，有{total_count}组日间客决定留下过夜，其中{successful_count}组入住了{tent_text}帐篷；{failed_text}{failed_reactions}"
             )
         else:
+            failed_reactions = " ".join(
+                self._get_temperament_service_reaction(guest, "tent_unavailable")
+                for guest in candidate_guests
+            )
             result["events"].append(
-                f"傍晚，有{total_count}组日间客决定留下过夜，但未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。"
+                f"傍晚，有{total_count}组日间客决定留下过夜，但未能转为过夜客，将继续参与 Turn 5 日间活动，并在 Turn 5 活动结束后离场。{failed_reactions}"
             )
 
     # -------------------------------------------------------------------------
@@ -3230,6 +3248,7 @@ class CampingPlazaEngine:
                     and current_turn >= tent.next_breakdown_turn
                     and tent.next_breakdown_turn > 0):
                 tent.status = "broken"
+                occupant = None
                 # 修复：保留 occupied_by，不移动住客
                 if tent.occupied_by is not None:
                     occupant = next(
@@ -3238,7 +3257,13 @@ class CampingPlazaEngine:
                         None,
                     )
                     self._apply_broken_penalty(occupant)
-                result["events"].append(f"⚠️ {tent_id}号帐篷出现故障，需要维修")
+                reaction = (
+                    self._get_temperament_service_reaction(occupant, "tent_broken")
+                    if occupant is not None else ""
+                )
+                result["events"].append(
+                    f"⚠️ {tent_id}号帐篷出现故障，需要维修{reaction}"
+                )
                 self._append_event_history(
                     self.state.day,
                     self.state.turn,
@@ -4322,7 +4347,10 @@ class CampingPlazaEngine:
             if entry.get("visit_type") == "day":
                 if entry.get("source") != "reservation" and self.get_day_campsite_remaining() <= 0:
                     entry["arrival_status"] = "turned_away_full"
-                    result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
+                    result["events"].append(
+                        "日间营位已经客满，一组刚到的客人只能遗憾离开。"
+                        f"{self._get_temperament_service_reaction(NPCGroup(id=entry['npc_id'], group_size=entry['group_size'], visit_type='day', temperament=entry['temperament']), 'campsite_full')}"
+                    )
                     continue
 
                 guest = NPCGroup(
@@ -4338,7 +4366,10 @@ class CampingPlazaEngine:
                 guest.temperament = entry["temperament"]
                 if self._assign_campsite_slot(guest) is None:
                     entry["arrival_status"] = "turned_away_full"
-                    result["events"].append("日间营位已经客满，一组刚到的客人只能遗憾离开。")
+                    result["events"].append(
+                        "日间营位已经客满，一组刚到的客人只能遗憾离开。"
+                        f"{self._get_temperament_service_reaction(guest, 'campsite_full')}"
+                    )
                     continue
                 guest.location = "campsite"
                 guest.arrival_turn = self.state.turn
@@ -4381,10 +4412,12 @@ class CampingPlazaEngine:
                     if has_suitable_tent:
                         result["events"].append(
                             "目前没有空余的合适帐篷，只能遗憾离开。"
+                            f"{self._get_temperament_service_reaction(guest, 'tent_unavailable')}"
                         )
                     else:
                         result["events"].append(
                             "目前没有适合这组客人的帐篷，只能遗憾离开。"
+                            f"{self._get_temperament_service_reaction(guest, 'tent_unavailable')}"
                         )
 
     def _settle_current_turn_arrivals(self) -> None:
