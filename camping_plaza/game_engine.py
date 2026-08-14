@@ -396,12 +396,19 @@ class CampingPlazaEngine:
     # 快照版本号，结构变更时递增
     SNAPSHOT_VERSION = 1
 
-    def __init__(self, db_path: str = "camping_plaza.db", database_url: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: str = "camping_plaza.db",
+        database_url: Optional[str] = None,
+        session_id: str = "local-default",
+        create_new: bool = True,
+    ):
         self.db_path = db_path
         if database_url is None:
             database_url = os.environ.get("DATABASE_URL", "")
         self.database_url = database_url.strip()
         self.use_postgres = self.database_url.startswith(("postgres://", "postgresql://"))
+        self.session_id = session_id
         self.state = GameState()
         self.tents: dict[int, Tent] = {}
         self.npc_pool: list[NPCGroup] = []
@@ -410,30 +417,18 @@ class CampingPlazaEngine:
         self._npc_id_counter = 0
         self._init_game()
         self.state.day_start_balance = self.state.balance
-        # 持久化：仅在明确新游戏时创建快照表；已有数据库先读后写
-        if self.use_postgres:
-            self._ensure_snapshot_table()
-            load_result = self.load_state()
-            if load_result == "no_snapshot":
-                self._apply_opening_food_gift()
-                self.save_state()
-            elif load_result == "load_error":
-                raise RuntimeError(
-                    "存档加载失败，游戏已停止启动，以避免覆盖现有存档。"
-                )
-        elif not os.path.exists(self.db_path):
-            self._ensure_snapshot_table()
+        # 持久化：数据库中的 session_id 是存档隔离边界；先读后写，绝不覆盖其他 session。
+        self._ensure_snapshot_table()
+        load_result = self.load_state()
+        if load_result == "no_snapshot":
+            if not create_new:
+                raise LookupError("session_not_found")
             self._apply_opening_food_gift()
             self.save_state()
-        else:
-            load_result = self.load_state()
-            if load_result == "no_snapshot":
-                self._apply_opening_food_gift()
-                self.save_state()
-            elif load_result == "load_error":
-                raise RuntimeError(
-                    "存档加载失败，游戏已停止启动，以避免覆盖现有存档。"
-                )
+        elif load_result == "load_error":
+            raise RuntimeError(
+                "存档加载失败，游戏已停止启动，以避免覆盖现有存档。"
+            )
 
         if self.state.turn == 1 and self._ensure_today_arrival_plan():
             self.save_state()
@@ -1366,7 +1361,7 @@ class CampingPlazaEngine:
         )
 
     # -------------------------------------------------------------------------
-    # JSON 快照持久化（单行覆盖，runtime_snapshot 为唯一权威存档）
+    # JSON 快照持久化（session_id 分区，runtime_snapshot 为唯一权威存档）
     # -------------------------------------------------------------------------
 
     def _ensure_snapshot_table(self):
@@ -1380,21 +1375,48 @@ class CampingPlazaEngine:
                 conn = sqlite3.connect(self.db_path)
             try:
                 if self.use_postgres:
-                    conn.cursor().execute("""
+                    cursor = conn.cursor()
+                    cursor.execute("""
                         CREATE TABLE IF NOT EXISTS runtime_snapshot (
-                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            session_id TEXT PRIMARY KEY,
                             snapshot_json TEXT NOT NULL,
                             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                         )
                     """)
+                    cursor.execute("""
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'runtime_snapshot' AND column_name = 'session_id'
+                    """)
+                    if cursor.fetchone() is None:
+                        cursor.execute("DROP TABLE runtime_snapshot")
+                        cursor.execute("""
+                            CREATE TABLE runtime_snapshot (
+                                session_id TEXT PRIMARY KEY,
+                                snapshot_json TEXT NOT NULL,
+                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                            )
+                        """)
                 else:
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS runtime_snapshot (
-                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            session_id TEXT PRIMARY KEY,
                             snapshot_json TEXT NOT NULL,
                             updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                         )
                     """)
+                    columns = {
+                        row[1] for row in conn.execute("PRAGMA table_info(runtime_snapshot)")
+                    }
+                    if "session_id" not in columns:
+                        conn.execute("DROP TABLE runtime_snapshot")
+                        conn.execute("""
+                            CREATE TABLE runtime_snapshot (
+                                session_id TEXT PRIMARY KEY,
+                                snapshot_json TEXT NOT NULL,
+                                updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                            )
+                        """)
                 conn.commit()
             finally:
                 conn.close()
@@ -1424,20 +1446,20 @@ class CampingPlazaEngine:
             try:
                 if self.use_postgres:
                     conn.cursor().execute("""
-                        INSERT INTO runtime_snapshot (id, snapshot_json, updated_at)
-                        VALUES (1, %s, NOW())
-                        ON CONFLICT(id) DO UPDATE SET
+                        INSERT INTO runtime_snapshot (session_id, snapshot_json, updated_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT(session_id) DO UPDATE SET
                             snapshot_json = EXCLUDED.snapshot_json,
                             updated_at = EXCLUDED.updated_at
-                    """, (data,))
+                    """, (self.session_id, data))
                 else:
                     conn.execute("""
-                        INSERT INTO runtime_snapshot (id, snapshot_json, updated_at)
-                        VALUES (1, ?, datetime('now', 'localtime'))
-                        ON CONFLICT(id) DO UPDATE SET
+                        INSERT INTO runtime_snapshot (session_id, snapshot_json, updated_at)
+                        VALUES (?, ?, datetime('now', 'localtime'))
+                        ON CONFLICT(session_id) DO UPDATE SET
                             snapshot_json = excluded.snapshot_json,
                             updated_at = excluded.updated_at
-                    """, (data,))
+                    """, (self.session_id, data))
                 conn.commit()
             finally:
                 conn.close()
@@ -1462,11 +1484,15 @@ class CampingPlazaEngine:
             try:
                 if self.use_postgres:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT snapshot_json FROM runtime_snapshot WHERE id = %s", (1,))
+                    cursor.execute(
+                        "SELECT snapshot_json FROM runtime_snapshot WHERE session_id = %s",
+                        (self.session_id,),
+                    )
                     row = cursor.fetchone()
                 else:
                     row = conn.execute(
-                        "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
+                        "SELECT snapshot_json FROM runtime_snapshot WHERE session_id = ?",
+                        (self.session_id,),
                     ).fetchone()
             finally:
                 conn.close()

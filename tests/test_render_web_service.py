@@ -48,15 +48,18 @@ class RenderWebServiceTests(unittest.TestCase):
 
     def test_database_url_selects_postgres_without_creating_sqlite_directory(self):
         database_url = "postgresql://user:password@example.test/camping_plaza"
+        session_id = "sess_" + "a" * 32
         game_api.engine = None
         with mock.patch.dict(os.environ, {"DATABASE_URL": database_url}):
             with mock.patch.object(game_api, "CampingPlazaEngine") as engine_class:
                 instance = engine_class.return_value
-                self.assertIs(game_api.get_engine(), instance)
+                self.assertIs(game_api.get_engine(session_id), instance)
 
         engine_class.assert_called_once_with(
             db_path=game_api.DB_PATH,
             database_url=database_url,
+            session_id=session_id,
+            create_new=False,
         )
 
 

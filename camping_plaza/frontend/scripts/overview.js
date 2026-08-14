@@ -55,11 +55,54 @@
     let latestPolledState = null;
     let replayStatePending = false;
     let eventsRenderDeferred = false;
+    const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
+    let sessionId = '';
 
-    function init() {
+    function sessionUrl(path, id = sessionId) {
+        const url = new URL(path, window.location.origin);
+        url.searchParams.set('session_id', id);
+        return url.pathname + url.search;
+    }
+
+    function sessionBody(payload = {}) {
+        return { ...payload, session_id: sessionId };
+    }
+
+    async function initializeSession() {
+        const urlSessionId = new URLSearchParams(window.location.search).get('session_id');
+        const savedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
+        const requestedSessionId = urlSessionId || savedSessionId;
+        if (requestedSessionId) {
+            const response = await fetch(sessionUrl('/api/state', requestedSessionId));
+            if (!response.ok) {
+                throw new Error('指定存档不存在或 session_id 无效。');
+            }
+            sessionId = requestedSessionId;
+            window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+            return;
+        }
+        const response = await fetch('/api/session', { method: 'POST' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.session_id) {
+            throw new Error(payload.message || '无法创建新的游戏存档。');
+        }
+        sessionId = payload.session_id;
+        window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+        const url = new URL(window.location.href);
+        url.searchParams.set('session_id', sessionId);
+        window.history.replaceState(null, '', url);
+    }
+
+    async function init() {
         cacheElements();
         setDisconnected();
-        fetchState();
+        try {
+            await initializeSession();
+            fetchState();
+        } catch (err) {
+            console.warn('无法打开游戏存档：', err);
+            setActionMessage(err.message, 'action-error');
+        }
     }
 
     function cacheElements() {
@@ -137,7 +180,7 @@
         }
 
         try {
-            const res = await fetch('/api/state', { method: 'GET' });
+            const res = await fetch(sessionUrl('/api/state'), { method: 'GET' });
             if (!res.ok) {
                 throw new Error('HTTP ' + res.status);
             }
@@ -170,7 +213,7 @@
         if (statePollInFlight) return;
         statePollInFlight = true;
         try {
-            const res = await fetch('/api/state', { method: 'GET' });
+            const res = await fetch(sessionUrl('/api/state'), { method: 'GET' });
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const state = await res.json();
             const history = Array.isArray(state.event_history) ? state.event_history : [];
@@ -323,14 +366,14 @@
             return;
         }
         try {
-            const res = await fetch('/api/actions', { method: 'GET' });
+            const res = await fetch(sessionUrl('/api/actions'), { method: 'GET' });
             if (!res.ok) {
                 throw new Error('HTTP ' + res.status);
             }
             const actions = await res.json();
             if (actions.mode === 'day_end_pending') {
                 try {
-                    const growthRes = await fetch('/api/growth', { method: 'GET' });
+                    const growthRes = await fetch(sessionUrl('/api/growth'), { method: 'GET' });
                     if (!growthRes.ok) {
                         throw new Error('HTTP ' + growthRes.status);
                     }
@@ -963,10 +1006,10 @@
                     const res = await fetch('/api/action', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
+                        body: JSON.stringify(sessionBody({
                             action: 'resolve_temporary_conflict',
                             params: { choice: choice.value }
-                        })
+                        }))
                     });
                     const result = await res.json().catch(() => ({}));
                     if (!res.ok || result.success === false) {
@@ -1322,7 +1365,7 @@
             const res = await fetch('/api/day/end', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ day_end_actions: selectedDayEndActions })
+                body: JSON.stringify(sessionBody({ day_end_actions: selectedDayEndActions }))
             });
             const result = await res.json().catch(() => ({}));
             if (!res.ok || result.success === false) {
@@ -1346,7 +1389,9 @@
 
         try {
             const res = await fetch('/api/day/start', {
-                method: 'POST'
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(sessionBody())
             });
             const result = await res.json().catch(() => ({}));
             if (!res.ok || result.success === false) {
@@ -1374,10 +1419,10 @@
             const res = await fetch('/api/turn/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: JSON.stringify(sessionBody({
                     free_actions: selectedFreeActions,
                     actions: selectedDecisionActions
-                })
+                }))
             });
             const result = await res.json().catch(() => ({}));
             if (!res.ok || result.success === false) {
@@ -1418,7 +1463,8 @@
         try {
             const res = await fetch('/api/turn/advance', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(sessionBody())
             });
             const result = await res.json().catch(() => ({}));
             if (!res.ok || result.success === false) {

@@ -349,7 +349,8 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
 
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
+                "SELECT snapshot_json FROM runtime_snapshot WHERE session_id = ?",
+                (self.engine.session_id,),
             ).fetchone()
         self.assertIsNotNone(row)
         snapshot = json.loads(row[0])

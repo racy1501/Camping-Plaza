@@ -37,7 +37,7 @@ class PersistenceTestCase(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             return conn.execute(
-                "SELECT id, snapshot_json FROM runtime_snapshot"
+                "SELECT session_id, snapshot_json FROM runtime_snapshot"
             ).fetchall()
         finally:
             conn.close()
@@ -46,8 +46,8 @@ class PersistenceTestCase(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
-                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE id = 1",
-                (raw,),
+                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE session_id = ?",
+                (raw, "local-default"),
             )
             conn.commit()
         finally:
@@ -88,7 +88,7 @@ class FreshDatabaseTests(PersistenceTestCase):
         # 快照表存在且仅一行
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0][0], 1)
+        self.assertEqual(rows[0][0], "local-default")
         # 快照 JSON 可解析且含版本号
         payload = json.loads(rows[0][1])
         self.assertEqual(payload["snapshot_version"], 1)

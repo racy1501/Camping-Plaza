@@ -4,6 +4,8 @@
 """
 
 import os
+import re
+import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,20 +44,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 游戏引擎实例（单例）
+# 仅保留给既有直接函数测试注入；正式请求每次按 session_id 从持久化快照恢复。
 engine: Optional[CampingPlazaEngine] = None
+SESSION_ID_RE = re.compile(r"^sess_[0-9a-f]{32}$")
 
 
-def get_engine() -> CampingPlazaEngine:
-    global engine
-    if engine is None:
-        database_url = os.environ.get("DATABASE_URL", "").strip()
-        if not database_url.startswith(("postgres://", "postgresql://")):
-            database_dir = os.path.dirname(DB_PATH)
-            if database_dir:
-                os.makedirs(database_dir, exist_ok=True)
-        engine = CampingPlazaEngine(db_path=DB_PATH, database_url=database_url)
-    return engine
+def _raise_session_error(error_code: str, message: str, status_code: int = 400):
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error_code": error_code, "message": message},
+    )
+
+
+def _require_session_id(raw_session_id: Optional[str]) -> str:
+    if not raw_session_id:
+        if engine is not None:
+            return "test-session"
+        _raise_session_error("missing_session_id", "缺少 session_id，无法访问游戏存档。")
+    session_id = str(raw_session_id).strip()
+    if not SESSION_ID_RE.fullmatch(session_id):
+        _raise_session_error("invalid_session_id", "session_id 格式无效。")
+    return session_id
+
+
+def get_engine(session_id: Optional[str] = None, *, create_new: bool = False) -> CampingPlazaEngine:
+    """加载一个 session 的独立引擎；数据库快照而非进程内全局对象是真实来源。"""
+    if engine is not None:
+        return engine
+    session_id = _require_session_id(session_id)
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url.startswith(("postgres://", "postgresql://")):
+        database_dir = os.path.dirname(DB_PATH)
+        if database_dir:
+            os.makedirs(database_dir, exist_ok=True)
+    try:
+        return CampingPlazaEngine(
+            db_path=DB_PATH,
+            database_url=database_url,
+            session_id=session_id,
+            create_new=create_new,
+        )
+    except LookupError as exc:
+        if str(exc) == "session_not_found":
+            _raise_session_error("session_not_found", "指定的 session_id 不存在。", 404)
+        raise
 
 
 # =============================================================================
@@ -65,16 +97,23 @@ def get_engine() -> CampingPlazaEngine:
 class ActionRequest(BaseModel):
     action: str
     params: Optional[dict] = None
+    session_id: Optional[str] = None
 
 
 class TurnPlanRequest(BaseModel):
+    session_id: Optional[str] = None
     free_actions: list[ActionRequest] = Field(default_factory=list)
     actions: list[ActionRequest] = Field(default_factory=list)
     conflict_choice: Optional[str] = None
 
 
 class DayEndRequest(BaseModel):
+    session_id: Optional[str] = None
     day_end_actions: list[ActionRequest] = Field(default_factory=list)
+
+
+class SessionRequest(BaseModel):
+    session_id: Optional[str] = None
 
 
 TURN_PLAN_IMMEDIATE_ACTIONS = {
@@ -585,10 +624,22 @@ def health():
     return {"game": "露营广场", "version": "0.1.0", "status": "running"}
 
 
+@app.post("/api/session")
+def create_session():
+    """创建一份独立的新游戏存档。"""
+    session_id = f"sess_{uuid.uuid4().hex}"
+    eng = get_engine(session_id, create_new=True)
+    return {
+        "success": True,
+        "session_id": session_id,
+        "state": eng.get_full_state(),
+    }
+
+
 @app.get("/api/state")
-def get_state():
+def get_state(session_id: Optional[str] = None):
     """获取完整游戏状态（给MCP用）"""
-    eng = get_engine()
+    eng = get_engine(session_id)
     state = eng.get_full_state()
     state["debt_remaining"] = eng.state.debt_remaining
     state["hot_spring"] = _get_hot_spring_status(eng)
@@ -606,9 +657,9 @@ def get_state():
 
 
 @app.get("/api/growth")
-def get_growth():
+def get_growth(session_id: Optional[str] = None):
     """获取成长进度和成长项目目录。"""
-    eng = get_engine()
+    eng = get_engine(session_id)
     return {
         "success": True,
         "progress": eng.get_growth_progress(),
@@ -664,28 +715,28 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
 
 
 @app.get("/mcp/query_growth_projects")
-def mcp_query_growth_projects():
+def mcp_query_growth_projects(session_id: Optional[str] = None):
     """MCP 只读查询：复用现有成长目录和进度读取逻辑。"""
-    return get_growth()
+    return get_growth(session_id)
 
 
 @app.get("/mcp/query_debt")
-def mcp_query_debt():
+def mcp_query_debt(session_id: Optional[str] = None):
     """MCP 只读查询：返回当前启动债务事实。"""
-    return get_engine().get_debt_summary()
+    return get_engine(session_id).get_debt_summary()
 
 
 @app.get("/api/actions")
-def get_human_actions():
+def get_human_actions(session_id: Optional[str] = None):
     """人类网页专用只读动作目录。不执行操作，不修改存档。"""
-    eng = get_engine()
+    eng = get_engine(session_id)
     return _build_human_action_catalog(eng)
 
 
 @app.get("/api/state/display")
-def get_display_state():
+def get_display_state(session_id: Optional[str] = None):
     """获取展示用文本状态（给围观前端用）"""
-    eng = get_engine()
+    eng = get_engine(session_id)
     state = eng.get_full_state()
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
@@ -698,9 +749,9 @@ def get_display_state():
 
 
 @app.get("/api/map")
-def get_map_data():
+def get_map_data(session_id: Optional[str] = None):
     """获取地图数据（帐篷位置、设施位置、NPC位置）"""
-    eng = get_engine()
+    eng = get_engine(session_id)
     state = eng.get_full_state()
 
     # 地图坐标（相对于600x800画布）
@@ -758,9 +809,9 @@ def get_map_data():
 # =============================================================================
 
 @app.post("/api/turn/advance")
-def advance_turn():
+def advance_turn(req: Optional[SessionRequest] = None):
     """推进回合"""
-    eng = get_engine()
+    eng = get_engine(req.session_id if req is not None else None)
     result = eng.advance_turn()
     # 写操作后统一保存（含故障阻塞早退补足决策点等分支）
     eng.save_state()
@@ -770,7 +821,7 @@ def advance_turn():
 @app.post("/api/turn/plan")
 def submit_turn_plan(req: TurnPlanRequest):
     """提交本轮营业计划"""
-    eng = get_engine()
+    eng = get_engine(req.session_id)
     plan_result = eng.submit_turn_plan(
         _normalize_turn_plan_actions(req.free_actions),
         _normalize_turn_plan_actions(req.actions),
@@ -815,7 +866,7 @@ def submit_day_end(req: DayEndRequest):
 
     单个动作业务失败保留在 results 中，整体正常返回 200。
     """
-    eng = get_engine()
+    eng = get_engine(req.session_id)
     result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
     if result.get("success"):
         next_day_result = eng.start_next_day()
@@ -832,9 +883,9 @@ def submit_day_end(req: DayEndRequest):
 
 
 @app.post("/api/day/start")
-def start_next_day():
+def start_next_day(req: Optional[SessionRequest] = None):
     """日终清单完成后开启下一天（确定性跨日推进）。"""
-    eng = get_engine()
+    eng = get_engine(req.session_id if req is not None else None)
     result = eng.start_next_day()
     eng.save_state()
     return result
@@ -843,7 +894,7 @@ def start_next_day():
 @app.post("/api/action")
 def do_action(req: ActionRequest):
     """执行经营操作"""
-    eng = get_engine()
+    eng = get_engine(req.session_id)
 
     # Turn 6 日终阶段：禁止逐项直接调用，统一走 /api/day/end 批处理
     _TURN6_DAY_END_ONLY = {
@@ -948,12 +999,12 @@ def do_action(req: ActionRequest):
 # =============================================================================
 
 @app.get("/mcp/state")
-def mcp_state():
+def mcp_state(session_id: Optional[str] = None):
     """
     MCP接口：返回AI需要的精简状态
     AI不需要知道NPC隐藏标签、后台概率等
     """
-    eng = get_engine()
+    eng = get_engine(session_id)
     state = eng.get_full_state()
     planning_available, plan_submitted, plan_target_turn = _get_turn_plan_status(eng)
 
@@ -995,11 +1046,11 @@ def mcp_state():
 
 
 @app.get("/mcp/actions")
-def mcp_available_actions():
+def mcp_available_actions(session_id: Optional[str] = None):
     """
     MCP接口：返回当前可用操作
     """
-    eng = get_engine()
+    eng = get_engine(session_id)
     state = eng.get_full_state()
     actions = []
     next_calls = []

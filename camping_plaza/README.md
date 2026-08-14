@@ -113,11 +113,20 @@ python game_api.py
 
 ## 存档
 
-- 使用 `runtime_snapshot` 单行 JSON 快照保存完整运行状态。
+- 使用 `runtime_snapshot` JSON 快照保存完整运行状态，每个 `session_id` 对应一份独立存档。
 - 配置 `DATABASE_URL` 且其为 `postgres://` 或 `postgresql://` 时，使用 PostgreSQL；启动时会执行 `CREATE TABLE IF NOT EXISTS`，不会覆盖已有存档。
 - 本地未配置 `DATABASE_URL` 时，使用 SQLite，默认路径为 `camping_plaza/camping_plaza.db`（基于 `game_api.py` 所在目录，不依赖启动目录）。
 - 服务重启后自动从快照恢复；存档损坏时停止启动，避免覆盖已有存档。
-- 单存档，无账号、多存档位或云同步。
+- PostgreSQL 与 SQLite 都支持多个独立 session；Render 不需要新增环境变量。
+
+## Session 存档 API
+
+先调用 `POST /api/session` 创建一份新存档，返回不可预测的 `session_id`。
+
+- 所有读取状态的 `GET /api/*` 与 `GET /mcp/*` 请求都使用 query 参数：`?session_id=...`。
+- 所有修改状态的 `POST /api/*` 请求都在 JSON body 中携带：`"session_id": "..."`。
+- 缺少 `session_id` 会返回 HTTP 400 和 `missing_session_id`；不存在的存档返回 HTTP 404 和 `session_not_found`，不会回退到共享默认存档。
+- 人类网页首次访问会自动创建 session 并写入浏览器 `localStorage`；可用 `/?session_id=...` 打开指定测试档，验证成功后会保存为当前网页存档。
 
 ## Render 部署
 
