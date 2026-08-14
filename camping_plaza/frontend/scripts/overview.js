@@ -116,6 +116,11 @@
         els.balance = document.getElementById('balance');
         els.debtRemaining = document.getElementById('debtRemaining');
         els.reputation = document.getElementById('reputation');
+        els.achievementCatalogButton = document.getElementById('achievementCatalogButton');
+        els.achievementUnlockedCount = document.getElementById('achievementUnlockedCount');
+        els.achievementModal = document.getElementById('achievementModal');
+        els.achievementModalClose = document.getElementById('achievementModalClose');
+        els.achievementGrid = document.getElementById('achievementGrid');
         els.noticeList = document.getElementById('noticeList');
         els.logList = document.getElementById('logList');
         els.reminderList = document.getElementById('reminderList');
@@ -158,6 +163,17 @@
         els.tentAnchors = {};
         for (let i = 1; i <= 6; i++) {
             els.tentAnchors[i] = document.querySelector(`.anchor-tent${i}`);
+        }
+        if (els.achievementCatalogButton) {
+            els.achievementCatalogButton.addEventListener('click', openAchievementCatalog);
+        }
+        if (els.achievementModalClose) {
+            els.achievementModalClose.addEventListener('click', closeAchievementCatalog);
+        }
+        if (els.achievementModal) {
+            els.achievementModal.addEventListener('click', event => {
+                if (event.target === els.achievementModal) closeAchievementCatalog();
+            });
         }
     }
 
@@ -384,6 +400,7 @@
                 }
             }
             actionsConnected = true;
+            updateAchievementUnlockedCount(actions.achievement_unlocked_count);
             renderActions(actions);
         } catch (err) {
             actionsConnected = false;
@@ -927,7 +944,66 @@
         if (candidate && candidate.action === 'clean_tents') {
             return '清洁帐篷';
         }
-        return candidate && (candidate.label || candidate.action);
+        const label = candidate && (candidate.label || candidate.action);
+        if (
+            candidate
+            && Number.isFinite(candidate.remaining_today)
+            && Number.isFinite(candidate.daily_limit)
+        ) {
+            return `${label}（${candidate.remaining_today}/${candidate.daily_limit}）`;
+        }
+        return label;
+    }
+
+    function updateAchievementUnlockedCount(count) {
+        if (!els.achievementUnlockedCount || !Number.isFinite(count)) return;
+        els.achievementUnlockedCount.textContent = `已解锁 ${count}`;
+    }
+
+    function closeAchievementCatalog() {
+        if (els.achievementModal) els.achievementModal.classList.add('hidden');
+    }
+
+    function achievementStatusLabel(status) {
+        return {
+            locked: '未解锁',
+            unlocked: '已解锁',
+            hidden: '隐藏成就',
+            alternative: '另一结果'
+        }[status] || '';
+    }
+
+    function renderAchievementCatalog(payload) {
+        if (!els.achievementGrid) return;
+        els.achievementGrid.innerHTML = '';
+        (payload.achievements || []).forEach(achievement => {
+            const card = document.createElement('article');
+            const status = String(achievement.status || 'locked');
+            card.className = `achievement-item ${status}`;
+            const title = document.createElement('h3');
+            title.textContent = achievement.title || '隐藏成就';
+            const description = document.createElement('p');
+            description.textContent = achievement.description || '';
+            const badge = document.createElement('span');
+            badge.className = 'achievement-status';
+            badge.textContent = achievementStatusLabel(status);
+            card.append(title, description, badge);
+            els.achievementGrid.appendChild(card);
+        });
+    }
+
+    async function openAchievementCatalog() {
+        if (!sessionId) return;
+        try {
+            const res = await fetch(sessionUrl('/api/achievements'), { method: 'GET' });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.message || `请求失败 (${res.status})`);
+            updateAchievementUnlockedCount(payload.unlocked_count);
+            renderAchievementCatalog(payload);
+            if (els.achievementModal) els.achievementModal.classList.remove('hidden');
+        } catch (err) {
+            setActionMessage('无法读取成就图鉴：' + err.message, 'action-error');
+        }
     }
 
     function ensureRepairCandidate(candidates) {

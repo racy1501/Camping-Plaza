@@ -103,14 +103,15 @@ class AchievementTests(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             raw = conn.execute(
-                "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
+                "SELECT snapshot_json FROM runtime_snapshot WHERE session_id = ?",
+                (self.engine.session_id,),
             ).fetchone()[0]
             payload = json.loads(raw)
             payload["state"].pop("unlocked_achievement_ids")
             payload["state"].pop("pending_achievement_ids")
             conn.execute(
-                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE id = 1",
-                (json.dumps(payload, ensure_ascii=False),),
+                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE session_id = ?",
+                (json.dumps(payload, ensure_ascii=False), self.engine.session_id),
             )
             conn.commit()
         finally:

@@ -277,7 +277,8 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
         "enabled": improve_remaining > 0,
         "reason": "" if improve_remaining else "今日提升服务次数已达到上限",
         "params": {}, "repeatable": False,
-        "remaining_today": improve_remaining, "cost_decision_points": 1,
+        "remaining_today": improve_remaining, "daily_limit": 2,
+        "cost_decision_points": 1,
     })
     clean_remaining = max(0, 2 - eng.state.clean_campsite_uses_today)
     decision_candidates.append({
@@ -285,7 +286,8 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
         "enabled": clean_remaining > 0,
         "reason": "" if clean_remaining else "今日清洁营地次数已达到上限",
         "params": {}, "repeatable": False,
-        "remaining_today": clean_remaining, "cost_decision_points": 1,
+        "remaining_today": clean_remaining, "daily_limit": 2,
+        "cost_decision_points": 1,
     })
     post_remaining = 0 if eng.state.post_used_today else 1
     decision_candidates.append({
@@ -293,7 +295,8 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
         "enabled": post_remaining > 0,
         "reason": "" if post_remaining else "今天已经发布过帖子",
         "params": {}, "repeatable": False,
-        "remaining_today": post_remaining, "cost_decision_points": 1,
+        "remaining_today": post_remaining, "daily_limit": 1,
+        "cost_decision_points": 1,
     })
     if turn == 4:
         decision_candidates.append({
@@ -511,7 +514,6 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             item["label"] = f"补充{package['name']}"
             item["detail"] = f"{package['portions']}份 · {package['price']}金币"
         item.pop("cost_decision_points", None)
-        item.pop("remaining_today", None)
         decision_action_candidates.append(item)
 
     temporary_event = _get_temporary_event_summary(eng)
@@ -641,6 +643,7 @@ def get_state(session_id: Optional[str] = None):
     """获取完整游戏状态（给MCP用）"""
     eng = get_engine(session_id)
     state = eng.get_full_state()
+    state.pop("achievements", None)
     state["debt_remaining"] = eng.state.debt_remaining
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
@@ -683,7 +686,9 @@ def _build_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
                 "repeatable": source.get("repeatable", False),
                 "cost_decision_points": 0 if source["kind"] == "free" else 1,
             }
-            for field in ("remaining_today", "price", "portions", "max_quantity"):
+            for field in (
+                "remaining_today", "daily_limit", "price", "portions", "max_quantity"
+            ):
                 if field in source:
                     item[field] = source[field]
             normalized.append(item)
@@ -726,11 +731,25 @@ def mcp_query_debt(session_id: Optional[str] = None):
     return get_engine(session_id).get_debt_summary()
 
 
+@app.get("/api/achievements")
+def get_achievements(session_id: Optional[str] = None):
+    """人类图鉴主动查询；不进入常规状态返回。"""
+    return get_engine(session_id).get_achievement_catalog()
+
+
+@app.get("/mcp/achievements")
+def mcp_get_achievements(session_id: Optional[str] = None):
+    """MCP 主动查询成就图鉴；不进入每 Turn 的常规状态。"""
+    return get_engine(session_id).get_achievement_catalog()
+
+
 @app.get("/api/actions")
 def get_human_actions(session_id: Optional[str] = None):
     """人类网页专用只读动作目录。不执行操作，不修改存档。"""
     eng = get_engine(session_id)
-    return _build_human_action_catalog(eng)
+    catalog = _build_human_action_catalog(eng)
+    catalog["achievement_unlocked_count"] = eng.get_achievement_catalog()["unlocked_count"]
+    return catalog
 
 
 @app.get("/api/state/display")

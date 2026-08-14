@@ -255,6 +255,102 @@ class CampingPlazaEngine:
     FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
+    ACHIEVEMENT_CATALOG = {
+        "first_day_complete": {
+            "title": "完成首日营业",
+            "hint": "继续经营营地。",
+            "condition": "Day 1 正式结束并进入 Day 2。",
+        },
+        "first_served_group": {
+            "title": "首次成功接待客组",
+            "hint": "迎接第一批客人。",
+            "condition": "首次成功接待一组客人。",
+        },
+        "first_overnight_group": {
+            "title": "首次成功接待过夜客",
+            "hint": "接待过夜客人。",
+            "condition": "首次成功接待一组过夜客。",
+        },
+        "first_day_to_overnight": {
+            "title": "首次日间客转为过夜客",
+            "hint": "让日间客留下过夜。",
+            "condition": "首次有日间客成功转为过夜客。",
+        },
+        "first_tip": {
+            "title": "首次收到小费",
+            "hint": "让客人留下小费。",
+            "condition": "首次收到客人小费。",
+        },
+        "tent_2_purchased": {
+            "title": "购买2号帐篷",
+            "locked_title": "帐篷扩建",
+            "hint": "继续扩建营地。",
+            "condition": "购买 2 号帐篷。",
+        },
+        "all_tents_unlocked": {
+            "title": "解锁全部6顶帐篷",
+            "locked_title": "帐篷扩展",
+            "hint": "继续扩建营地。",
+            "condition": "解锁全部 6 顶帐篷。",
+        },
+        "dining_lv1": {
+            "title": "餐饮升级至Lv1",
+            "locked_title": "餐饮起步",
+            "hint": "发展餐饮设施。",
+            "condition": "首次升级餐饮至 Lv1。",
+        },
+        "entertainment_lv1": {
+            "title": "娱乐升级至Lv1",
+            "locked_title": "娱乐起步",
+            "hint": "发展娱乐设施。",
+            "condition": "首次升级娱乐至 Lv1。",
+        },
+        "greenery_lv1": {
+            "title": "绿化升级至Lv1",
+            "locked_title": "绿化起步",
+            "hint": "完善营地绿化。",
+            "condition": "首次升级绿化至 Lv1。",
+        },
+        "all_normal_growth_complete": {
+            "title": "完成全部11个普通成长节点",
+            "locked_title": "成长进展",
+            "hint": "继续完善营地。",
+            "condition": "完成温泉之前全部 11 个普通成长节点。",
+        },
+        "hot_spring_built": {
+            "title": "建成温泉",
+            "hint": "推进大型设施建设。",
+            "condition": "建成温泉。",
+        },
+        "served_groups_50": {
+            "title": "接待里程碑",
+            "locked_title": "接待里程碑",
+            "hint": "接待更多客人。",
+            "condition": "累计成功接待 50 组客人。",
+        },
+        "served_groups_100": {
+            "title": "接待进阶",
+            "locked_title": "接待进阶",
+            "hint": "接待更多客人。",
+            "condition": "累计成功接待 100 组客人。",
+        },
+        "served_groups_150": {
+            "title": "接待新高度",
+            "locked_title": "接待新高度",
+            "hint": "接待更多客人。",
+            "condition": "累计成功接待 150 组客人。",
+        },
+        "debt_paid_by_deadline": {
+            "title": "Day25债务已还清",
+            "hint": "",
+            "condition": "进入 Day 26 时启动资金已经全部还清。",
+        },
+        "debt_unpaid_by_deadline": {
+            "title": "Day25债务仍未还清",
+            "hint": "",
+            "condition": "进入 Day 26 时启动资金仍未全部还清。",
+        },
+    }
     ACHIEVEMENT_DEFINITIONS = {
         "first_day_complete": "完成首日营业",
         "first_served_group": "首次成功接待客组",
@@ -274,6 +370,9 @@ class CampingPlazaEngine:
         "debt_paid_by_deadline": "Day25债务已还清",
         "debt_unpaid_by_deadline": "Day25债务仍未还清",
     }
+    DEBT_RESULT_ACHIEVEMENT_IDS = frozenset({
+        "debt_paid_by_deadline", "debt_unpaid_by_deadline",
+    })
     GROWTH_PROJECT_CATALOG = (
         {
             "project_id": "tent_2", "category": "tent", "display_name": "2号帐篷",
@@ -688,6 +787,44 @@ class CampingPlazaEngine:
                 self.state.unlocked_achievement_ids
             ),
             "pending": self._achievement_payload(self.state.pending_achievement_ids),
+        }
+
+    def get_achievement_catalog(self) -> dict:
+        """返回图鉴展示所需的最小派生数据，不新增成就持久化状态。"""
+        unlocked_ids = set(self.state.unlocked_achievement_ids)
+        debt_result_revealed = self.state.day > self.state.repayment_deadline_day
+        achievements = []
+        for achievement_id, definition in self.ACHIEVEMENT_CATALOG.items():
+            if achievement_id in self.DEBT_RESULT_ACHIEVEMENT_IDS:
+                if not debt_result_revealed:
+                    achievements.append({
+                        "id": achievement_id,
+                        "title": "隐藏成就",
+                        "status": "hidden",
+                        "description": "",
+                    })
+                    continue
+                status = "unlocked" if achievement_id in unlocked_ids else "alternative"
+                description = definition["condition"]
+            elif achievement_id in unlocked_ids:
+                status = "unlocked"
+                description = definition["condition"]
+            else:
+                status = "locked"
+                description = definition["hint"]
+            achievements.append({
+                "id": achievement_id,
+                "title": (
+                    self.ACHIEVEMENT_DEFINITIONS[achievement_id]
+                    if status == "unlocked"
+                    else definition.get("locked_title", definition["title"])
+                ),
+                "status": status,
+                "description": description,
+            })
+        return {
+            "unlocked_count": len(unlocked_ids),
+            "achievements": achievements,
         }
 
     def _consume_pending_achievements(self) -> list[dict]:
