@@ -55,7 +55,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             [project["price"] for project in catalog],
-            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 2500],
+            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 3000],
         )
         self.assertEqual(
             [project["project_id"] for project in CampingPlazaEngine.GROWTH_PROJECT_CATALOG],

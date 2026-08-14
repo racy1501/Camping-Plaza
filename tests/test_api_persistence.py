@@ -185,8 +185,8 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
         item = result["results"][0]
         self.assertTrue(item["success"])
         self.assertEqual(item["project_id"], "hot_spring")
-        self.assertEqual(item["price"], 2500)
-        self.assertEqual(item["balance_after"], 7500)
+        self.assertEqual(item["price"], 3000)
+        self.assertEqual(item["balance_after"], 7000)
         save_mock.assert_called_once()
 
     def test_purchase_growth_project_failure_does_not_save(self):
@@ -229,7 +229,7 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
         # 日终动作只扣一次；跨日预约收入不影响该动作的结算结果。
         self.assertEqual(
             result["results"][0]["balance_after"],
-            balance_before - 2500,
+            balance_before - 3000,
         )
         # save_state 只调用一次（整个 /api/day/end 一次保存）
         save_mock.assert_called_once()
