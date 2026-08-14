@@ -2061,10 +2061,10 @@ class DelayedReviewSettlementTests(unittest.TestCase):
             45: 2,
             59: 2,
             60: 3,
-            73: 3,
-            74: 4,
-            87: 4,
-            88: 5,
+            71: 3,
+            72: 4,
+            85: 4,
+            86: 5,
         }
         for satisfaction, rating in expected.items():
             with self.subTest(satisfaction=satisfaction):
