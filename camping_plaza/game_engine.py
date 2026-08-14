@@ -311,9 +311,9 @@ class CampingPlazaEngine:
         },
         {
             "project_id": "hot_spring", "category": "hot_spring", "display_name": "温泉",
-            "price": 8000, "sequence": 12,
-            "operation": "hot_spring_operation", "required_served_groups": 150,
-            "fallback_operating_day": 25, "required_growth_nodes": 8,
+            "price": 2500, "sequence": 12,
+            "operation": "hot_spring_operation", "required_served_groups": 75,
+            "fallback_operating_day": 12, "required_growth_nodes": 5,
         },
     )
     TURN_PLAN_ACTIONS = {

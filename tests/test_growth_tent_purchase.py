@@ -215,9 +215,9 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
         result = self.engine.purchase_growth_project("hot_spring")
         self.assertTrue(result["success"])
-        self.assertEqual(result["price"], 8000)
+        self.assertEqual(result["price"], 2500)
         self.assertEqual(result["balance_before"], 10000)
-        self.assertEqual(result["balance_after"], 2000)
+        self.assertEqual(result["balance_after"], 7500)
         self.assertTrue(self.engine.state.hot_spring_built)
         self.assertEqual(result["completed_growth_nodes"], nodes_before)
         self.assertEqual(self.engine.get_growth_progress()["completed_growth_nodes"], nodes_before)
@@ -235,7 +235,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
     def test_hot_spring_qualification_failures_are_atomic(self):
         cases = (
             (1, 10000, "served_groups_or_days_required"),
-            (25, 7999, "insufficient_balance"),
+            (25, 2499, "insufficient_balance"),
         )
         for day, balance, expected_code in cases:
             with self.subTest(day=day, balance=balance):
@@ -250,7 +250,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
                 self._assert_snapshot_unchanged(before)
                 self.tearDown()
 
-    def test_hot_spring_requires_eight_nodes_and_open_unsettled_turn_six(self):
+    def test_hot_spring_requires_five_nodes_and_open_unsettled_turn_six(self):
         self._open_management_phase(balance=10000, day=25)
         self.engine.state.total_served_groups = 150
         before = self._snapshot()

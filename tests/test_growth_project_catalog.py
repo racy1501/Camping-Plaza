@@ -55,7 +55,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             [project["price"] for project in catalog],
-            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 8000],
+            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 2500],
         )
         self.assertEqual(
             [project["project_id"] for project in CampingPlazaEngine.GROWTH_PROJECT_CATALOG],
@@ -78,13 +78,13 @@ class GrowthProjectCatalogTests(unittest.TestCase):
             self.engine.tents[tent_id].is_unlocked = True
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
-        self.engine.state.day = 25
+        self.engine.state.day = 12
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["prerequisite_met"])
         self.assertTrue(project["operation_requirement_met"])
         self.assertTrue(project["can_purchase_now"])
         self.assertEqual(project["progress"]["current_completed_growth_nodes"], 8)
-        self.assertEqual(project["progress"]["required_completed_growth_nodes"], 8)
+        self.assertEqual(project["progress"]["required_completed_growth_nodes"], 5)
 
     def test_hot_spring_served_groups_can_replace_day_fallback(self):
         self._open_management_phase()
@@ -93,9 +93,23 @@ class GrowthProjectCatalogTests(unittest.TestCase):
             self.engine.tents[tent_id].is_unlocked = True
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
-        self.engine.state.total_served_groups = 150
+        self.engine.state.total_served_groups = 75
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["operation_requirement_met"])
+
+    def test_hot_spring_can_use_day_fallback_with_five_growth_nodes(self):
+        self._open_management_phase()
+        self.engine.state.day = 12
+        self.engine.state.total_served_groups = 0
+        self.engine.tents[2].is_unlocked = True
+        self.engine.tents[3].is_unlocked = True
+        self.engine.tents[4].is_unlocked = True
+        self.engine.facilities["dining"].level = 1
+        self.engine.facilities["entertainment"].level = 1
+        project = self._catalog()["hot_spring"]
+        self.assertTrue(project["prerequisite_met"])
+        self.assertTrue(project["operation_requirement_met"])
+        self.assertTrue(project["can_purchase_now"])
 
     def test_initial_catalog_is_incomplete_and_locked(self):
         catalog = self._catalog()

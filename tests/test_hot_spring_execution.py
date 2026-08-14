@@ -240,7 +240,7 @@ class HotSpringExecutionTests(unittest.TestCase):
 
         purchase = self.engine.purchase_growth_project("hot_spring")
         self.assertTrue(purchase["success"])
-        self.assertEqual(purchase["balance_after"], 80)
+        self.assertEqual(purchase["balance_after"], 5580)
         self.assertTrue(self.engine.state.hot_spring_built)
         self.assertTrue(self.engine.save_state())
 
