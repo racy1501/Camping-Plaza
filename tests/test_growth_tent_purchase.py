@@ -215,9 +215,9 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
         result = self.engine.purchase_growth_project("hot_spring")
         self.assertTrue(result["success"])
-        self.assertEqual(result["price"], 2500)
+        self.assertEqual(result["price"], 3500)
         self.assertEqual(result["balance_before"], 10000)
-        self.assertEqual(result["balance_after"], 7500)
+        self.assertEqual(result["balance_after"], 6500)
         self.assertTrue(self.engine.state.hot_spring_built)
         self.assertEqual(result["completed_growth_nodes"], nodes_before)
         self.assertEqual(self.engine.get_growth_progress()["completed_growth_nodes"], nodes_before)
@@ -235,7 +235,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
     def test_hot_spring_qualification_failures_are_atomic(self):
         cases = (
             (1, 10000, "served_groups_or_days_required"),
-            (25, 2499, "insufficient_balance"),
+            (25, 3499, "insufficient_balance"),
         )
         for day, balance, expected_code in cases:
             with self.subTest(day=day, balance=balance):
