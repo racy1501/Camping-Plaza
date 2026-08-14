@@ -16,14 +16,22 @@ import uvicorn
 from game_engine import CampingPlazaEngine
 
 
-app = FastAPI(title="露营广场 API", version="0.1.0")
-
-# 正式存档路径固定在本文件所在目录，不依赖启动时当前工作目录
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camping_plaza.db")
-
-# 前端资源目录，同样基于本文件所在目录计算
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+
+
+def _resolve_database_path() -> str:
+    """允许部署环境将 SQLite 存档放到持久磁盘，默认仍使用项目内路径。"""
+    configured_path = os.environ.get("CAMPING_PLAZA_DB_PATH")
+    if configured_path:
+        return os.path.abspath(os.path.expanduser(configured_path))
+    return os.path.join(BASE_DIR, "camping_plaza.db")
+
+
+app = FastAPI(title="露营广场 API", version="0.1.0")
+
+# 正式存档路径可通过环境变量配置；默认不依赖启动时当前工作目录。
+DB_PATH = _resolve_database_path()
 
 # CORS 配置（允许合集站前端访问）
 app.add_middleware(
@@ -41,6 +49,9 @@ engine: Optional[CampingPlazaEngine] = None
 def get_engine() -> CampingPlazaEngine:
     global engine
     if engine is None:
+        database_dir = os.path.dirname(DB_PATH)
+        if database_dir:
+            os.makedirs(database_dir, exist_ok=True)
         engine = CampingPlazaEngine(db_path=DB_PATH)
     return engine
 
@@ -1172,4 +1183,4 @@ app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIR, "assets"))
 # =============================================================================
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))

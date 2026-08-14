@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: camping-plaza
+    runtime: python
+    rootDir: camping_plaza
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn game_api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
