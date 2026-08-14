@@ -143,6 +143,8 @@ class GameState:
     successful_dining_groups: int = 0
     successful_paid_entertainment_groups: int = 0
     successful_greenery_maintenance_count: int = 0
+    unlocked_achievement_ids: list[str] = field(default_factory=list)
+    pending_achievement_ids: list[str] = field(default_factory=list)
 
     # 尚未转换进当天 arrival plan 的成功预约
     reservations: list[dict] = field(default_factory=list)
@@ -243,6 +245,25 @@ class CampingPlazaEngine:
     FACILITY_UPGRADE_COST = [0, 400, 1000]
     GREENERY_UPGRADE_COST = [0, 300, 800]
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
+    ACHIEVEMENT_DEFINITIONS = {
+        "first_day_complete": "完成首日营业",
+        "first_served_group": "首次成功接待客组",
+        "first_overnight_group": "首次成功接待过夜客",
+        "first_day_to_overnight": "首次日间客转为过夜客",
+        "first_tip": "首次收到小费",
+        "tent_2_purchased": "购买2号帐篷",
+        "all_tents_unlocked": "解锁全部6顶帐篷",
+        "dining_lv1": "餐饮升级至Lv1",
+        "entertainment_lv1": "娱乐升级至Lv1",
+        "greenery_lv1": "绿化升级至Lv1",
+        "all_normal_growth_complete": "完成全部11个普通成长节点",
+        "hot_spring_built": "建成温泉",
+        "served_groups_50": "累计成功接待50组",
+        "served_groups_100": "累计成功接待100组",
+        "served_groups_150": "累计成功接待150组",
+        "debt_paid_by_deadline": "Day25债务已还清",
+        "debt_unpaid_by_deadline": "Day25债务仍未还清",
+    }
     GROWTH_PROJECT_CATALOG = (
         {
             "project_id": "tent_2", "category": "tent", "display_name": "2号帐篷",
@@ -607,6 +628,69 @@ class CampingPlazaEngine:
                 and debt_remaining > 0
             ),
         }
+
+    @classmethod
+    def _normalize_achievement_ids(cls, achievement_ids) -> list[str]:
+        if not isinstance(achievement_ids, list):
+            return []
+        normalized = []
+        for achievement_id in achievement_ids:
+            if (
+                isinstance(achievement_id, str)
+                and achievement_id in cls.ACHIEVEMENT_DEFINITIONS
+                and achievement_id not in normalized
+            ):
+                normalized.append(achievement_id)
+        return normalized
+
+    def _unlock_achievement(self, achievement_id: str) -> bool:
+        if achievement_id not in self.ACHIEVEMENT_DEFINITIONS:
+            raise ValueError(f"unknown achievement: {achievement_id}")
+        if achievement_id in self.state.unlocked_achievement_ids:
+            return False
+        self.state.unlocked_achievement_ids.append(achievement_id)
+        if achievement_id not in self.state.pending_achievement_ids:
+            self.state.pending_achievement_ids.append(achievement_id)
+        return True
+
+    def _achievement_payload(self, achievement_ids: list[str]) -> list[dict]:
+        return [
+            {
+                "id": achievement_id,
+                "name": self.ACHIEVEMENT_DEFINITIONS[achievement_id],
+            }
+            for achievement_id in achievement_ids
+            if achievement_id in self.ACHIEVEMENT_DEFINITIONS
+        ]
+
+    def get_achievement_state(self) -> dict:
+        return {
+            "unlocked": self._achievement_payload(
+                self.state.unlocked_achievement_ids
+            ),
+            "pending": self._achievement_payload(self.state.pending_achievement_ids),
+        }
+
+    def _consume_pending_achievements(self) -> list[dict]:
+        pending = self._achievement_payload(self.state.pending_achievement_ids)
+        self.state.pending_achievement_ids.clear()
+        return pending
+
+    def _record_growth_project_achievements(self, project_id: str) -> None:
+        project_achievements = {
+            "tent_2": "tent_2_purchased",
+            "dining_lv1": "dining_lv1",
+            "entertainment_lv1": "entertainment_lv1",
+            "greenery_lv1": "greenery_lv1",
+            "hot_spring": "hot_spring_built",
+        }
+        achievement_id = project_achievements.get(project_id)
+        if achievement_id is not None:
+            self._unlock_achievement(achievement_id)
+        if all(self.tents[tent_id].is_unlocked for tent_id in range(1, 7)):
+            self._unlock_achievement("all_tents_unlocked")
+        if self.get_growth_progress()["completed_growth_nodes"] >= 11:
+            self._unlock_achievement("all_normal_growth_complete")
 
     def repay_debt(self, amount: int) -> dict:
         """偿还无息启动负债；这是独立财务行为，不占经营决策位。"""
@@ -1326,6 +1410,16 @@ class CampingPlazaEngine:
                     "hot_spring", "tip",
                 )
             }
+            restored_state.unlocked_achievement_ids = self._normalize_achievement_ids(
+                restored_state.unlocked_achievement_ids
+            )
+            restored_state.pending_achievement_ids = [
+                achievement_id
+                for achievement_id in self._normalize_achievement_ids(
+                    restored_state.pending_achievement_ids
+                )
+                if achievement_id in restored_state.unlocked_achievement_ids
+            ]
             raw_history = (
                 restored_state.event_history
                 if isinstance(restored_state.event_history, list) else []
@@ -1427,6 +1521,10 @@ class CampingPlazaEngine:
             return False
         npc.growth_served_recorded = True
         self.state.total_served_groups += 1
+        self._unlock_achievement("first_served_group")
+        for threshold in (50, 100, 150):
+            if self.state.total_served_groups >= threshold:
+                self._unlock_achievement(f"served_groups_{threshold}")
         return True
 
     def _record_successful_dining_once(self, npc: NPCGroup) -> bool:
@@ -1706,6 +1804,7 @@ class CampingPlazaEngine:
                 }
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
+            self._record_growth_project_achievements(project_id)
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1736,6 +1835,7 @@ class CampingPlazaEngine:
                     "error": str(exc),
                 }
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
+            self._record_growth_project_achievements(project_id)
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1780,6 +1880,7 @@ class CampingPlazaEngine:
                 }
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
+            self._record_growth_project_achievements(project_id)
             return {
                 "success": True,
                 "project_id": project_id,
@@ -1812,6 +1913,7 @@ class CampingPlazaEngine:
             }
 
         self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
+        self._record_growth_project_achievements(project_id)
         return {
             "success": True,
             "project_id": project_id,
@@ -2591,6 +2693,7 @@ class CampingPlazaEngine:
         if npc not in self.npc_pool:
             self.npc_pool.append(npc)
         self._record_served_group_once(npc)
+        self._unlock_achievement("first_overnight_group")
         result["events"].append(f"一组{npc.group_size}人入住{tent_id}号帐篷")
 
     def _apply_greenery_entry_bonus_once(self, npc: NPCGroup):
@@ -3037,6 +3140,8 @@ class CampingPlazaEngine:
         matched_tent_ids = [matches[guest.id] for guest in candidate_guests if guest.id in matches]
         successful_count = len(matched_tent_ids)
         total_count = len(candidate_guests)
+        if successful_count:
+            self._unlock_achievement("first_day_to_overnight")
         tent_text = "、".join(f"{tent_id}号" for tent_id in matched_tent_ids)
         if successful_count == total_count:
             if total_count == 1:
@@ -3443,6 +3548,9 @@ class CampingPlazaEngine:
         result = {"events": [], "success": False}
         self._new_day(result)
         self.state.day_end_completed = False
+        notifications = self._consume_pending_achievements()
+        if notifications:
+            result["achievement_notifications"] = notifications
         self._append_result_events_to_history(
             self.state.day, self.state.turn, result["events"]
         )
@@ -3673,6 +3781,7 @@ class CampingPlazaEngine:
         self.state.today_income["tip"] += total
         if total:
             self.state.balance += total
+            self._unlock_achievement("first_tip")
         self.state.today_tip_settled = True
         if total:
             message = f"今日收到小费 {total} 金币。"
@@ -4323,6 +4432,16 @@ class CampingPlazaEngine:
             ),
         }
 
+        if self.state.day == 1:
+            self._unlock_achievement("first_day_complete")
+        if self.state.day == self.state.repayment_deadline_day:
+            achievement_id = (
+                "debt_paid_by_deadline"
+                if self.state.debt_remaining == 0
+                else "debt_unpaid_by_deadline"
+            )
+            self._unlock_achievement(achievement_id)
+
         review_result = {"events": []}
         for npc in self._get_active_overnight_tent_npcs():
             self._try_leave_review(npc, review_result)
@@ -4544,7 +4663,8 @@ class CampingPlazaEngine:
             "decisions_left": self.state.decisions_left,
             "food_stock": self.state.food_stock,
             "today_income": self.state.today_income,
-            "today_expenses": self.state.today_expenses
+            "today_expenses": self.state.today_expenses,
+            "achievements": self.get_achievement_state(),
         }
 
     def _get_tents_summary(self) -> dict:

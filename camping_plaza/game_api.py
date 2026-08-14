@@ -810,6 +810,10 @@ def submit_day_end(req: DayEndRequest):
         result["day"] = next_day_result.get("day", eng.state.day)
         result["turn"] = next_day_result.get("turn", eng.state.turn)
         result["day_end_completed"] = eng.state.day_end_completed
+        if next_day_result.get("achievement_notifications"):
+            result["achievement_notifications"] = next_day_result[
+                "achievement_notifications"
+            ]
     eng.save_state()
     return result
 
