@@ -56,6 +56,38 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine._initialize_today_conflict_event()
         self.assertEqual(self.engine.state.today_conflict_event, before)
 
+    def test_same_temperament_has_lower_conflict_weight_than_different(self):
+        same = {"temperament": 1}
+        different = {"temperament": 2}
+        self.assertLess(
+            self.engine._get_temporary_conflict_probability(same, same),
+            self.engine._get_temporary_conflict_probability(same, different),
+        )
+
+    def test_mediation_weight_differs_only_by_temperament_match(self):
+        same = {"temperament": 1}
+        different = {"temperament": 2}
+        same_probability = self.engine._get_temporary_conflict_penalty_probability(
+            same, same, "mediate"
+        )
+        different_probability = self.engine._get_temporary_conflict_penalty_probability(
+            same, different, "mediate"
+        )
+        self.assertGreater(different_probability, same_probability)
+        self.assertLess(different_probability - same_probability, 0.1)
+
+    def test_ignore_keeps_formal_path_with_small_different_temperament_adjustment(self):
+        same = {"temperament": 1}
+        different = {"temperament": 2}
+        same_probability = self.engine._get_temporary_conflict_penalty_probability(
+            same, same, "ignore"
+        )
+        different_probability = self.engine._get_temporary_conflict_penalty_probability(
+            same, different, "ignore"
+        )
+        self.assertGreaterEqual(different_probability, same_probability)
+        self.assertLess(different_probability - same_probability, 0.1)
+
     def test_plan_requires_immediate_conflict_resolution_only_on_trigger_turn(self):
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {

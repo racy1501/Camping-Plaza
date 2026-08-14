@@ -187,6 +187,11 @@ class CampingPlazaEngine:
     HOT_SPRING_SATISFACTION_GAIN = 6
     HOT_SPRING_DAILY_CAPACITY = 20
     TEMPORARY_CONFLICT_EVENT_PROBABILITY = 0.70
+    TEMPORARY_CONFLICT_SAME_TEMPERAMENT_MULTIPLIER = 0.95
+    TEMPORARY_CONFLICT_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.05
+    TEMPORARY_CONFLICT_MEDIATION_SAME_TEMPERAMENT_MULTIPLIER = 0.90
+    TEMPORARY_CONFLICT_MEDIATION_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.10
+    TEMPORARY_CONFLICT_IGNORE_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.05
     TEMPORARY_CONFLICT_SATISFACTION_PENALTY = 2
     TEMPORARY_CONFLICT_PENALTY_PROBABILITIES = {
         "mediate": {0: 0.00, 1: 0.20, 2: 0.05},
@@ -911,10 +916,14 @@ class CampingPlazaEngine:
             entry for entry in self.state.today_arrival_plan
             if entry.get("planned_day") == self.state.day
         ]
-        if len(entries) < 2 or random.random() >= self.TEMPORARY_CONFLICT_EVENT_PROBABILITY:
+        if len(entries) < 2:
             self.state.today_conflict_event = {"status": "no_event"}
             return
         npc_a, npc_b = random.sample(entries, 2)
+        conflict_probability = self._get_temporary_conflict_probability(npc_a, npc_b)
+        if random.random() >= conflict_probability:
+            self.state.today_conflict_event = {"status": "no_event"}
+            return
         trigger_turn = random.randint(
             max(npc_a["arrival_turn"], npc_b["arrival_turn"]), 5
         )
@@ -927,13 +936,46 @@ class CampingPlazaEngine:
             "ignore_result": self._roll_temporary_conflict_result(npc_a, npc_b, "ignore"),
         }
 
+    def _get_temporary_conflict_probability(self, npc_a: dict, npc_b: dict) -> float:
+        same_temperament = npc_a.get("temperament") == npc_b.get("temperament")
+        multiplier = (
+            self.TEMPORARY_CONFLICT_SAME_TEMPERAMENT_MULTIPLIER
+            if same_temperament
+            else self.TEMPORARY_CONFLICT_DIFFERENT_TEMPERAMENT_MULTIPLIER
+        )
+        return self.TEMPORARY_CONFLICT_EVENT_PROBABILITY * multiplier
+
+    def _get_temporary_conflict_penalty_probability(
+        self, npc: dict, other_npc: dict, choice: str
+    ) -> float:
+        probability = self.TEMPORARY_CONFLICT_PENALTY_PROBABILITIES[choice].get(
+            npc.get("temperament"), 0.0
+        )
+        same_temperament = npc.get("temperament") == other_npc.get("temperament")
+        if choice == "mediate":
+            multiplier = (
+                self.TEMPORARY_CONFLICT_MEDIATION_SAME_TEMPERAMENT_MULTIPLIER
+                if same_temperament
+                else self.TEMPORARY_CONFLICT_MEDIATION_DIFFERENT_TEMPERAMENT_MULTIPLIER
+            )
+        else:
+            multiplier = (
+                1.0
+                if same_temperament
+                else self.TEMPORARY_CONFLICT_IGNORE_DIFFERENT_TEMPERAMENT_MULTIPLIER
+            )
+        return min(1.0, probability * multiplier)
+
     def _roll_temporary_conflict_result(self, npc_a: dict, npc_b: dict, choice: str) -> dict:
-        probabilities = self.TEMPORARY_CONFLICT_PENALTY_PROBABILITIES[choice]
         return {
             "npc_a_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
-            if random.random() < probabilities.get(npc_a.get("temperament"), 0.0) else 0,
+            if random.random() < self._get_temporary_conflict_penalty_probability(
+                npc_a, npc_b, choice
+            ) else 0,
             "npc_b_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
-            if random.random() < probabilities.get(npc_b.get("temperament"), 0.0) else 0,
+            if random.random() < self._get_temporary_conflict_penalty_probability(
+                npc_b, npc_a, choice
+            ) else 0,
         }
 
     def get_current_temporary_conflict_event(self) -> Optional[dict]:
