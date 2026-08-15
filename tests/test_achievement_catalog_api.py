@@ -189,7 +189,7 @@ class AchievementCatalogApiTests(unittest.TestCase):
         mcp = self.client.get("/mcp/actions", params={"session_id": session_id}).json()
         submit_entry = next(
             item for item in mcp["available_actions"]
-            if item["action"] == "submit_turn_plan"
+            if item["action"] == "execute_turn_plan"
         )
         mcp_candidates = {
             item["action"]: item

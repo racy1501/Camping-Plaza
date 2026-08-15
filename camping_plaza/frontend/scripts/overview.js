@@ -55,6 +55,7 @@
     let latestPolledState = null;
     let replayStatePending = false;
     let eventsRenderDeferred = false;
+    let visibilityPollingBound = false;
     const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
     let sessionId = '';
 
@@ -96,6 +97,7 @@
     async function init() {
         cacheElements();
         setDisconnected();
+        bindVisibilityPolling();
         try {
             await initializeSession();
             fetchState();
@@ -220,9 +222,27 @@
         if (lastSeenEventSequence === null) {
             lastSeenEventSequence = maxEventSequence(state);
         }
-        if (statePollTimer === null) {
-            statePollTimer = window.setInterval(pollForPlayerEvents, 500);
+        if (document.hidden || statePollTimer !== null) return;
+        statePollTimer = window.setInterval(pollForPlayerEvents, 2000);
+    }
+
+    function stopEventPolling() {
+        if (statePollTimer !== null) {
+            window.clearInterval(statePollTimer);
+            statePollTimer = null;
         }
+    }
+
+    function bindVisibilityPolling() {
+        if (visibilityPollingBound) return;
+        visibilityPollingBound = true;
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopEventPolling();
+                return;
+            }
+            fetchState();
+        });
     }
 
     async function pollForPlayerEvents() {
