@@ -997,7 +997,10 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "submit_day_end_actions")
-        food_actions = actions[0].get("food_package_candidates", [])
+        food_actions = [
+            item for item in actions[0]["day_end_action_candidates"]
+            if item["action"] == "buy_food_package"
+        ]
 
         self.assertEqual(len(food_actions), 3)
         self.assertEqual(
@@ -1006,9 +1009,9 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         )
         for item in food_actions:
             package = CampingPlazaEngine.FOOD_PACKAGES[item["params"]["package_key"]]
-            self.assertIn(package["name"], item["description"])
-            self.assertIn(str(package["portions"]), item["description"])
-            self.assertIn(str(package["price"]), item["description"])
+            self.assertEqual(item["portions"], package["portions"])
+            self.assertEqual(item["cost"], package["price"])
+            self.assertTrue(item["enabled"])
 
     def test_mcp_actions_hide_turn6_food_preorder_after_success(self):
         self.engine.state.turn = 6
@@ -1464,16 +1467,19 @@ class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
 
 
 class McpGrowthActionTests(ApiPersistenceTestCase):
-    """Turn 6 日终批处理模式：submit_day_end_actions 携带紧凑候选信息"""
+    """Turn 6 日终批处理模式：统一候选携带可购买成长项目。"""
 
     def _growth_purchase_actions(self, actions):
-        """从 submit_day_end_actions 入口中提取 growth_candidates"""
+        """从 submit_day_end_actions 入口中提取成长项目候选。"""
         entry = next(
             (a for a in actions if a["action"] == "submit_day_end_actions"), None
         )
         if entry is None:
             return []
-        return entry.get("growth_candidates", [])
+        return [
+            candidate for candidate in entry.get("day_end_action_candidates", [])
+            if candidate["action"] == "purchase_growth_project"
+        ]
 
     def test_purchasable_project_appears_in_turn6(self):
         self.engine.state.turn = 6
@@ -1488,8 +1494,8 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
             if a["params"]["project_id"] == "tent_2"
         )
         self.assertEqual(tent2["params"], {"project_id": "tent_2"})
-        self.assertIn("2号帐篷", tent2["description"])
-        self.assertIn("600金币", tent2["description"])
+        self.assertEqual(tent2["cost"], 600)
+        self.assertTrue(tent2["enabled"])
 
         purchase_ids = [a["params"]["project_id"] for a in purchases]
         self.assertEqual(len(purchase_ids), len(set(purchase_ids)))
@@ -1568,11 +1574,14 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         entry = actions[0]
         self.assertEqual(entry["action"], "submit_day_end_actions")
 
-        # 紧凑候选包含所有日终能力
-        self.assertIn("greenery_candidate", entry)
-        self.assertIn("growth_candidates", entry)
-        purchase_ids = [p["params"]["project_id"] for p in entry.get("growth_candidates", [])]
-        self.assertIn("purchase_growth_project", entry.get("growth_candidates", [{}])[0].get("action", "") if entry.get("growth_candidates") else "")
+        candidates = entry["day_end_action_candidates"]
+        purchase_ids = [
+            candidate["params"]["project_id"]
+            for candidate in candidates
+            if candidate["action"] == "purchase_growth_project"
+        ]
+        self.assertTrue(purchase_ids)
+        self.assertIn("manage_greenery", [candidate["action"] for candidate in candidates])
         self.assertNotIn("upgrade_facility", entry.get("action", ""))
 
     def test_turn6_does_not_expose_legacy_upgrade_facility(self):
@@ -1606,8 +1615,8 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
             if a["params"]["project_id"] == "dining_lv1"
         )
         self.assertEqual(dining1["params"], {"project_id": "dining_lv1"})
-        self.assertIn("餐饮", dining1["description"])
-        self.assertIn("700金币", dining1["description"])
+        self.assertEqual(dining1["cost"], 700)
+        self.assertTrue(dining1["enabled"])
 
         self.assertTrue(all(
             a["action"] != "upgrade_facility"

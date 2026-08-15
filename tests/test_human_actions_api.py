@@ -331,7 +331,10 @@ class Turn6Tests(HumanActionsApiTestCase):
         self.engine.facilities["greenery"].greenery_satisfaction = 0.0
         self.engine.state.last_food_preorder_day = self.engine.state.day
         actions = self._actions()
-        self.assertEqual(actions["day_end_action_candidates"], [])
+        self.assertEqual(
+            [candidate["action"] for candidate in actions["day_end_action_candidates"]],
+            ["repay_debt"],
+        )
 
     def test_turn6_max_greenery_maintenance_is_disabled(self):
         self.engine.facilities["greenery"].level = 2

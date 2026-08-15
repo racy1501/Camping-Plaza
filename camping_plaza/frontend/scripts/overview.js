@@ -911,9 +911,10 @@
     }
 
     function actionKey(candidate) {
+        const action = candidate.action;
         return JSON.stringify({
-            action: candidate.action,
-            params: candidate.params || {}
+            action,
+            params: action === 'repay_debt' ? {} : (candidate.params || {})
         });
     }
 
@@ -934,7 +935,10 @@
         const total = selections.reduce((sum, item) => {
             const candidate = byKey.get(actionKey(item));
             if (!candidate || (greeneryUpgradeSelected && candidate.action === 'manage_greenery')) return sum;
-            return sum + Math.max(0, Number(candidate.cost) || 0);
+            const cost = candidate.action === 'repay_debt'
+                ? Number(item.params && item.params.amount) || 0
+                : Number(candidate.cost) || 0;
+            return sum + Math.max(0, cost);
         }, 0);
         const balance = Math.max(0, Number(currentState && currentState.balance) || 0);
         return { total, balance, shortfall: Math.max(0, total - balance), byKey, greeneryUpgradeSelected };
@@ -1176,7 +1180,9 @@
         if (!els.actionGrid) return;
         els.actionGrid.innerHTML = '';
         clearDayEndSubmit();
-        const allCandidates = ensureRepairCandidate(actions.day_end_action_candidates || []);
+        const allCandidates = Array.isArray(actions.day_end_action_candidates)
+            ? actions.day_end_action_candidates
+            : [];
         const candidates = allCandidates
             .filter(candidate => candidate.action !== 'purchase_growth_project');
         const greeneryUpgradeSelected = selectedDayEndActions.some(item => (
@@ -1189,7 +1195,7 @@
         renderDayEndSelectionSummary(actions);
 
         candidates.forEach(candidate => {
-            const requestAction = toRequestAction(candidate);
+            let requestAction = toRequestAction(candidate);
             const selectedIndex = selectedDayEndActions.findIndex(
                 item => actionKey(item) === actionKey(requestAction)
             );
@@ -1214,6 +1220,26 @@
             btn.addEventListener('click', () => {
                 if (isSelected) {
                     selectedDayEndActions.splice(selectedIndex, 1);
+                } else if (candidate.action === 'repay_debt') {
+                    const amountText = window.prompt(
+                        `请输入还款金额（1-${candidate.max_amount}）`,
+                        String(candidate.max_amount || '')
+                    );
+                    if (amountText === null) return;
+                    const amount = Number(amountText);
+                    if (
+                        !Number.isInteger(amount)
+                        || amount < candidate.min_amount
+                        || amount > candidate.max_amount
+                    ) {
+                        setActionMessage(`还款金额必须是 ${candidate.min_amount}-${candidate.max_amount} 的整数`, 'action-error');
+                        return;
+                    }
+                    requestAction = {
+                        action: candidate.action,
+                        params: { amount }
+                    };
+                    selectedDayEndActions.push(requestAction);
                 } else if (candidate.action === 'buy_food_package') {
                     selectedDayEndActions = selectedDayEndActions.filter(
                         item => item.action !== 'buy_food_package'
@@ -1299,7 +1325,9 @@
         const projects = growth && Array.isArray(growth.projects) ? growth.projects : [];
         const purchaseCandidates = (currentActions && currentActions.day_end_action_candidates || [])
             .filter(candidate => candidate.action === 'purchase_growth_project');
-        const allCandidates = ensureRepairCandidate(currentActions && currentActions.day_end_action_candidates || []);
+        const allCandidates = Array.isArray(currentActions && currentActions.day_end_action_candidates)
+            ? currentActions.day_end_action_candidates
+            : [];
         const budget = dayEndBudgetInfo(allCandidates);
         const routes = [
             ['tent', '帐篷'],

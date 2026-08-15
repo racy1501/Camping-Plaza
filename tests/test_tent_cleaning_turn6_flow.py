@@ -99,8 +99,15 @@ class Turn6McpFlowTests(unittest.TestCase):
         self.assertEqual(response["next_calls"], [])
         self.assertEqual(response["available_actions"][0]["action"], "submit_day_end_actions")
         entry = response["available_actions"][0]
-        self.assertIn("repayment_candidate", entry)
-        self.assertEqual(entry["clean_candidates"][0]["params"], {"tent_ids": [1]})
+        candidates = entry["day_end_action_candidates"]
+        self.assertTrue(any(
+            item["action"] == "repay_debt" for item in candidates
+        ))
+        self.assertTrue(any(
+            item["action"] == "clean_tents"
+            and item["params"] == {"tent_ids": [1]}
+            for item in candidates
+        ))
         self.assertEqual(response["decision_summary"]["broken_tents"][0]["tent_id"], 1)
         self.assertEqual(response["decision_summary"]["food_discarded_portions"], 3)
         self.assertIn("食材已废弃", response["decision_summary"]["alerts"][0])

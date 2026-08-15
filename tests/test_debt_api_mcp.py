@@ -1,8 +1,7 @@
-"""启动负债 API / MCP 链路定向测试。"""
+"""Turn 6 日终候选与债务主链测试。"""
 
 import sys
 import unittest
-from unittest import mock
 
 sys.path.insert(0, "camping_plaza")
 
@@ -16,84 +15,120 @@ class DebtApiMcpTests(unittest.TestCase):
         self.engine.state.today_conflict_event = None
         self.original_engine = game_api.engine
         game_api.engine = self.engine
+        self.engine.state.turn = 6
+        self.engine.state.balance = 10000
+        self.engine.tents[1].status = "broken"
+        self.engine.tents[2].is_unlocked = True
+        self.engine.tents[2].status = "cleaning"
+        self.engine.facilities["greenery"].greenery_satisfaction = 1.0
+        self.engine.state.successful_dining_groups = 8
 
     def tearDown(self):
         game_api.engine = self.original_engine
 
-    def _action_names(self):
-        return [item["action"] for item in game_api.mcp_available_actions()["available_actions"]]
+    def _human_candidates(self):
+        return game_api.get_human_actions()["day_end_action_candidates"]
 
-    def test_repay_is_hidden_before_turn6(self):
-        for turn in (1, 2, 3, 4, 5):
-            with self.subTest(turn=turn):
-                self.engine.state.turn = turn
-                self.engine.state.day_end_completed = False
-                self.assertNotIn("repay_debt", self._action_names())
+    def _mcp_candidates(self):
+        entry = game_api.mcp_available_actions()["available_actions"][0]
+        if entry["action"] == "start_next_day":
+            return []
+        self.assertEqual(entry["action"], "submit_day_end_actions")
+        return entry["day_end_action_candidates"]
 
-    def test_turn6_places_repay_inside_day_end_action(self):
-        self.engine.state.turn = 6
-        self.engine.state.day_end_completed = False
+    @staticmethod
+    def _facts(candidates):
+        return [
+            {
+                key: candidate.get(key)
+                for key in (
+                    "action", "params", "required_params", "cost", "enabled", "reason",
+                    "min_amount", "max_amount", "portions",
+                )
+                if key in candidate
+            }
+            for candidate in candidates
+        ]
 
-        actions = game_api.mcp_available_actions()["available_actions"]
-        names = [item["action"] for item in actions]
+    def test_turn6_human_and_mcp_share_all_day_end_candidate_facts(self):
+        human = self._human_candidates()
+        mcp = self._mcp_candidates()
 
-        self.assertEqual(names, ["submit_day_end_actions"])
-        day_end = actions[0]
-        repay = day_end["repayment_candidate"]
-        self.assertEqual(repay["params"], {"amount": None})
-        self.assertEqual(repay["required_params"][0]["name"], "amount")
-        self.assertNotIn("启动负债", repay["description"])
-        self.assertIn("偿还欠款", repay["description"])
-        self.assertIn("不占经营决策点", repay["description"])
+        self.assertEqual(self._facts(human), self._facts(mcp))
+        actions = [candidate["action"] for candidate in mcp]
+        self.assertIn("repay_debt", actions)
+        self.assertIn("clean_tents", actions)
+        self.assertIn("repair_tent", actions)
+        self.assertIn("buy_food_package", actions)
+        self.assertIn("manage_greenery", actions)
+        self.assertIn("purchase_growth_project", actions)
 
-    def test_completed_day_end_hides_repay(self):
-        self.engine.state.turn = 6
-        self.engine.state.day_end_completed = True
-        self.assertNotIn("repay_debt", self._action_names())
-        self.assertEqual(self._action_names(), ["start_next_day"])
-
-    def test_api_rejects_repayment_outside_turn6(self):
-        self.engine.state.turn = 5
-        with self.assertRaises(game_api.HTTPException) as context:
-            game_api.do_action(game_api.ActionRequest(
-                action="repay_debt", params={"amount": 100}
-            ))
-        self.assertEqual(context.exception.detail["error_code"], "repayment_turn_not_allowed")
-
-    def test_api_repayment_uses_engine_validation_and_updates_state(self):
-        self.engine.state.turn = 6
-        self.engine.state.day_end_completed = False
-        self.engine.state.balance = 500
-
-        with mock.patch.object(self.engine, "save_state") as save_state:
-            result = game_api.do_action(game_api.ActionRequest(
-                action="repay_debt", params={"amount": 200}
-            ))
-
-        self.assertTrue(result["success"])
-        self.assertEqual(self.engine.state.balance, 300)
-        self.assertEqual(self.engine.state.debt_remaining, 5800)
-        save_state.assert_called_once()
-
-    def test_api_invalid_amount_is_not_truncated(self):
-        self.engine.state.turn = 6
-        self.engine.state.balance = 500
-        before = (self.engine.state.balance, self.engine.state.debt_remaining)
-
-        result = game_api.do_action(game_api.ActionRequest(
-            action="repay_debt", params={"amount": 600}
-        ))
-
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "repayment_exceeds_balance")
-        self.assertEqual(
-            (self.engine.state.balance, self.engine.state.debt_remaining), before
+    def test_repayment_candidate_is_a_day_end_action_with_shared_conditions(self):
+        human_repay = next(
+            candidate for candidate in self._human_candidates()
+            if candidate["action"] == "repay_debt"
+        )
+        mcp_repay = next(
+            candidate for candidate in self._mcp_candidates()
+            if candidate["action"] == "repay_debt"
         )
 
+        self.assertEqual(human_repay["params"], {"amount": None})
+        self.assertEqual(human_repay["required_params"][0]["name"], "amount")
+        self.assertEqual(human_repay["max_amount"], self.engine.state.debt_remaining)
+        self.assertTrue(human_repay["enabled"])
+        self.assertEqual(
+            self._facts([human_repay]), self._facts([mcp_repay])
+        )
+
+        self.engine.state.balance = 0
+        disabled_human = next(
+            candidate for candidate in self._human_candidates()
+            if candidate["action"] == "repay_debt"
+        )
+        disabled_mcp = next(
+            candidate for candidate in self._mcp_candidates()
+            if candidate["action"] == "repay_debt"
+        )
+        self.assertFalse(disabled_human["enabled"])
+        self.assertEqual(disabled_human["reason"], "金币不足")
+        self.assertEqual(self._facts([disabled_human]), self._facts([disabled_mcp]))
+
+    def test_turn6_summaries_proactively_expose_debt_facts(self):
+        human_summary = game_api.get_human_actions()["decision_summary"]
+        mcp_summary = game_api.mcp_available_actions()["decision_summary"]
+        for summary in (human_summary, mcp_summary):
+            self.assertEqual(summary["debt_remaining"], self.engine.state.debt_remaining)
+            self.assertEqual(
+                summary["repayment_deadline_day"],
+                self.engine.state.repayment_deadline_day,
+            )
+            self.assertEqual(summary["balance"], self.engine.state.balance)
+            self.assertIn("today_net_income", summary)
+
+    def test_repay_debt_submits_with_other_day_end_actions(self):
+        result = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[
+            game_api.ActionRequest(
+                action="repay_debt", params={"amount": 200}
+            ),
+            game_api.ActionRequest(
+                action="clean_tents", params={"tent_ids": [2]}
+            ),
+        ]))
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["day_end_completed"])
+        results = {item["action"]: item for item in result["results"]}
+        self.assertTrue(results["repay_debt"]["success"])
+        self.assertTrue(results["clean_tents"]["success"])
+        self.assertEqual(self.engine.state.debt_remaining, 5800)
+
+    def test_completed_day_end_hides_candidates_in_both_catalogs(self):
+        self.engine.state.day_end_completed = True
+        self.assertEqual(self._human_candidates(), [])
+        self.assertEqual(self._mcp_candidates(), [])
+
     def test_query_debt_is_read_only(self):
-        self.engine.state.turn = 6
-        self.engine.state.day_end_completed = False
-        self.engine.state.decisions_left = 2
         before = (
             self.engine.state.day,
             self.engine.state.turn,
@@ -115,21 +150,6 @@ class DebtApiMcpTests(unittest.TestCase):
             ),
             before,
         )
-
-    def test_mcp_state_and_ordinary_action_do_not_add_full_debt_summary(self):
-        state = game_api.mcp_state()
-        self.assertNotIn("debt_remaining", state)
-        self.assertNotIn("initial_debt", state)
-
-        self.engine.state.turn = 6
-        self.engine.state.day_end_completed = False
-        self.engine.state.balance = 500
-        with mock.patch.object(self.engine, "save_state"):
-            result = game_api.do_action(game_api.ActionRequest(
-                action="repay_debt", params={"amount": 100}
-            ))
-        self.assertIn("debt_after", result)
-        self.assertNotIn("is_overdue", result)
 
 
 if __name__ == "__main__":
