@@ -1194,7 +1194,7 @@ class HotSpringStateOutputTests(ApiPersistenceTestCase):
         }
 
         self.assertEqual(game_api.get_state()["hot_spring"], expected)
-        self.assertEqual(game_api.get_display_state()["data"]["hot_spring"], expected)
+        self.assertEqual(game_api.mcp_state()["hot_spring"], expected)
         self.assertEqual(game_api.mcp_state()["hot_spring"], expected)
 
     def test_remaining_capacity_uses_authoritative_capacity(self):
@@ -1226,7 +1226,7 @@ class HotSpringStateOutputTests(ApiPersistenceTestCase):
 
         with mock.patch.object(self.engine, "save_state") as save_mock:
             game_api.get_state()
-            game_api.get_display_state()
+            game_api.mcp_state()
             game_api.mcp_state()
             save_mock.assert_not_called()
 
@@ -1281,7 +1281,7 @@ class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
         }
 
         self.assertEqual(game_api.get_state()["day_campsite"], expected)
-        self.assertEqual(game_api.get_display_state()["data"]["day_campsite"], expected)
+        self.assertEqual(game_api.mcp_state()["day_campsite"], expected)
         self.assertEqual(game_api.mcp_state()["day_campsite"], expected)
 
     def test_read_only_outputs_do_not_save_or_mutate_and_keep_hot_spring(self):
@@ -1292,7 +1292,7 @@ class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
 
         with mock.patch.object(self.engine, "save_state") as save_mock:
             game_api.get_state()
-            game_api.get_display_state()
+            game_api.mcp_state()
             game_api.mcp_state()
             save_mock.assert_not_called()
 
@@ -1436,7 +1436,7 @@ class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
 
         expected = game_api.get_state()["arrival_plan"]
         self.assertEqual(
-            game_api.get_display_state()["data"]["arrival_plan"],
+            game_api.mcp_state()["arrival_plan"],
             expected,
         )
         self.assertEqual(game_api.mcp_state()["arrival_plan"], expected)
@@ -1499,7 +1499,7 @@ class ArrivalPlanSummaryTests(ApiPersistenceTestCase):
         with mock.patch.object(self.engine, "save_state") as save_mock:
             with mock.patch.object(self.engine, "_ensure_today_arrival_plan") as ensure_mock:
                 game_api.get_state()
-                game_api.get_display_state()
+                game_api.mcp_state()
                 game_api.mcp_state()
                 save_mock.assert_not_called()
                 ensure_mock.assert_not_called()

@@ -57,8 +57,6 @@ python game_api.py
 
 ### 状态查询
 - `GET /api/state` — 完整游戏状态
-- `GET /api/state/display` — 展示用文本+数据
-- `GET /api/map` — 地图位置数据（帐篷、设施、NPC坐标）
 
 ### MCP专用
 - `GET /mcp/state` — AI 决策需要的精简状态
@@ -152,7 +150,6 @@ python game_api.py
 2. 调用 `GET /mcp/actions` 获取可用操作
 3. AI 决策后调用 `POST /api/action` 执行操作
 4. 调用 `POST /api/turn/advance` 推进回合
-5. 围观前端调用 `GET /api/map` 更新地图显示
 
 ## License
 

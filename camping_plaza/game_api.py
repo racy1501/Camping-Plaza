@@ -957,77 +957,6 @@ def get_human_actions(session_id: Optional[str] = None):
     return catalog
 
 
-@app.get("/api/state/display")
-def get_display_state(session_id: Optional[str] = None):
-    """获取展示用文本状态（给围观前端用）"""
-    eng = get_engine(session_id)
-    state = eng.get_full_state()
-    state["hot_spring"] = _get_hot_spring_status(eng)
-    state["day_campsite"] = _get_day_campsite_status(eng)
-    state["arrival_plan"] = _get_arrival_plan_summary(eng)
-    state["today_events"] = list(eng.state.today_events)
-    return {
-        "text": eng.get_state_for_display(),
-        "data": state
-    }
-
-
-@app.get("/api/map")
-def get_map_data(session_id: Optional[str] = None):
-    """获取地图数据（帐篷位置、设施位置、NPC位置）"""
-    eng = get_engine(session_id)
-    state = eng.get_full_state()
-
-    # 地图坐标（相对于600x800画布）
-    map_positions = {
-        "tents": {
-            "1": {"x": 120, "y": 150, "capacity": 2},
-            "2": {"x": 280, "y": 100, "capacity": 2},
-            "3": {"x": 450, "y": 180, "capacity": 3},
-            "4": {"x": 150, "y": 380, "capacity": 3},
-            "5": {"x": 350, "y": 320, "capacity": 4},
-            "6": {"x": 480, "y": 450, "capacity": 5}
-        },
-        "hot_spring": {"x": 80, "y": 250},
-        "dining": {"x": 300, "y": 500},
-        "entertainment_a": {"x": 180, "y": 600},
-        "entertainment_b": {"x": 420, "y": 600},
-        "gate": {"x": 300, "y": 720}
-    }
-
-    # NPC位置映射
-    npc_positions = []
-    for npc in state["active_npcs"]:
-        pos = {"id": npc["id"], "group_size": npc["group_size"]}
-
-        if npc["location"].startswith("tent_"):
-            tent_id = npc["location"].split("_")[1]
-            tent_pos = map_positions["tents"].get(tent_id, {"x": 300, "y": 400})
-            pos["x"] = tent_pos["x"] + 15
-            pos["y"] = tent_pos["y"] + 15
-        elif npc["location"] == "dining":
-            pos["x"] = map_positions["dining"]["x"] + 15
-            pos["y"] = map_positions["dining"]["y"] + 15
-        elif npc["location"] == "entertainment":
-            pos["x"] = map_positions["entertainment_a"]["x"] + 15
-            pos["y"] = map_positions["entertainment_a"]["y"] + 15
-        elif npc["location"] == "gate":
-            pos["x"] = map_positions["gate"]["x"]
-            pos["y"] = map_positions["gate"]["y"]
-        else:
-            pos["x"] = 300
-            pos["y"] = 400
-
-        npc_positions.append(pos)
-
-    return {
-        "positions": map_positions,
-        "npcs": npc_positions,
-        "day": state["day"],
-        "turn": state["turn"]
-    }
-
-
 # =============================================================================
 # 游戏操作接口
 # =============================================================================
@@ -1319,7 +1248,6 @@ def mcp_available_actions(session_id: Optional[str] = None):
     eng = get_engine(session_id)
     state = eng.get_full_state()
     actions = []
-    next_calls = []
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
 
     # 存在待清洁帐篷时提供批量清洁操作（营业和日终阶段均可）
@@ -1424,7 +1352,6 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 "endpoint": "/mcp/achievements",
             },
         ],
-        "next_calls": next_calls,
     }
     if state["turn"] == 6 and not eng.state.day_end_completed:
         response["decision_summary"] = eng.get_turn6_decision_summary()

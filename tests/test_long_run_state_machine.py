@@ -500,8 +500,6 @@ class DeterministicScenarioTests(LongRunTestCase):
         rows_before = self._snapshot_rows()
 
         game_api.get_state()
-        game_api.get_display_state()
-        game_api.get_map_data()
         game_api.mcp_state()
         game_api.mcp_available_actions()
 

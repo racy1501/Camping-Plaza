@@ -96,7 +96,6 @@ class Turn6McpFlowTests(unittest.TestCase):
         })
 
         response = game_api.mcp_available_actions()
-        self.assertEqual(response["next_calls"], [])
         self.assertEqual(response["available_actions"][0]["action"], "submit_day_end_actions")
         entry = response["available_actions"][0]
         candidates = entry["day_end_action_candidates"]
