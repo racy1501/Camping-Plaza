@@ -1233,7 +1233,6 @@ def mcp_state(session_id: Optional[str] = None):
         "turn": state["turn"],
         "balance": state["balance"],
         "average_rating": state["average_rating"],
-        "decisions_left": state["decisions_left"],
         "tents": {
             tid: {
                 "status": t["status"],
@@ -1249,22 +1248,62 @@ def mcp_state(session_id: Optional[str] = None):
             for k, v in state["facilities"].items()
         },
         "reservations": state["reservations"],
-        "today_income": state["today_income"],
-        "hot_spring": _get_hot_spring_status(eng),
-        "day_campsite": _get_day_campsite_status(eng),
-        "arrival_plan": _get_arrival_plan_summary(eng),
         "greenery": state["greenery"],
-        "planning_available": planning_available,
-        "plan_submitted": plan_submitted,
-        "plan_target_turn": plan_target_turn,
-        "turn_plan": _get_turn_plan_summary(eng),
-        "next_turn_checkout_tents": eng.get_next_turn_checkout_tents(),
-        "day_end_completed": eng.state.day_end_completed,
-        "today_events": list(eng.state.today_events),
     }
-    waiting_tent_ids = eng.get_waiting_cleaning_checkin_tent_ids()
+    if state["turn"] in (2, 3, 4, 5):
+        response.update({
+            "decisions_left": state["decisions_left"],
+            "planning_available": planning_available,
+            "plan_submitted": plan_submitted,
+        })
+        if plan_target_turn is not None:
+            response["plan_target_turn"] = plan_target_turn
+        if plan_target_turn is not None:
+            turn_plan = _get_turn_plan_summary(eng)
+            if turn_plan is not None:
+                response["turn_plan"] = turn_plan
+
+    arrival_plan = _get_arrival_plan_summary(eng)
+    if (
+        arrival_plan["total_groups"]
+        or arrival_plan["pending_groups"]
+        or arrival_plan["arrived_groups"]
+        or arrival_plan["turned_away_full_groups"]
+        or arrival_plan["reservation_day_groups"]
+        or arrival_plan["reservation_overnight_groups"]
+    ):
+        response["arrival_plan"] = arrival_plan
+
     if state["turn"] != 6:
         response["food_stock"] = state["food_stock"]
+        response["today_income"] = state["today_income"]
+
+    hot_spring = _get_hot_spring_status(eng)
+    if (
+        hot_spring["built"]
+        or hot_spring["people_served_today"]
+        or hot_spring["today_income"]
+    ):
+        response["hot_spring"] = hot_spring
+
+    day_campsite = _get_day_campsite_status(eng)
+    if (
+        day_campsite["groups_served_today"]
+        or day_campsite["remaining_groups_today"] != day_campsite["group_capacity_per_day"]
+    ):
+        response["day_campsite"] = day_campsite
+
+    next_turn_checkout_tents = eng.get_next_turn_checkout_tents()
+    if next_turn_checkout_tents:
+        response["next_turn_checkout_tents"] = next_turn_checkout_tents
+
+    if state["turn"] == 6:
+        response["day_end_completed"] = eng.state.day_end_completed
+
+    if eng.state.today_events:
+        response["today_events"] = list(eng.state.today_events)
+
+    waiting_tent_ids = eng.get_waiting_cleaning_checkin_tent_ids()
     if waiting_tent_ids:
         response["turn_alerts"] = [
             "有客人正在等待入住，请及时清洁待清洁帐篷。"

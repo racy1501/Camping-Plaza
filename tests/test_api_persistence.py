@@ -753,6 +753,40 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
         )
 
 class McpTurnPlanTests(ApiPersistenceTestCase):
+    def test_mcp_state_turn1_omits_turn_specific_and_empty_fields(self):
+        self.engine.state.turn = 1
+        self.engine.state.today_events = []
+
+        state = game_api.mcp_state()
+
+        for field in (
+            "decisions_left",
+            "planning_available",
+            "plan_submitted",
+            "plan_target_turn",
+            "turn_plan",
+            "day_end_completed",
+            "hot_spring",
+            "day_campsite",
+            "next_turn_checkout_tents",
+            "today_events",
+            "turn_alerts",
+        ):
+            self.assertNotIn(field, state)
+        self.assertIn("food_stock", state)
+        self.assertIn("today_income", state)
+
+    def test_mcp_state_turn6_omits_income_and_food_stock(self):
+        self.engine.state.turn = 6
+
+        state = game_api.mcp_state()
+
+        self.assertIn("day_end_completed", state)
+        self.assertNotIn("today_income", state)
+        self.assertNotIn("food_stock", state)
+        for field in ("day", "turn", "balance", "average_rating", "tents", "facilities", "reservations", "greenery"):
+            self.assertIn(field, state)
+
     def test_mcp_state_exposes_food_stock(self):
         self.engine.state.food_stock = 9
 
@@ -781,17 +815,18 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertNotIn("phase", state)
         self.assertNotIn("available_actions", state)
 
+        self.assertIn("reservations", state)
         for field in [
             "hot_spring",
             "day_campsite",
-            "arrival_plan",
-            "reservations",
             "planning_available",
             "plan_submitted",
             "plan_target_turn",
+            "turn_plan",
             "next_turn_checkout_tents",
         ]:
-            self.assertIn(field, state)
+            self.assertNotIn(field, state)
+        self.assertIn("arrival_plan", state)
 
         self.assertEqual(self.engine.facilities["greenery"].greenery_satisfaction, 6.5)
         self.assertTrue(self.engine.state.greenery_processed_today)
@@ -804,7 +839,8 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         state = game_api.mcp_state()
         self.assertTrue(state["planning_available"])
         self.assertFalse(state["plan_submitted"])
-        self.assertIsNone(state["plan_target_turn"])
+        self.assertNotIn("plan_target_turn", state)
+        self.assertNotIn("turn_plan", state)
         self.assertNotIn("pending_turn_plan", state)
         self.assertNotIn("free_actions", state)
         self.assertNotIn("actions", state)
@@ -813,8 +849,9 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         state = game_api.mcp_state()
         self.assertTrue(state["planning_available"])
         self.assertFalse(state["plan_submitted"])
-        self.assertIsNone(state["plan_target_turn"])
-        self.assertEqual(state["next_turn_checkout_tents"], [])
+        self.assertNotIn("plan_target_turn", state)
+        self.assertNotIn("turn_plan", state)
+        self.assertNotIn("next_turn_checkout_tents", state)
 
     def test_mcp_state_exposes_next_turn_checkout_tents(self):
         self.engine.state.turn = 2
@@ -1764,18 +1801,20 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
 class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
     """mcp/state 应提供已提交 Turn Plan 的只读安全摘要"""
 
-    def test_no_turn_plan_returns_null(self):
+    def test_no_turn_plan_is_omitted(self):
         self.engine.state.pending_turn_plan = None
         self.engine.state.turn = 2
 
         state = game_api.mcp_state()
 
-        self.assertIsNone(state["turn_plan"])
+        self.assertNotIn("turn_plan", state)
         self.assertFalse(state["plan_submitted"])
-        self.assertIsNone(state["plan_target_turn"])
+        self.assertNotIn("plan_target_turn", state)
         self.assertTrue(state["planning_available"])
 
     def test_full_safe_summary(self):
+        self.engine.state.day = 7
+        self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
             "target_day": 7,
             "target_turn": 3,
@@ -1808,6 +1847,8 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         )
 
     def test_whitelist_filters_unknown_fields_and_actions(self):
+        self.engine.state.day = 1
+        self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
             "target_day": 1,
             "target_turn": 3,
@@ -1853,6 +1894,8 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         self.assertNotIn("secret", dumped)
 
     def test_no_shared_mutable_reference(self):
+        self.engine.state.day = 1
+        self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
             "target_day": 1,
             "target_turn": 3,
