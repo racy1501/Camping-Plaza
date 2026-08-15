@@ -179,8 +179,8 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
             )
 
         self.assertTrue(result["success"])
-        self.assertFalse(result["day_end_completed"])
-        self.assertEqual(result["turn"], 1)
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(result["turn"], 6)
         self.assertEqual(len(result["results"]), 1)
         item = result["results"][0]
         self.assertTrue(item["success"])
@@ -482,7 +482,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
             restored.state.food_stock,
             opening_stock + CampingPlazaEngine.FOOD_PACKAGES["medium"]["portions"],
         )
-        self.assertEqual(restored.state.last_food_preorder_day, restored.state.day - 1)
+        self.assertEqual(restored.state.last_food_preorder_day, restored.state.day)
 
         repeat = restored.buy_food_package("small")
         self.assertFalse(repeat["success"])
@@ -734,7 +734,7 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
             ])
         )
         self.assertTrue(first["success"])
-        self.assertFalse(first["day_end_completed"])
+        self.assertTrue(first["day_end_completed"])
 
         second = game_api.submit_day_end(
             game_api.DayEndRequest(day_end_actions=[
@@ -743,7 +743,7 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
             ])
         )
         self.assertFalse(second["success"])
-        self.assertEqual(second["error_code"], "day_end_not_available")
+        self.assertEqual(second["error_code"], "day_end_already_completed")
         self.assertEqual(
             self.engine.state.food_stock,
             opening_stock + CampingPlazaEngine.FOOD_PACKAGES["small"]["portions"],
@@ -949,6 +949,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertNotIn("improve_service", action_names)
 
         self._plan()
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         actions = game_api.mcp_available_actions()["available_actions"]
         action_names = [item["action"] for item in actions]
         self.assertIn("submit_turn_plan", action_names)
@@ -967,16 +968,15 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertNotIn("clean_tents", action_names)
         self.assertNotIn("new_day", action_names)
 
-    def test_mcp_actions_hide_start_next_day_in_recovery_state(self):
+    def test_mcp_actions_expose_start_next_day_in_recovery_state(self):
         self.engine.state.turn = 6
         self.engine.state.day_end_completed = True
 
         actions = game_api.mcp_available_actions()
 
         self.assertTrue(actions["day_end_completed"])
-        self.assertEqual(actions["available_actions"], [])
-
-        # /api/day/start 兼容恢复入口仍由专门测试覆盖，MCP 不再包装它。
+        self.assertEqual(actions["available_actions"][0]["action"], "start_next_day")
+        self.assertEqual(actions["available_actions"][0]["endpoint"], "/api/day/start")
 
     def test_mcp_actions_hide_facility_upgrades_at_lv2(self):
         self.engine.state.turn = 6
@@ -1022,7 +1022,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0]["action"], "advance_turn")
+        self.assertEqual(actions[0]["action"], "start_next_day")
 
     def test_mcp_plan_description_mentions_food_purchase_action(self):
         self.engine.state.turn = 2
@@ -1105,6 +1105,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_turn2_repair_candidates_disappear_after_all_repaired(self):
         """修好全部 broken 后维修候选消失"""
         self.engine.state.turn = 2
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         self.engine.tents[1].status = "broken"
         self.engine.tents[3].is_unlocked = True
         self.engine.tents[3].status = "broken"
@@ -1908,18 +1909,12 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self._reach_turn6()
         result = self._day_end()
         self.assertTrue(result["success"])
-        self.assertFalse(result["day_end_completed"])
-        self.assertEqual(result["day"], 2)
-        self.assertEqual(result["turn"], 1)
-        self.assertEqual(self.engine.state.day, 2)
-        self.assertEqual(self.engine.state.turn, 1)
-        self.assertFalse(self.engine.state.day_end_completed)
-        self.assertIsNotNone(self.engine.state.previous_day_summary)
-
-        opening_actions = game_api._build_human_action_catalog(self.engine)
-        self.assertEqual(opening_actions["primary_action"]["action"], "advance_turn")
-        game_api.advance_turn()
-        self.assertEqual(self.engine.state.turn, 2)
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(result["day"], 1)
+        self.assertEqual(result["turn"], 6)
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertTrue(self.engine.state.day_end_completed)
 
     def test_mixed_success_failure_results_preserved_and_returns_200(self):
         self._reach_turn6()
@@ -1934,8 +1929,8 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertTrue(result["results"][0]["success"])   # buy_food_package
         self.assertFalse(result["results"][1]["success"])  # repair_tent 未损坏
         self.assertTrue(result["results"][2]["success"])   # manage_greenery
-        self.assertEqual(self.engine.state.day, 2)
-        self.assertEqual(self.engine.state.turn, 1)
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
         # 单项业务失败仍保留在 results，整体 200
 
     def test_day_end_rejects_multiple_food_packages_before_processing(self):
@@ -1968,8 +1963,8 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertTrue(result["success"])
         self.assertTrue(result["results"][0]["success"])
         self.assertTrue(result["results"][1]["success"])
-        self.assertFalse(self.engine.state.day_end_completed)
-        self.assertEqual(self.engine.state.turn, 1)
+        self.assertTrue(self.engine.state.day_end_completed)
+        self.assertEqual(self.engine.state.turn, 6)
 
     def test_day_end_allows_single_food_package(self):
         self._reach_turn6()
@@ -1999,9 +1994,9 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertTrue(first["success"])
         second = self._day_end()
         self.assertFalse(second["success"])
-        self.assertEqual(second["error_code"], "day_end_not_available")
-        self.assertEqual(self.engine.state.day, 2)
-        self.assertEqual(self.engine.state.turn, 1)
+        self.assertEqual(second["error_code"], "day_end_already_completed")
+        self.assertEqual(self.engine.state.day, 1)
+        self.assertEqual(self.engine.state.turn, 6)
 
     def test_start_before_completion_rejected(self):
         self._reach_turn6()
@@ -2022,7 +2017,7 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.turn, 1)
         self.assertFalse(self.engine.state.day_end_completed)
 
-    def test_day_end_submission_runs_management_and_growth_then_starts_new_day(self):
+    def test_day_end_submission_runs_management_and_growth_before_confirmation(self):
         self._reach_turn6()
         self.engine.state.day = 2
         self.engine.state.balance = 2000
@@ -2035,26 +2030,29 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertTrue(result["success"])
         self.assertTrue(all(item["success"] for item in result["results"]))
         self.assertTrue(self.engine.tents[2].is_unlocked)
-        self.assertEqual(self.engine.state.day, 3)
-        self.assertEqual(self.engine.state.turn, 1)
-        self.assertFalse(self.engine.state.day_end_completed)
+        self.assertEqual(self.engine.state.day, 2)
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertTrue(self.engine.state.day_end_completed)
 
-    def test_save_and_restore_after_day_end_submission_starts_new_day(self):
-        """日终提交与跨日合并后，保存恢复应停在新一天 Turn 1。"""
+    def test_save_and_restore_after_day_end_submission_waits_for_confirmation(self):
         self._reach_turn6()
         self._day_end()
-        self.assertFalse(self.engine.state.day_end_completed)
+        self.assertTrue(self.engine.state.day_end_completed)
 
         restored = self._new_engine_from_db()
-        self.assertEqual(restored.state.day, 2)
-        self.assertEqual(restored.state.turn, 1)
-        self.assertFalse(restored.state.day_end_completed)
+        self.assertEqual(restored.state.day, 1)
+        self.assertEqual(restored.state.turn, 6)
+        self.assertTrue(restored.state.day_end_completed)
 
-        # 恢复后不能重复执行上一日的日终提交。
+        # 恢复后不能重复执行同一日的日终提交，但可以确认跨日。
         game_api.engine = restored
         dup = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[]))
         self.assertFalse(dup["success"])
-        self.assertEqual(dup["error_code"], "day_end_not_available")
+        self.assertEqual(dup["error_code"], "day_end_already_completed")
+        next_day = game_api.start_next_day()
+        self.assertTrue(next_day["success"])
+        self.assertEqual(restored.state.day, 2)
+        self.assertEqual(restored.state.turn, 1)
 
 
 class EventHistoryStateOutputTests(ApiPersistenceTestCase):

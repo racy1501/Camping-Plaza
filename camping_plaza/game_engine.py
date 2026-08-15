@@ -29,6 +29,7 @@ class Tent:
     capacity: int
     is_unlocked: bool = False
     status: str = "available"  # available, occupied, cleaning, broken, reserved
+    needs_cleaning: bool = False
     occupied_by: Optional[int] = None  # NPC组ID
     next_breakdown_turn: int = 0
 
@@ -2903,6 +2904,7 @@ class CampingPlazaEngine:
             tent.status = "broken"
         else:
             tent.status = "cleaning"
+        tent.needs_cleaning = True
         tent.occupied_by = None
         npc.location = "leaving"
         npc.has_left = True
@@ -3529,6 +3531,7 @@ class CampingPlazaEngine:
                 tent.status = "reserved"
             else:
                 tent.status = "available"
+            tent.needs_cleaning = False
             cleaned.append(tid)
 
         return {
@@ -3536,6 +3539,62 @@ class CampingPlazaEngine:
             "message": f"已清洁{cleaned}号帐篷",
             "cleaned_tent_ids": cleaned
         }
+
+    def get_waiting_cleaning_checkin_tent_ids(self) -> list[int]:
+        """返回本 Turn 已到达、正等待清洁帐篷的预约客目标。"""
+        waiting_tent_ids = set()
+        for entry in self.state.today_arrival_plan:
+            if (
+                entry.get("planned_day") != self.state.day
+                or entry.get("arrival_turn") != self.state.turn
+                or entry.get("arrival_status") != "pending"
+                or entry.get("source") != "reservation"
+                or entry.get("visit_type") != "overnight"
+            ):
+                continue
+            tent_id = entry.get("tent_id")
+            tent = self.tents.get(tent_id)
+            if tent is not None and (tent.needs_cleaning or tent.status == "cleaning"):
+                waiting_tent_ids.add(tent.id)
+        return sorted(waiting_tent_ids)
+
+    def get_turn6_decision_summary(self) -> dict:
+        """返回只影响当前日终选择的紧凑摘要。"""
+        income_total = sum(self.state.today_income.values())
+        expense_total = sum(self.state.today_expenses.values())
+        summary = {
+            "today_net_income": income_total - expense_total,
+            "balance": self.state.balance,
+            "debt_remaining": self.state.debt_remaining,
+            "repayment_deadline_day": self.state.repayment_deadline_day,
+        }
+        broken_tents = [
+            tent.id for tent in self._get_unlocked_tents()
+            if tent.status == "broken"
+        ]
+        if broken_tents:
+            summary["broken_tents"] = [
+                {"tent_id": tent_id, "repair_cost": self.REPAIR_COST}
+                for tent_id in broken_tents
+            ]
+        cleaning_tents = [
+            tent.id for tent in self._get_unlocked_tents()
+            if tent.needs_cleaning or tent.status == "cleaning"
+        ]
+        if cleaning_tents:
+            summary["cleaning_tent_ids"] = cleaning_tents
+        discarded_food = sum(
+            int(event.get("data", {}).get("portions", 0) or 0)
+            for event in self.state.event_history
+            if event.get("day") == self.state.day
+            and event.get("event_type") == "food_discard"
+        )
+        if discarded_food:
+            summary["food_discarded_portions"] = discarded_food
+            summary["alerts"] = [
+                f"营业已结束，剩余{discarded_food}份食材已废弃。"
+            ]
+        return summary
 
     # -------------------------------------------------------------------------
     # NPC清理
@@ -3568,6 +3627,7 @@ class CampingPlazaEngine:
 
     # 允许出现在日终批处理清单中的动作
     DAY_END_ACTIONS = {
+        "repay_debt",
         "repair_tent",
         "clean_tents",
         "manage_greenery",
@@ -3578,6 +3638,8 @@ class CampingPlazaEngine:
     def _day_end_action_summary_label(self, item_result: dict) -> str:
         """返回日终经营汇总使用的玩家可见动作名称。"""
         action_name = item_result.get("action")
+        if action_name == "repay_debt":
+            return "偿还债务"
         if action_name == "buy_food_package":
             return "补充食材"
         if action_name == "manage_greenery":
@@ -3598,6 +3660,9 @@ class CampingPlazaEngine:
     def _day_end_action_cost(self, action_data: dict) -> int:
         action_name = action_data.get("action")
         params = action_data.get("params") or {}
+        if action_name == "repay_debt":
+            amount = params.get("amount")
+            return amount if isinstance(amount, int) and not isinstance(amount, bool) and amount > 0 else 0
         if action_name == "repair_tent":
             return self.REPAIR_COST
         if action_name == "manage_greenery":
@@ -3745,6 +3810,8 @@ class CampingPlazaEngine:
                     "message": "绿化升级已包含当日维护，本次打理绿化未执行。",
                 }
                 result["events"].append(action_result["message"])
+            elif action_name == "repay_debt":
+                action_result = self.repay_debt(params.get("amount"))
             elif action_name == "repair_tent":
                 action_result = self.repair_tent(
                     params.get("tent_id"), consume_decision=False
@@ -3914,8 +3981,10 @@ class CampingPlazaEngine:
         self.state.balance -= self.REPAIR_COST
         self.state.today_expenses["repair"] = self.state.today_expenses.get("repair", 0) + self.REPAIR_COST
 
-        # 修复：根据住客/预定状态恢复对应状态
-        if tent.occupied_by:
+        # 故障与退房后的清洁需求独立：维修不能跳过待清洁。
+        if tent.needs_cleaning:
+            tent.status = "cleaning"
+        elif tent.occupied_by:
             tent.status = "occupied"
         elif self._is_today_reserved_tent(tent_id):
             tent.status = "reserved"
@@ -4922,6 +4991,7 @@ class CampingPlazaEngine:
                 "unlocked": t.is_unlocked,
 
                 "status": t.status,
+                "needs_cleaning": t.needs_cleaning,
                 "occupied_by": t.occupied_by
             }
             for tid, t in self.tents.items()
@@ -4961,6 +5031,7 @@ class CampingPlazaEngine:
     def _get_tents_summary(self) -> dict:
         return {tid: {
             "status": t.status,
+            "needs_cleaning": t.needs_cleaning,
             "unlocked": t.is_unlocked,
             "occupied_by": t.occupied_by,
             "capacity": t.capacity

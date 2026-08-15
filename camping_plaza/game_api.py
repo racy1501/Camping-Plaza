@@ -881,22 +881,16 @@ def submit_turn_plan(req: TurnPlanRequest):
 
 @app.post("/api/day/end")
 def submit_day_end(req: DayEndRequest):
-    """日终批处理入口：提交完整日终经营清单并开启新一天。
+    """日终批处理入口：提交完整日终经营清单，等待确认后再开启新一天。
 
     单个动作业务失败保留在 results 中，整体正常返回 200。
     """
     eng = get_engine(req.session_id)
     result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
     if result.get("success"):
-        next_day_result = eng.start_next_day()
-        result["events"].extend(next_day_result.get("events", []))
-        result["day"] = next_day_result.get("day", eng.state.day)
-        result["turn"] = next_day_result.get("turn", eng.state.turn)
+        result["day"] = eng.state.day
+        result["turn"] = eng.state.turn
         result["day_end_completed"] = eng.state.day_end_completed
-        if next_day_result.get("achievement_notifications"):
-            result["achievement_notifications"] = next_day_result[
-                "achievement_notifications"
-            ]
     eng.save_state()
     return result
 
@@ -1028,16 +1022,16 @@ def mcp_state(session_id: Optional[str] = None):
     planning_available, plan_submitted, plan_target_turn = _get_turn_plan_status(eng)
 
     # 只返回AI决策需要的信息
-    return {
+    response = {
         "day": state["day"],
         "turn": state["turn"],
         "balance": state["balance"],
         "average_rating": state["average_rating"],
         "decisions_left": state["decisions_left"],
-        "food_stock": state["food_stock"],
         "tents": {
             tid: {
                 "status": t["status"],
+                "needs_cleaning": t["needs_cleaning"],
                 "unlocked": t["unlocked"],
                 "capacity": t["capacity"]
             }
@@ -1062,6 +1056,14 @@ def mcp_state(session_id: Optional[str] = None):
         "day_end_completed": eng.state.day_end_completed,
         "today_events": list(eng.state.today_events),
     }
+    waiting_tent_ids = eng.get_waiting_cleaning_checkin_tent_ids()
+    if state["turn"] != 6:
+        response["food_stock"] = state["food_stock"]
+    if waiting_tent_ids:
+        response["turn_alerts"] = [
+            "有客人正在等待入住，请及时清洁待清洁帐篷。"
+        ]
+    return response
 
 
 @app.get("/mcp/actions")
@@ -1142,32 +1144,30 @@ def mcp_available_actions(session_id: Optional[str] = None):
             })
     else:
         # Turn 6 日终批处理模式
-        if not eng.state.day_end_completed:
-            actions.append({
-                "action": "repay_debt",
-                "params": {"amount": None},
-                "required_params": [{
-                    "name": "amount",
-                    "type": "integer",
-                    "required": True,
-                }],
-                "description": (
-                    "主动偿还启动负债；仅 Turn 6 日终决策完成前可用，"
-                    "金额须为正整数且不超过当前余额或剩余债务；"
-                    "不占经营决策位，启动负债无利息。"
-                ),
-            })
-            next_calls.append({"action": "query_growth_projects"})
         if eng.state.day_end_completed:
-            # 正常日终已由 /api/day/end 直接跨日；这里只保留异常/恢复状态，
-            # 不把兼容入口包装成 AI 的正式经营动作。
-            actions = []
+            actions = [{
+                "action": "start_next_day",
+                "endpoint": "/api/day/start",
+                "description": "确认进入新的一天。",
+            }]
         else:
             entry = {
                 "action": "submit_day_end_actions",
                 "params": {"day_end_actions": []},
-                "description": "提交日终经营清单（维修、清洁、绿化、食材、成长购买等，数量不限）",
+                "endpoint": "/api/day/end",
+                "description": "提交日终经营清单；可同时提交多项，提交后停留在 Turn 6 等待确认进入新一天。",
             }
+            if eng.state.debt_remaining > 0:
+                entry["repayment_candidate"] = {
+                    "action": "repay_debt",
+                    "params": {"amount": None},
+                    "required_params": [{
+                        "name": "amount",
+                        "type": "integer",
+                        "required": True,
+                    }],
+                    "description": "偿还欠款（不占经营决策点）。",
+                }
             # 紧凑候选信息，复用现有生成逻辑
             broken_candidates = [
                 {
@@ -1182,13 +1182,13 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 entry["repair_candidates"] = broken_candidates
             cleaning_tids = [
                 int(tid) for tid, t in state["tents"].items()
-                if t["unlocked"] and t["status"] == "cleaning"
+                if t["unlocked"] and (t["needs_cleaning"] or t["status"] == "cleaning")
             ]
             if cleaning_tids:
                 entry["clean_candidates"] = [{
                     "action": "clean_tents",
                     "params": {"tent_ids": cleaning_tids},
-                    "description": "批量清洁待清洁帐篷（不消耗决策点）",
+                    "description": "批量清洁待清洁帐篷（不消耗决策点；故障帐篷须先维修）",
                 }]
             greenery_value = state.get("greenery", {})
             if (
@@ -1215,31 +1215,28 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 entry["growth_candidates"] = growth_candidates
             if eng.state.last_food_preorder_day != eng.state.day:
                 entry["food_package_candidates"] = _food_package_action_entries()
-            actions = [
-                {
-                    "action": "repay_debt",
-                    "params": {"amount": None},
-                    "required_params": [{
-                        "name": "amount",
-                        "type": "integer",
-                        "required": True,
-                    }],
-                    "description": (
-                        "主动偿还启动负债；仅 Turn 6 日终决策完成前可用，"
-                        "金额须为正整数且不超过当前余额或剩余债务；"
-                        "不占经营决策位，启动负债无利息。"
-                    ),
-                },
-                entry,
-            ]
+            actions = [entry]
 
-    return {
+    response = {
         "balance": eng.state.balance,
         "day_end_completed": eng.state.day_end_completed,
         "total_cost_must_not_exceed_balance": True,
         "available_actions": actions,
+        "available_queries": [
+            {
+                "name": "查看设施升级详情",
+                "endpoint": "/mcp/query_growth_projects",
+            },
+            {
+                "name": "查看成就图鉴",
+                "endpoint": "/mcp/achievements",
+            },
+        ],
         "next_calls": next_calls,
     }
+    if state["turn"] == 6 and not eng.state.day_end_completed:
+        response["decision_summary"] = eng.get_turn6_decision_summary()
+    return response
 
 
 # =============================================================================

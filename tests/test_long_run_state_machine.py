@@ -313,6 +313,7 @@ class DeterministicScenarioTests(LongRunTestCase):
         self.engine.tents[2].status = "broken"
         self.engine.tents[4].status = "cleaning"
         self.engine.state.decisions_left = 3
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         # 预置当天到达计划为空，避免营业推进时生成新客入住帐篷并消费（干扰住客位置不变量）
         self.engine.state.today_arrival_plan_day = 1
         self.engine.state.today_arrival_plan = []

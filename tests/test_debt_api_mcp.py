@@ -30,24 +30,27 @@ class DebtApiMcpTests(unittest.TestCase):
                 self.engine.state.day_end_completed = False
                 self.assertNotIn("repay_debt", self._action_names())
 
-    def test_turn6_exposes_repay_alongside_day_end_action(self):
+    def test_turn6_places_repay_inside_day_end_action(self):
         self.engine.state.turn = 6
         self.engine.state.day_end_completed = False
 
         actions = game_api.mcp_available_actions()["available_actions"]
         names = [item["action"] for item in actions]
 
-        self.assertIn("repay_debt", names)
-        self.assertIn("submit_day_end_actions", names)
-        repay = next(item for item in actions if item["action"] == "repay_debt")
+        self.assertEqual(names, ["submit_day_end_actions"])
+        day_end = actions[0]
+        repay = day_end["repayment_candidate"]
         self.assertEqual(repay["params"], {"amount": None})
         self.assertEqual(repay["required_params"][0]["name"], "amount")
-        self.assertIn("不占经营决策位", repay["description"])
+        self.assertNotIn("启动负债", repay["description"])
+        self.assertIn("偿还欠款", repay["description"])
+        self.assertIn("不占经营决策点", repay["description"])
 
     def test_completed_day_end_hides_repay(self):
         self.engine.state.turn = 6
         self.engine.state.day_end_completed = True
         self.assertNotIn("repay_debt", self._action_names())
+        self.assertEqual(self._action_names(), ["start_next_day"])
 
     def test_api_rejects_repayment_outside_turn6(self):
         self.engine.state.turn = 5
