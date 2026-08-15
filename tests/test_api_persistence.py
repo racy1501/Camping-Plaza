@@ -15,6 +15,9 @@ import sys
 import unittest
 from unittest import mock
 
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
 # 将 camping_plaza 包加入路径（不依赖 __init__.py，Python 3 命名空间包）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "camping_plaza"))
@@ -1085,9 +1088,15 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "submit_day_end_actions")
-        self.assertIn("repair_candidates", actions[0])
-        repair_ids = [c["params"]["tent_id"] for c in actions[0]["repair_candidates"]]
-        self.assertIn(1, repair_ids)
+        self.assertNotIn("repair_candidates", actions[0])
+        candidates = actions[0]["day_end_action_candidates"]
+        repair = next(
+            candidate for candidate in candidates if candidate["action"] == "repair_tent"
+        )
+        self.assertEqual(repair["params"]["tent_id"], 1)
+        self.assertEqual(repair["cost"], CampingPlazaEngine.REPAIR_COST)
+        self.assertTrue(repair["enabled"])
+        self.assertEqual(repair["reason"], "")
 
     def test_turn2_repair_candidates_present_even_when_balance_zero(self):
         """余额不足时维修候选仍出现，执行时才会失败"""
@@ -1614,6 +1623,8 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
             a for a in purchases
             if a["params"]["project_id"] == "dining_lv1"
         )
+
+
         self.assertEqual(dining1["params"], {"project_id": "dining_lv1"})
         self.assertEqual(dining1["cost"], 700)
         self.assertTrue(dining1["enabled"])
@@ -1980,12 +1991,12 @@ class DayEndApiTests(ApiPersistenceTestCase):
 
     def test_actions_is_not_a_silent_day_end_alias_and_retry_is_allowed(self):
         self._reach_turn6()
-        with self.assertRaises(game_api.HTTPException) as context:
-            game_api.submit_day_end(game_api.DayEndRequest(
+        with self.assertRaises(ValidationError) as context:
+            game_api.DayEndRequest(
                 actions=[self._make_action("manage_greenery", {"action": "maintain"})]
-            ))
+            )
 
-        self.assertEqual(context.exception.detail["error_code"], "missing_day_end_actions")
+        self.assertEqual(context.exception.errors()[0]["type"], "extra_forbidden")
         self.assertFalse(self.engine.state.day_end_completed)
 
         retry = self._day_end([])
@@ -2203,6 +2214,113 @@ class CampsiteSlotStateOutputTests(ApiPersistenceTestCase):
             "is_reserved": False,
             "paid": False,
         }])
+
+
+class WriteRequestValidationTests(ApiPersistenceTestCase):
+    """正式写接口的请求结构校验必须在引擎执行前完成。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(game_api.app)
+        self.addCleanup(self.client.close)
+
+    def _state_marker(self):
+        return (
+            self.engine.state.day,
+            self.engine.state.turn,
+            self.engine.state.balance,
+            self.engine.state.debt_remaining,
+            self.engine.state.day_end_completed,
+            self.engine.state.pending_turn_plan,
+            self.engine.state.greenery_processed_today,
+        )
+
+    def _assert_invalid_request(self, response, error_code):
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"]["error_code"], error_code)
+
+    def test_write_models_reject_unknown_top_level_fields(self):
+        requests = [
+            ("/api/session", {"unexpected": True}),
+            ("/api/turn/advance", {"unexpected": True}),
+            ("/api/turn/plan", {"unexpected": True}),
+            ("/api/day/end", {"day_end_actions": [], "unexpected": True}),
+            ("/api/day/start", {"unexpected": True}),
+            ("/api/action", {"action": "advance_turn", "unexpected": True}),
+        ]
+
+        for path, payload in requests:
+            with self.subTest(path=path):
+                marker = self._state_marker()
+                response = self.client.post(path, json=payload)
+                self.assertEqual(response.status_code, 422, response.text)
+                errors = response.json()["detail"]
+                self.assertTrue(any(error["type"] == "extra_forbidden" for error in errors))
+                self.assertEqual(self._state_marker(), marker)
+
+    def test_api_action_rejects_unknown_action_and_invalid_params_before_execution(self):
+        cases = [
+            ({"action": "unknown_action"}, "unknown_action"),
+            ({"action": "repair_tent", "params": {"tent_id": "abc"}}, "invalid_action_param"),
+            ({"action": "clean_tents", "params": {"tent_ids": ["abc"]}}, "invalid_action_param"),
+            ({"action": "repair_tent", "params": {"tent_id": 1, "whatever": 123}}, "unknown_action_param"),
+            ({"action": "repair_tent", "params": {}}, "missing_action_param"),
+            ({"action": "purchase_growth_project", "params": {"project_id": 123}}, "invalid_project_id"),
+        ]
+
+        for payload, error_code in cases:
+            with self.subTest(payload=payload):
+                marker = self._state_marker()
+                response = self.client.post("/api/action", json=payload)
+                self._assert_invalid_request(response, error_code)
+                self.assertEqual(self._state_marker(), marker)
+
+    def test_nested_action_fields_are_rejected_and_valid_action_still_executes(self):
+        response = self.client.post(
+            "/api/turn/plan",
+            json={"actions": [{"action": "improve_service", "unexpected": True}]},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["detail"][0]["type"], "extra_forbidden")
+
+        response = self.client.post("/api/action", json={"action": "advance_turn"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.engine.state.turn, 2)
+
+    def test_turn_plan_rejects_unknown_actions_and_params_before_execution(self):
+        self.engine.state.turn = 2
+        cases = [
+            ({"actions": [{"action": "unknown_action", "params": {}}]}, "unknown_turn_plan_action"),
+            ({"actions": [{"action": "repair_tent", "params": {"tent_id": 1, "whatever": 1}}]}, "unknown_action_param"),
+            ({"actions": [{"action": "repair_tent", "params": {}}]}, "missing_action_param"),
+        ]
+
+        for payload, error_code in cases:
+            with self.subTest(payload=payload):
+                marker = self._state_marker()
+                response = self.client.post("/api/turn/plan", json=payload)
+                self._assert_invalid_request(response, error_code)
+                self.assertEqual(self._state_marker(), marker)
+
+    def test_day_end_rejects_invalid_actions_and_params_before_any_execution(self):
+        self.engine.state.turn = 6
+        self.engine.facilities["greenery"].level = 1
+        cases = [
+            ([
+                {"action": "manage_greenery", "params": {"action": "maintain"}},
+                {"action": "unknown_action", "params": {}},
+            ], "unknown_day_end_action"),
+            ([{"action": "repair_tent", "params": {"tent_id": 1, "whatever": 1}}], "unknown_action_param"),
+            ([{"action": "repair_tent", "params": {"tent_id": "abc"}}], "invalid_action_param"),
+            ([{"action": "buy_food_package", "params": {}}], "missing_action_param"),
+        ]
+
+        for actions, error_code in cases:
+            with self.subTest(actions=actions):
+                marker = self._state_marker()
+                response = self.client.post("/api/day/end", json={"day_end_actions": actions})
+                self._assert_invalid_request(response, error_code)
+                self.assertEqual(self._state_marker(), marker)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 import uvicorn
 
@@ -94,31 +94,71 @@ def get_engine(session_id: Optional[str] = None, *, create_new: bool = False) ->
 # 请求/响应模型
 # =============================================================================
 
-class ActionRequest(BaseModel):
+class StrictWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ActionRequest(StrictWriteRequest):
     action: str
     params: Optional[dict] = None
     session_id: Optional[str] = None
 
 
-class TurnPlanRequest(BaseModel):
+class TurnPlanRequest(StrictWriteRequest):
     session_id: Optional[str] = None
     free_actions: list[ActionRequest] = Field(default_factory=list)
     actions: list[ActionRequest] = Field(default_factory=list)
     conflict_choice: Optional[str] = None
 
 
-class DayEndRequest(BaseModel):
+class DayEndRequest(StrictWriteRequest):
     session_id: Optional[str] = None
     day_end_actions: Optional[list[ActionRequest]] = None
 
 
-class SessionRequest(BaseModel):
+class SessionRequest(StrictWriteRequest):
     session_id: Optional[str] = None
+
+
+class EmptyWriteRequest(StrictWriteRequest):
+    pass
 
 
 TURN_PLAN_IMMEDIATE_ACTIONS = {
     name for name, config in CampingPlazaEngine.TURN_PLAN_ACTIONS.items()
     if config["kind"] in {"free", "decision"}
+}
+
+_DAY_END_ACTION_PARAM_TYPES = {
+    "repay_debt": {"amount": "integer"},
+    "clean_tents": {"tent_ids": "integer_list"},
+    "repair_tent": {"tent_id": "integer"},
+    "manage_greenery": {"action": "string"},
+    "buy_food_package": {"package_key": "string"},
+    "purchase_growth_project": {"project_id": "string"},
+}
+_DAY_END_REQUIRED_PARAMS = {
+    "repay_debt": {"amount"},
+    "repair_tent": {"tent_id"},
+    "buy_food_package": {"package_key"},
+    "purchase_growth_project": {"project_id"},
+}
+_API_ACTION_PARAM_TYPES = {
+    "resolve_temporary_conflict": {"choice": "string"},
+    "repair_tent": {"tent_id": "integer"},
+    "manage_greenery": {"action": "string"},
+    "improve_service": {},
+    "clean_tents": {"tent_ids": "integer_list"},
+    "buy_food_package": {"package_key": "string"},
+    "purchase_growth_project": {"project_id": "string"},
+    "advance_turn": {},
+    "new_day": {},
+}
+_API_ACTION_REQUIRED_PARAMS = {
+    "resolve_temporary_conflict": {"choice"},
+    "repair_tent": {"tent_id"},
+    "buy_food_package": {"package_key"},
+    "purchase_growth_project": {"project_id"},
 }
 
 
@@ -294,12 +334,99 @@ def _raise_action_request_error(error_code: str, message: str):
     )
 
 
+def _is_valid_action_param_type(value, value_type: str) -> bool:
+    if value_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if value_type == "integer_list":
+        return (
+            isinstance(value, list)
+            and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        )
+    if value_type == "string":
+        return isinstance(value, str)
+    return False
+
+
+def _validate_action_params(
+    action: str,
+    params: Optional[dict],
+    param_types: dict[str, dict[str, str]],
+    required_params: dict[str, set[str]],
+    *,
+    unknown_action_error: str,
+) -> dict:
+    if action not in param_types:
+        _raise_action_request_error(unknown_action_error, f"未知操作: {action}")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        _raise_action_request_error("invalid_action_params", f"{action} 的 params 必须是对象")
+
+    if action == "purchase_growth_project" and unknown_action_error == "unknown_action":
+        project_id = params.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            _raise_action_request_error("invalid_project_id", "缺少有效的project_id参数")
+
+    allowed_params = set(param_types[action])
+    unknown_params = sorted(set(params) - allowed_params)
+    if unknown_params:
+        _raise_action_request_error(
+            "unknown_action_param",
+            f"{action} 包含未知参数: {unknown_params[0]}",
+        )
+    missing_params = sorted(required_params.get(action, set()) - set(params))
+    if missing_params:
+        _raise_action_request_error(
+            "missing_action_param",
+            f"{action} 缺少参数: {missing_params[0]}",
+        )
+    for name, value_type in param_types[action].items():
+        if name in params and not _is_valid_action_param_type(params[name], value_type):
+            _raise_action_request_error(
+                "invalid_action_param",
+                f"{action} 的参数 {name} 类型无效",
+            )
+    return params
+
+
 def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
     normalized = []
     for item in actions:
         params = item.params or {}
         if not isinstance(params, dict):
             raise HTTPException(400, "params必须为对象")
+        normalized.append({"action": item.action, **params})
+    return normalized
+
+
+def _validate_turn_plan_actions(
+    actions: list[ActionRequest], expected_kind: str
+) -> list[dict]:
+    normalized = []
+    param_types = {
+        "clean_tents": {"tent_ids": "integer_list"},
+        "repair_tent": {"tent_id": "integer"},
+        "buy_food_package": {"package_key": "string"},
+    }
+    for item in actions:
+        if item.session_id is not None:
+            _raise_action_request_error(
+                "invalid_nested_action_field", "Turn Plan 动作不能包含 session_id"
+            )
+        config = CampingPlazaEngine.TURN_PLAN_ACTIONS.get(item.action)
+        if config is None:
+            _raise_action_request_error("unknown_turn_plan_action", f"未知计划操作: {item.action}")
+        if config["kind"] != expected_kind:
+            _raise_action_request_error(
+                "invalid_turn_plan_action_kind", f"{item.action} 不能用于该行动列表"
+            )
+        params = _validate_action_params(
+            item.action,
+            item.params,
+            {item.action: param_types.get(item.action, {})},
+            {item.action: set(config["required"])},
+            unknown_action_error="unknown_turn_plan_action",
+        )
         normalized.append({"action": item.action, **params})
     return normalized
 
@@ -312,6 +439,24 @@ def _normalize_day_end_actions(actions: list[ActionRequest]) -> list[dict]:
         params = item.params or {}
         if not isinstance(params, dict):
             raise HTTPException(400, "params必须为对象")
+        normalized.append({"action": item.action, "params": params})
+    return normalized
+
+
+def _validate_day_end_actions(actions: list[ActionRequest]) -> list[dict]:
+    normalized = []
+    for item in actions:
+        if item.session_id is not None:
+            _raise_action_request_error(
+                "invalid_nested_action_field", "日终动作不能包含 session_id"
+            )
+        params = _validate_action_params(
+            item.action,
+            item.params,
+            _DAY_END_ACTION_PARAM_TYPES,
+            _DAY_END_REQUIRED_PARAMS,
+            unknown_action_error="unknown_day_end_action",
+        )
         normalized.append({"action": item.action, "params": params})
     return normalized
 
@@ -687,7 +832,7 @@ def health():
 
 
 @app.post("/api/session")
-def create_session():
+def create_session(req: Optional[EmptyWriteRequest] = None):
     """创建一份独立的新游戏存档。"""
     session_id = f"sess_{uuid.uuid4().hex}"
     eng = get_engine(session_id, create_new=True)
@@ -900,10 +1045,12 @@ def advance_turn(req: Optional[SessionRequest] = None):
 @app.post("/api/turn/plan")
 def submit_turn_plan(req: TurnPlanRequest):
     """提交本轮营业计划"""
+    free_actions = _validate_turn_plan_actions(req.free_actions, "free")
+    actions = _validate_turn_plan_actions(req.actions, "decision")
     eng = get_engine(req.session_id)
     plan_result = eng.submit_turn_plan(
-        _normalize_turn_plan_actions(req.free_actions),
-        _normalize_turn_plan_actions(req.actions),
+        free_actions,
+        actions,
         req.conflict_choice,
     )
     if not plan_result["success"]:
@@ -957,8 +1104,9 @@ def submit_day_end(req: DayEndRequest):
                 ),
             },
         )
+    day_end_actions = _validate_day_end_actions(req.day_end_actions)
     eng = get_engine(req.session_id)
-    result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
+    result = eng.submit_day_end_actions(day_end_actions)
     if result.get("success"):
         result["day"] = eng.state.day
         result["turn"] = eng.state.turn
@@ -999,6 +1147,14 @@ def do_action(req: ActionRequest):
             f"Turn 6 日终阶段请使用 /api/day/end 统一提交经营清单，不再支持逐项调用 {req.action}",
         )
 
+    params = _validate_action_params(
+        req.action,
+        req.params,
+        _API_ACTION_PARAM_TYPES,
+        _API_ACTION_REQUIRED_PARAMS,
+        unknown_action_error="unknown_action",
+    )
+
     if req.action in TURN_PLAN_IMMEDIATE_ACTIONS and eng.state.turn <= 5:
         result = {
             "success": False,
@@ -1008,19 +1164,13 @@ def do_action(req: ActionRequest):
         return result
 
     if req.action == "resolve_temporary_conflict":
-        choice = req.params.get("choice") if req.params else None
-        if not isinstance(choice, str):
-            _raise_action_request_error("missing_conflict_choice", "缺少临时事件处理方式")
-        result = eng.resolve_current_temporary_conflict(choice)
+        result = eng.resolve_current_temporary_conflict(params["choice"])
 
     elif req.action == "repair_tent":
-        tent_id = req.params.get("tent_id") if req.params else None
-        if tent_id is None:
-            _raise_action_request_error("missing_tent_id", "缺少tent_id参数")
-        result = eng.repair_tent(int(tent_id))
+        result = eng.repair_tent(params["tent_id"])
 
     elif req.action == "manage_greenery":
-        action = req.params.get("action", "skip") if req.params else "skip"
+        action = params.get("action", "skip")
         message = eng.manage_greenery(action)
         # 修复：统一返回 success/message 结构
         failure_messages = [
@@ -1034,23 +1184,15 @@ def do_action(req: ActionRequest):
         result = eng.improve_service()
 
     elif req.action == "clean_tents":
-        tent_ids = None
-        if req.params:
-            raw_ids = req.params.get("tent_ids")
-            if raw_ids is not None:
-                tent_ids = [int(tid) for tid in raw_ids]
-        result = eng.clean_tents(tent_ids)
+        result = eng.clean_tents(params.get("tent_ids"))
 
     elif req.action == "buy_food_package":
-        package_key = req.params.get("package_key") if req.params else None
-        if package_key is None:
-            _raise_action_request_error("missing_package_key", "缺少package_key参数")
-        result = eng.buy_food_package(str(package_key))
+        result = eng.buy_food_package(params["package_key"])
 
     elif req.action == "purchase_growth_project":
-        project_id = req.params.get("project_id") if req.params else None
-        if not isinstance(project_id, str) or not project_id.strip():
-            _raise_action_request_error("invalid_project_id", "缺少有效的project_id参数")
+        project_id = params["project_id"]
+        if not project_id.strip():
+            _raise_action_request_error("invalid_action_param", "project_id 不能为空")
         result = eng.purchase_growth_project(project_id)
         if not result.get("success"):
             return result
