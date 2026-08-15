@@ -155,6 +155,11 @@ def _required_day_end_param(name: str, value_type: str) -> dict:
     return {"name": name, "type": value_type, "required": True}
 
 
+TURN6_DAY_END_BUDGET_HINT = (
+    "提示：如选择还款，还款金额与所选经营决策项费用合计不得超过当前余额。"
+)
+
+
 def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
     """生成 Turn 6 共用日终候选事实，不包含网页文案或 MCP 导航结构。"""
     if eng.state.turn != 6 or eng.state.day_end_completed:
@@ -508,6 +513,7 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
             "decision_action_candidates": [],
             "day_end_action_candidates": day_end_action_candidates,
             "total_cost_must_not_exceed_balance": True,
+            "day_end_budget_hint": TURN6_DAY_END_BUDGET_HINT,
             "primary_action": None,
         }
         if not day_end_completed:
@@ -937,7 +943,8 @@ def submit_turn_plan(req: TurnPlanRequest):
 def submit_day_end(req: DayEndRequest):
     """日终批处理入口：提交完整日终经营清单，等待确认后再开启新一天。
 
-    单个动作业务失败保留在 results 中，整体正常返回 200。
+    单个动作业务失败保留在 results 中；success 只表示日终清单已处理完成，
+    action_execution_status、succeeded_count 和 failed_count 表示动作汇总结果。
     """
     if req.day_end_actions is None:
         raise HTTPException(
@@ -956,6 +963,9 @@ def submit_day_end(req: DayEndRequest):
         result["day"] = eng.state.day
         result["turn"] = eng.state.turn
         result["day_end_completed"] = eng.state.day_end_completed
+        result["balance"] = eng.state.balance
+        result["next_action"] = "start_next_day"
+        result["next_endpoint"] = "/api/day/start"
     eng.save_state()
     return result
 
@@ -1218,6 +1228,9 @@ def mcp_available_actions(session_id: Optional[str] = None):
         "balance": eng.state.balance,
         "day_end_completed": eng.state.day_end_completed,
         "total_cost_must_not_exceed_balance": True,
+        "day_end_budget_hint": (
+            TURN6_DAY_END_BUDGET_HINT if state["turn"] == 6 else None
+        ),
         "available_actions": actions,
         "available_queries": [
             {

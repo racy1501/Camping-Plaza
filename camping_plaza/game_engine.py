@@ -3832,6 +3832,11 @@ class CampingPlazaEngine:
                 )
 
             item_result.update(action_result)
+            if not item_result.get("success"):
+                if not item_result.get("error_code"):
+                    item_result["error_code"] = "day_end_action_failed"
+                if not item_result.get("message"):
+                    item_result["message"] = "日终行动执行失败"
             result["results"].append(item_result)
             if (
                 action_name == "purchase_growth_project"
@@ -3876,6 +3881,24 @@ class CampingPlazaEngine:
             self._append_event_history(
                 executed_day, executed_turn, history_text + "。", "action"
             )
+
+        succeeded_count = sum(
+            1 for item in result["results"] if item.get("success")
+        )
+        failed_count = len(result["results"]) - succeeded_count
+        if not result["results"]:
+            action_execution_status = "no_actions"
+        elif failed_count == 0:
+            action_execution_status = "all_succeeded"
+        elif succeeded_count == 0:
+            action_execution_status = "all_failed"
+        else:
+            action_execution_status = "partial_success"
+        result.update({
+            "action_execution_status": action_execution_status,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+        })
 
         self._finalize_post_reservation(result)
 

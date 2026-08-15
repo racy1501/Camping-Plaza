@@ -1254,7 +1254,7 @@
         });
 
         renderGrowthCatalog(actions.growth);
-        renderDayEndSubmit();
+        renderDayEndSubmit(actions.day_end_budget_hint);
     }
 
     function renderDayEndSelectionSummary(actions) {
@@ -1293,12 +1293,18 @@
         if (existing) existing.remove();
     }
 
-    function renderDayEndSubmit() {
+    function renderDayEndSubmit(budgetHint) {
         const panel = els.actionGrid && els.actionGrid.parentElement;
         if (!panel) return;
         const section = document.createElement('div');
         section.className = 'day-end-submit';
         section.dataset.role = 'day-end-submit';
+        if (budgetHint) {
+            const hint = document.createElement('p');
+            hint.className = 'day-end-budget-hint';
+            hint.textContent = budgetHint;
+            section.appendChild(hint);
+        }
         const submit = document.createElement('button');
         submit.className = 'btn-action confirm';
         submit.type = 'button';
@@ -1460,6 +1466,51 @@
         return lines;
     }
 
+    function dayEndActionResultLabel(item) {
+        const params = item.params || {};
+        switch (item.action) {
+            case 'repay_debt':
+                return '偿还债务';
+            case 'clean_tents':
+                return '清洁帐篷';
+            case 'repair_tent':
+                return params.tent_id != null ? `维修${params.tent_id}号帐篷` : '维修帐篷';
+            case 'buy_food_package':
+                return '补充食材';
+            case 'manage_greenery':
+                return '维护绿化';
+            case 'purchase_growth_project':
+                return '购买成长项目';
+            default:
+                return item.action || '日终行动';
+        }
+    }
+
+    function formatDayEndResultSummary(result) {
+        const items = Array.isArray(result.results) ? result.results : [];
+        const succeeded = items.filter(item => item && item.success === true);
+        const failed = items.filter(item => item && item.success === false);
+        const successes = succeeded.map(dayEndActionResultLabel).join('、');
+        const failures = failed.map(item => {
+            const reason = item.message || item.error_code || '执行失败';
+            return `${dayEndActionResultLabel(item)}失败：${reason}`;
+        }).join('；');
+        const balance = Number.isFinite(result.balance) ? `当前余额 ${result.balance}。` : '';
+
+        switch (result.action_execution_status) {
+            case 'all_succeeded':
+                return `日终处理完成：${successes}。${balance}请确认进入新的一天。`;
+            case 'partial_success':
+                return `日终处理完成。已执行：${successes}；未执行：${failures}。${balance}请确认进入新的一天。`;
+            case 'all_failed':
+                return `本次日终行动均未执行：${failures}。${balance}请确认进入新的一天。`;
+            case 'no_actions':
+                return `日终处理已完成。${balance}请确认进入新的一天。`;
+            default:
+                return `日终处理已完成。${balance}请确认进入新的一天。`;
+        }
+    }
+
     async function submitDayEndActions() {
         const btn = els.actionGrid && els.actionGrid.querySelector('[data-role="submit-day-end-actions"]');
         if (btn) btn.disabled = true;
@@ -1477,7 +1528,11 @@
             }
             selectedDayEndActions = [];
             await fetchState({ skipEvents: true });
-            setActionMessage(result.message || '日终清单已提交，已开启新的一天');
+            const feedbackType = result.action_execution_status === 'partial_success'
+                || result.action_execution_status === 'all_failed'
+                ? 'action-warning'
+                : '';
+            setActionMessage(formatDayEndResultSummary(result), feedbackType);
         } catch (err) {
             console.warn('提交日终清单失败：', err);
             setActionMessage('提交日终清单失败：' + err.message, 'action-error');
@@ -1502,6 +1557,7 @@
                 throw new Error(result.message || `请求失败 (${res.status})`);
             }
             await fetchState({ skipEvents: true });
+            setActionMessage('已进入新的一天。');
         } catch (err) {
             console.warn('开启新的一天失败：', err);
             setActionMessage('开启新的一天失败：' + err.message, 'action-error');

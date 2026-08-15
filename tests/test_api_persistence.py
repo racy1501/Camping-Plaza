@@ -1918,12 +1918,38 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self._reach_turn6()
         result = self._day_end()
         self.assertTrue(result["success"])
+        self.assertEqual(result["action_execution_status"], "no_actions")
+        self.assertEqual(result["succeeded_count"], 0)
+        self.assertEqual(result["failed_count"], 0)
         self.assertTrue(result["day_end_completed"])
         self.assertEqual(result["day"], 1)
         self.assertEqual(result["turn"], 6)
+        self.assertEqual(result["balance"], self.engine.state.balance)
+        self.assertEqual(result["next_action"], "start_next_day")
+        self.assertEqual(result["next_endpoint"], "/api/day/start")
         self.assertEqual(self.engine.state.day, 1)
         self.assertEqual(self.engine.state.turn, 6)
         self.assertTrue(self.engine.state.day_end_completed)
+
+    def test_turn6_budget_hint_is_shared_by_human_and_mcp_actions(self):
+        self._reach_turn6()
+        human_actions = game_api.get_human_actions()
+        mcp_actions = game_api.mcp_available_actions()
+
+        expected = "提示：如选择还款，还款金额与所选经营决策项费用合计不得超过当前余额。"
+        self.assertEqual(human_actions["day_end_budget_hint"], expected)
+        self.assertEqual(mcp_actions["day_end_budget_hint"], expected)
+        self.assertNotIn("其他可选日终行动", expected)
+        self.assertNotIn("先还款", expected)
+        self.assertNotIn("优先还款", expected)
+
+        repay = next(
+            item for item in human_actions["day_end_action_candidates"]
+            if item["action"] == "repay_debt"
+        )
+        self.assertIsNone(repay["params"]["amount"])
+        self.assertEqual(repay["min_amount"], 1)
+        self.assertEqual(repay["max_amount"], self.engine.state.balance)
 
     def test_missing_day_end_actions_is_rejected_without_processing(self):
         self._reach_turn6()
@@ -1975,9 +2001,14 @@ class DayEndApiTests(ApiPersistenceTestCase):
             self._make_action("manage_greenery", {"action": "maintain"}),
         ])
         self.assertTrue(result["success"])
+        self.assertEqual(result["action_execution_status"], "partial_success")
+        self.assertEqual(result["succeeded_count"], 2)
+        self.assertEqual(result["failed_count"], 1)
         self.assertEqual(len(result["results"]), 3)
         self.assertTrue(result["results"][0]["success"])   # buy_food_package
         self.assertFalse(result["results"][1]["success"])  # repair_tent 未损坏
+        self.assertTrue(result["results"][1]["error_code"])
+        self.assertTrue(result["results"][1]["message"])
         self.assertTrue(result["results"][2]["success"])   # manage_greenery
         self.assertEqual(self.engine.state.day, 1)
         self.assertEqual(self.engine.state.turn, 6)
@@ -2011,10 +2042,32 @@ class DayEndApiTests(ApiPersistenceTestCase):
         ])
 
         self.assertTrue(result["success"])
+        self.assertEqual(result["action_execution_status"], "all_succeeded")
+        self.assertEqual(result["succeeded_count"], 2)
+        self.assertEqual(result["failed_count"], 0)
         self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(result["results"][0]["price"], 80)
+        self.assertEqual(result["results"][0]["portions"], 4)
         self.assertTrue(result["results"][1]["success"])
         self.assertTrue(self.engine.state.day_end_completed)
         self.assertEqual(self.engine.state.turn, 6)
+
+    def test_all_failed_day_end_actions_have_summary_and_reasons(self):
+        self._reach_turn6()
+        result = self._day_end([
+            self._make_action("repair_tent", {"tent_id": 1}),
+        ])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["action_execution_status"], "all_failed")
+        self.assertEqual(result["succeeded_count"], 0)
+        self.assertEqual(result["failed_count"], 1)
+        self.assertFalse(result["results"][0]["success"])
+        self.assertTrue(result["results"][0]["error_code"])
+        self.assertTrue(result["results"][0]["message"])
+        self.assertTrue(result["day_end_completed"])
+        self.assertEqual(result["day"], 1)
+        self.assertEqual(result["turn"], 6)
 
     def test_day_end_allows_single_food_package(self):
         self._reach_turn6()
