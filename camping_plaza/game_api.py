@@ -1343,9 +1343,10 @@ def mcp_available_actions(session_id: Optional[str] = None):
             })
         elif planning_available:
             submit_entry = {
-                "action": "submit_turn_plan",
+                "action": "execute_turn_plan",
                 "params": {"free_actions": [], "actions": []},
-                "description": _food_package_plan_description(),
+                "endpoint": "/api/turn/plan",
+                "description": "提交并执行当前回合完整计划，执行完成后推进到下一回合。" + _food_package_plan_description(),
             }
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)

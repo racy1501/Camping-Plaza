@@ -21,7 +21,7 @@ class McpActionCatalogTests(unittest.TestCase):
 
     def _submit_entry(self):
         actions = game_api.mcp_available_actions()["available_actions"]
-        return next(item for item in actions if item["action"] == "submit_turn_plan")
+        return next(item for item in actions if item["action"] == "execute_turn_plan")
 
     def test_turn2_candidates_include_core_plan_actions_and_clean_tents(self):
         self.engine.state.turn = 2
@@ -35,6 +35,14 @@ class McpActionCatalogTests(unittest.TestCase):
             self.assertTrue(decision[name]["enabled"])
             self.assertEqual(decision[name]["cost_decision_points"], 1)
             self.assertEqual(decision[name]["params"], {})
+
+    def test_turn_plan_action_name_and_endpoint_match_execution_semantics(self):
+        self.engine.state.turn = 2
+        entry = self._submit_entry()
+        self.assertEqual(entry["action"], "execute_turn_plan")
+        self.assertEqual(entry["endpoint"], "/api/turn/plan")
+        self.assertIn("提交并执行", entry["description"])
+        self.assertIn("推进到下一回合", entry["description"])
 
     def test_turn_specific_candidates_and_daily_limits(self):
         self.engine.state.turn = 3
