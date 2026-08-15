@@ -1531,6 +1531,17 @@
         }
     }
 
+    function formatTurnPlanResultSummary(result) {
+        const failures = Array.isArray(result.action_failures) ? result.action_failures : [];
+        if (!failures.length) return '本轮计划已执行，已进入下一经营轮次。';
+        const details = failures.map(item => {
+            const action = item.action || '经营动作';
+            const reason = item.message || item.error_code || '执行失败';
+            return `${action}失败：${reason}`;
+        }).join('；');
+        return `本轮计划已执行，但部分动作未完成：${details}`;
+    }
+
     async function submitDayEndActions() {
         const btn = els.actionGrid && els.actionGrid.querySelector('[data-role="submit-day-end-actions"]');
         if (btn) btn.disabled = true;
@@ -1612,7 +1623,7 @@
             selectedDecisionActions = [];
             selectedConflictChoice = null;
             await fetchState({ skipEvents: true });
-            setActionMessage('本轮计划已执行，已进入下一经营轮次。');
+            setActionMessage(formatTurnPlanResultSummary(result), result.action_failures?.length ? 'action-warning' : '');
         } catch (err) {
             console.warn('提交 Turn Plan 失败：', err);
             setActionMessage('提交计划失败：' + err.message, 'action-error');

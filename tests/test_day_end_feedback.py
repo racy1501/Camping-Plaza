@@ -34,6 +34,15 @@ class DayEndFeedbackFrontendTests(unittest.TestCase):
         self.assertNotIn("先还款", source)
         self.assertNotIn("优先还款", source)
 
+    def test_turn_plan_feedback_surfaces_action_failures(self):
+        source = Path(
+            "camping_plaza/frontend/scripts/overview.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function formatTurnPlanResultSummary(result)", source)
+        self.assertIn("result.action_failures", source)
+        self.assertIn("部分动作未完成", source)
+
 
 if __name__ == "__main__":
     unittest.main()
