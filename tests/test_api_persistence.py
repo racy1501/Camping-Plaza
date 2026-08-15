@@ -1916,6 +1916,47 @@ class DayEndApiTests(ApiPersistenceTestCase):
         self.assertEqual(self.engine.state.turn, 6)
         self.assertTrue(self.engine.state.day_end_completed)
 
+    def test_missing_day_end_actions_is_rejected_without_processing(self):
+        self._reach_turn6()
+        before = (
+            self.engine.state.balance,
+            self.engine.state.debt_remaining,
+            self.engine.facilities["greenery"].level,
+            self.engine.state.food_stock,
+            self.engine.state.day_end_completed,
+        )
+
+        with self.assertRaises(game_api.HTTPException) as context:
+            game_api.submit_day_end(game_api.DayEndRequest())
+
+        self.assertEqual(context.exception.status_code, 422)
+        self.assertEqual(context.exception.detail["error_code"], "missing_day_end_actions")
+        self.assertIn("day_end_actions", context.exception.detail["message"])
+        self.assertEqual(
+            (
+                self.engine.state.balance,
+                self.engine.state.debt_remaining,
+                self.engine.facilities["greenery"].level,
+                self.engine.state.food_stock,
+                self.engine.state.day_end_completed,
+            ),
+            before,
+        )
+
+    def test_actions_is_not_a_silent_day_end_alias_and_retry_is_allowed(self):
+        self._reach_turn6()
+        with self.assertRaises(game_api.HTTPException) as context:
+            game_api.submit_day_end(game_api.DayEndRequest(
+                actions=[self._make_action("manage_greenery", {"action": "maintain"})]
+            ))
+
+        self.assertEqual(context.exception.detail["error_code"], "missing_day_end_actions")
+        self.assertFalse(self.engine.state.day_end_completed)
+
+        retry = self._day_end([])
+        self.assertTrue(retry["success"])
+        self.assertTrue(retry["day_end_completed"])
+
     def test_mixed_success_failure_results_preserved_and_returns_200(self):
         self._reach_turn6()
         self.engine.state.food_stock = 0

@@ -109,7 +109,7 @@ class TurnPlanRequest(BaseModel):
 
 class DayEndRequest(BaseModel):
     session_id: Optional[str] = None
-    day_end_actions: list[ActionRequest] = Field(default_factory=list)
+    day_end_actions: Optional[list[ActionRequest]] = None
 
 
 class SessionRequest(BaseModel):
@@ -885,6 +885,17 @@ def submit_day_end(req: DayEndRequest):
 
     单个动作业务失败保留在 results 中，整体正常返回 200。
     """
+    if req.day_end_actions is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "missing_day_end_actions",
+                "message": (
+                    "缺少 day_end_actions；请使用 day_end_actions: [] "
+                    "显式提交空日终清单。"
+                ),
+            },
+        )
     eng = get_engine(req.session_id)
     result = eng.submit_day_end_actions(_normalize_day_end_actions(req.day_end_actions))
     if result.get("success"):
