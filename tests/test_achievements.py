@@ -54,7 +54,7 @@ class AchievementTests(unittest.TestCase):
 
         self.assertEqual(
             result["achievement_notifications"],
-            [{"id": "first_tip", "name": "首次收到小费"}],
+            [{"id": "first_tip", "name": "还有小费！"}],
         )
         self.assertEqual(self.engine.state.pending_achievement_ids, [])
         self.assertEqual(self.engine.state.unlocked_achievement_ids, ["first_tip"])
@@ -80,7 +80,7 @@ class AchievementTests(unittest.TestCase):
 
         self.assertEqual(
             achievements["unlocked"],
-            [{"id": "first_tip", "name": "首次收到小费"}],
+            [{"id": "first_tip", "name": "还有小费！"}],
         )
         self.assertEqual(achievements["pending"], achievements["unlocked"])
 

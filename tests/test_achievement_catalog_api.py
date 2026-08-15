@@ -34,7 +34,7 @@ class AchievementCatalogEngineTests(unittest.TestCase):
         self.engine._unlock_achievement("served_groups_50")
         unlocked = self._achievement("served_groups_50")
         self.assertEqual(unlocked["status"], "unlocked")
-        self.assertEqual(unlocked["title"], "累计成功接待50组")
+        self.assertEqual(unlocked["title"], "客人来了")
         self.assertEqual(unlocked["description"], "累计成功接待 50 组客人。")
 
     def test_locked_catalog_entries_do_not_leak_numbers_or_levels(self):
