@@ -281,37 +281,31 @@ class CampingPlazaEngine:
         },
         "tent_2_purchased": {
             "title": "地盘 +1",
-            "locked_title": "帐篷扩建",
             "hint": "继续扩建营地。",
             "condition": "购买 2 号帐篷。",
         },
         "all_tents_unlocked": {
             "title": "都住得下",
-            "locked_title": "帐篷扩展",
             "hint": "继续扩建营地。",
             "condition": "解锁全部 6 顶帐篷。",
         },
         "dining_lv1": {
             "title": "先吃饭吧",
-            "locked_title": "餐饮起步",
             "hint": "发展餐饮设施。",
             "condition": "首次升级餐饮至 Lv1。",
         },
         "entertainment_lv1": {
             "title": "有得玩了",
-            "locked_title": "娱乐起步",
             "hint": "发展娱乐设施。",
             "condition": "首次升级娱乐至 Lv1。",
         },
         "greenery_lv1": {
             "title": "有点绿了",
-            "locked_title": "绿化起步",
             "hint": "完善营地绿化。",
             "condition": "首次升级绿化至 Lv1。",
         },
         "all_normal_growth_complete": {
             "title": "差不多齐活",
-            "locked_title": "成长进展",
             "hint": "继续完善营地。",
             "condition": "完成温泉之前全部 11 个普通成长节点。",
         },
@@ -322,19 +316,16 @@ class CampingPlazaEngine:
         },
         "served_groups_50": {
             "title": "客人来了",
-            "locked_title": "接待里程碑",
             "hint": "接待更多客人。",
             "condition": "累计成功接待 50 组客人。",
         },
         "served_groups_100": {
             "title": "越来越热闹",
-            "locked_title": "接待进阶",
             "hint": "接待更多客人。",
             "condition": "累计成功接待 100 组客人。",
         },
         "served_groups_150": {
             "title": "生意兴隆",
-            "locked_title": "接待新高度",
             "hint": "接待更多客人。",
             "condition": "累计成功接待 150 组客人。",
         },
@@ -811,11 +802,7 @@ class CampingPlazaEngine:
                 description = definition["hint"]
             achievements.append({
                 "id": achievement_id,
-                "title": (
-                    self.ACHIEVEMENT_DEFINITIONS[achievement_id]
-                    if status == "unlocked"
-                    else definition.get("locked_title", definition["title"])
-                ),
+                "title": definition["title"],
                 "status": status,
                 "description": description,
             })

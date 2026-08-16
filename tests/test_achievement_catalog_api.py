@@ -24,26 +24,28 @@ class AchievementCatalogEngineTests(unittest.TestCase):
         catalog = self.engine.get_achievement_catalog()["achievements"]
         return next(item for item in catalog if item["id"] == achievement_id)
 
-    def test_locked_and_unlocked_entries_hide_then_reveal_exact_threshold(self):
+    def test_normal_achievement_title_stays_formal_while_description_reveals(self):
         locked = self._achievement("served_groups_50")
         self.assertEqual(locked["status"], "locked")
-        self.assertEqual(locked["title"], "接待里程碑")
+        self.assertEqual(locked["title"], "客人来了")
         self.assertEqual(locked["description"], "接待更多客人。")
-        self.assertNotIn("50", locked["title"] + locked["description"])
 
         self.engine._unlock_achievement("served_groups_50")
         unlocked = self._achievement("served_groups_50")
         self.assertEqual(unlocked["status"], "unlocked")
-        self.assertEqual(unlocked["title"], "客人来了")
+        self.assertEqual(unlocked["title"], locked["title"])
         self.assertEqual(unlocked["description"], "累计成功接待 50 组客人。")
 
-    def test_locked_catalog_entries_do_not_leak_numbers_or_levels(self):
-        for achievement in self.engine.get_achievement_catalog()["achievements"]:
-            if achievement["status"] != "locked":
+    def test_locked_normal_entries_show_hint_without_locked_title(self):
+        catalog = self.engine.get_achievement_catalog()["achievements"]
+        for achievement_id, definition in self.engine.ACHIEVEMENT_CATALOG.items():
+            if achievement_id in self.engine.DEBT_RESULT_ACHIEVEMENT_IDS:
                 continue
-            visible_text = achievement["title"] + achievement["description"]
-            self.assertFalse(any(char.isdigit() for char in visible_text))
-            self.assertNotIn("Lv", visible_text)
+            achievement = next(item for item in catalog if item["id"] == achievement_id)
+            self.assertEqual(achievement["status"], "locked")
+            self.assertEqual(achievement["title"], definition["title"])
+            self.assertEqual(achievement["description"], definition["hint"])
+            self.assertNotIn("locked_title", definition)
 
     def test_debt_result_cards_are_hidden_then_revealed_as_two_outcomes(self):
         debt_ids = {
