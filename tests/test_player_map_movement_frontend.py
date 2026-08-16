@@ -46,11 +46,12 @@ class PlayerMapMovementFrontendTests(unittest.TestCase):
         self.assertIn("tent.status === 'broken'", source)
         self.assertIn("indicator.className = 'tent-damaged-indicator'", source)
         self.assertIn("indicator.textContent = '⚠️'", source)
-        self.assertIn("(label || anchor).appendChild(indicator);", source)
+        self.assertIn("anchor.appendChild(indicator);", source)
         self.assertIn("damageIndicator.remove();", source)
         self.assertIn(".tent-damaged-indicator", styles)
-        self.assertIn("margin-left: 4px", styles)
+        self.assertIn("position: absolute", styles)
         self.assertIn("font-size: 19px", styles)
+        self.assertIn(".anchor-tent1 .tent-damaged-indicator", styles)
 
 
 if __name__ == "__main__":

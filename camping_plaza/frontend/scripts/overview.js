@@ -646,8 +646,7 @@
                     indicator.className = 'tent-damaged-indicator';
                     indicator.setAttribute('aria-label', '帐篷损坏');
                     indicator.textContent = '⚠️';
-                    const label = anchor.querySelector('.anchor-label');
-                    (label || anchor).appendChild(indicator);
+                    anchor.appendChild(indicator);
                 }
             } else if (damageIndicator) {
                 damageIndicator.remove();
