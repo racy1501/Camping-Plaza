@@ -878,7 +878,7 @@ class DiningPlannedActionsPhase2ATests(unittest.TestCase):
         self.assertEqual(npc.total_satisfaction, first_satisfaction)
         self.assertEqual(npc.last_dining_day, first_last_dining_day)
         self.assertEqual(first_result["events"], [
-            "客组851购买中档套餐，2人用餐，收入+90，消耗食材2份，整组满意度+4"
+            "1组客人购买中档套餐，2人用餐，收入+90，消耗食材2份，整组满意度+4"
         ])
         self.assertEqual(second_result["events"], [])
 

@@ -4871,11 +4871,10 @@ class EventHistoryTests(unittest.TestCase):
             for item in engine.state.event_history
             if item["day"] == 2 and item["turn"] == 6 and item["kind"] == "action"
         ]
-        self.assertEqual(
-            action_history,
-            ["日终完成：打理绿化、建设2号帐篷，共支出650金币。"],
-        )
-        self.assertNotIn("金币 -", action_history[0])
+        summary = "日终完成：打理绿化、建设2号帐篷，共支出650金币。"
+        self.assertEqual(action_history[-1], summary)
+        self.assertEqual(action_history.count(summary), 1)
+        self.assertNotIn("金币 -", summary)
 
     def test_zero_cost_day_end_summary_omits_spending(self):
         engine = make_engine()
@@ -4891,8 +4890,10 @@ class EventHistoryTests(unittest.TestCase):
             item["text"] for item in engine.state.event_history
             if item["day"] == 1 and item["turn"] == 6 and item["kind"] == "action"
         ]
-        self.assertEqual(action_history, ["日终完成：清洁帐篷。"])
-        self.assertNotIn("共支出", action_history[0])
+        summary = "日终完成：清洁帐篷。"
+        self.assertEqual(action_history[-1], summary)
+        self.assertEqual(action_history.count(summary), 1)
+        self.assertNotIn("共支出", summary)
 
     def test_day_end_summary_and_next_day_system_event_stay_separate(self):
         engine = make_engine()

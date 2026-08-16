@@ -25,6 +25,7 @@ class HotSpringExecutionTests(unittest.TestCase):
         self.engine.state.turn = 2
         self.engine.state.today_arrival_plan_day = 1
         self.engine.state.today_arrival_plan = []
+        self.engine.state.today_conflict_event = {"status": "no_event"}
 
     def tearDown(self):
         try:

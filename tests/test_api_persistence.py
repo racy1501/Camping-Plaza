@@ -1078,6 +1078,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
     def test_turn2_submit_plan_includes_repair_in_decision_candidates_when_broken(self):
         self.engine.state.turn = 2
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         self.engine.tents[1].status = "broken"
 
         actions = game_api.mcp_available_actions()["available_actions"]

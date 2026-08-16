@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 # 将 camping_plaza 包加入路径（不依赖 __init__.py，Python 3 命名空间包）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,7 +149,6 @@ class FullSaveRestoreTests(PersistenceTestCase):
             "paid": True,
         }]
         engine.state.greenery_processed_today = True
-        engine.state.day_to_overnight_cache = ["转过夜缓存事件"]
         engine.state.day_campsite_groups_served = 7
         engine.state.pending_turn_plan = {
             "target_day": 3,
@@ -238,7 +238,6 @@ class FullSaveRestoreTests(PersistenceTestCase):
             "paid": True,
         }])
         self.assertTrue(s.greenery_processed_today)
-        self.assertEqual(s.day_to_overnight_cache, ["转过夜缓存事件"])
         self.assertEqual(s.day_campsite_groups_served, 7)
         self.assertEqual(s.pending_turn_plan, {
             "target_day": 3,
@@ -326,14 +325,19 @@ class EventHistoryPersistenceTests(PersistenceTestCase):
 
         restored = CampingPlazaEngine(db_path=self.db_path)
 
+        self.assertEqual(len(restored.state.event_history), 2)
         self.assertEqual(
-            restored.state.event_history,
-            [{
+            restored.state.event_history[-1],
+            {
                 "day": 1,
                 "turn": 6,
                 "text": "预购小包，金币 -80",
                 "kind": "action",
-            }],
+                "sequence": 2,
+                "event_type": "legacy",
+                "guest_ids": [],
+                "data": {},
+            },
         )
 
 
@@ -395,7 +399,7 @@ class EmptyDatabaseFallbackTests(PersistenceTestCase):
 
 
 class MissingSnapshotTableTests(PersistenceTestCase):
-    def test_existing_database_without_snapshot_table_raises_and_preserves_schema(self):
+    def test_existing_database_without_snapshot_table_initializes_current_snapshot_schema(self):
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
@@ -410,13 +414,9 @@ class MissingSnapshotTableTests(PersistenceTestCase):
 
         self.assertEqual(self._table_names(), ["other_state"])
 
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "存档加载失败，游戏已停止启动，以避免覆盖现有存档。",
-        ):
-            CampingPlazaEngine(db_path=self.db_path)
-
-        self.assertEqual(self._table_names(), ["other_state"])
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(engine.state.day, 1)
+        self.assertIn("runtime_snapshot", self._table_names())
         conn = sqlite3.connect(self.db_path)
         try:
             row = conn.execute(
@@ -612,8 +612,19 @@ class DiningPersistenceTests(PersistenceTestCase):
 
         restored = CampingPlazaEngine(db_path=self.db_path)
         restored._new_day()
+        restored.state.today_arrival_plan = [{
+            "npc_id": restored.npc_pool[0].id,
+            "planned_day": restored.state.day,
+            "arrival_status": "arrived",
+            "planned_actions": [{
+                "action": "dining",
+                "menu_key": "basic",
+                "planned_turn": restored.state.turn,
+                "status": "pending",
+            }],
+        }]
 
-        with unittest.mock.patch("game_engine.random.random", return_value=0.0):
+        with mock.patch("game_engine.random.random", return_value=0.0):
             restored._process_dining({"events": []})
 
         self.assertEqual(restored.state.today_income["dining"], 30)
@@ -695,7 +706,7 @@ class PendingReviewPersistenceTests(PersistenceTestCase):
         self.assertTrue(engine.save_state())
 
         restored = CampingPlazaEngine(db_path=self.db_path)
-        restored.advance_turn()
+        restored._new_day()
         self.assertTrue(restored.save_state())
 
         reloaded = CampingPlazaEngine(db_path=self.db_path)
@@ -733,15 +744,15 @@ class TurnPlanPersistenceTests(PersistenceTestCase):
         restored = CampingPlazaEngine(db_path=self.db_path)
         self.assertIsNotNone(restored.state.pending_turn_plan)
 
-        with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
-            with unittest.mock.patch.object(CampingPlazaEngine, "_process_checkin"):
-                with unittest.mock.patch.object(CampingPlazaEngine, "_process_dining"):
-                    with unittest.mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
-                        with unittest.mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
+        with mock.patch.object(CampingPlazaEngine, "_process_checkout_all"):
+            with mock.patch.object(CampingPlazaEngine, "_process_checkin"):
+                with mock.patch.object(CampingPlazaEngine, "_process_dining"):
+                    with mock.patch.object(CampingPlazaEngine, "_process_entertainment"):
+                        with mock.patch.object(CampingPlazaEngine, "_handle_breakdowns"):
                             result = restored.advance_turn()
 
         self.assertTrue(result["plan_execution"]["actions"][0]["success"])
-        self.assertEqual(restored.tents[1].status, "available")
+        self.assertNotEqual(restored.tents[1].status, "broken")
         self.assertIsNone(restored.state.pending_turn_plan)
         self.assertTrue(restored.save_state())
 

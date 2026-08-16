@@ -115,7 +115,8 @@ class GrowthProgressTests(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             raw = conn.execute(
-                "SELECT snapshot_json FROM runtime_snapshot WHERE id = 1"
+                "SELECT snapshot_json FROM runtime_snapshot WHERE session_id = ?",
+                ("local-default",),
             ).fetchone()[0]
             payload = json.loads(raw)
             for key in (
@@ -133,8 +134,8 @@ class GrowthProgressTests(unittest.TestCase):
                 ):
                     npc_data.pop(key, None)
             conn.execute(
-                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE id = 1",
-                (json.dumps(payload, ensure_ascii=False),),
+                "UPDATE runtime_snapshot SET snapshot_json = ? WHERE session_id = ?",
+                (json.dumps(payload, ensure_ascii=False), "local-default"),
             )
             conn.commit()
         finally:

@@ -336,7 +336,7 @@ class Turn6Tests(HumanActionsApiTestCase):
             ["repay_debt"],
         )
 
-    def test_turn6_max_greenery_maintenance_is_disabled(self):
+    def test_turn6_max_greenery_maintenance_remains_available(self):
         self.engine.facilities["greenery"].level = 2
         self.engine.facilities["greenery"].greenery_satisfaction = 10.0
         self.engine.state.balance = 1000
@@ -344,8 +344,8 @@ class Turn6Tests(HumanActionsApiTestCase):
             item for item in self._actions()["day_end_action_candidates"]
             if item["action"] == "manage_greenery"
         )
-        self.assertFalse(candidate["enabled"])
-        self.assertEqual(candidate["reason"], "已满级")
+        self.assertTrue(candidate["enabled"])
+        self.assertEqual(candidate["reason"], "")
 
     def test_turn6_day_end_candidates_include_cleaning_and_qualified_growth(self):
         self.engine.tents[1].status = "cleaning"

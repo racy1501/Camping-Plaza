@@ -28,7 +28,7 @@ class OperatingCostsPhaseC2Tests(unittest.TestCase):
         )
         self.engine.state.today_arrival_plan = []
         self.engine.state.pending_turn_plan = None
-        self.engine.state.today_conflict_event = None
+        self.engine.state.today_conflict_event = {"status": "no_event"}
 
     def _add_successful_overnight(self, npc_id, tent_id, *, entry_visit_type="overnight"):
         npc = NPCGroup(

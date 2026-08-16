@@ -208,22 +208,20 @@ class GreeneryCoreTests(unittest.TestCase):
         self.assertEqual(greenery.greenery_satisfaction, 6.0)
         self.assertTrue(engine.state.greenery_processed_today)
 
-    def test_lv2_maintain_is_rejected_without_state_changes(self):
+    def test_lv2_maintain_is_allowed_up_to_cap(self):
         engine = make_engine()
         greenery = engine.facilities["greenery"]
         greenery.level = 2
         greenery.greenery_satisfaction = 9.0
         engine.state.turn = 6
         engine.state.balance = 1000
-        before_expenses = dict(engine.state.today_expenses)
-        before_count = engine.state.successful_greenery_maintenance_count
         message = engine.manage_greenery("maintain")
-        self.assertEqual(message, "绿化已达最高级（Lv.2）")
-        self.assertEqual(engine.state.balance, 1000)
-        self.assertEqual(greenery.greenery_satisfaction, 9.0)
-        self.assertEqual(engine.state.today_expenses, before_expenses)
-        self.assertEqual(engine.state.successful_greenery_maintenance_count, before_count)
-        self.assertFalse(engine.state.greenery_processed_today)
+        self.assertEqual(message, "绿化已打理，花费50金币")
+        self.assertEqual(engine.state.balance, 950)
+        self.assertEqual(greenery.greenery_satisfaction, 10.0)
+        self.assertEqual(engine.state.today_expenses["greenery"], 50)
+        self.assertEqual(engine.state.successful_greenery_maintenance_count, 1)
+        self.assertTrue(engine.state.greenery_processed_today)
 
     def test_get_full_state_greenery_summary_for_lv0_not_maintained(self):
         engine = make_engine()

@@ -258,12 +258,9 @@ def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
 
     greenery = state["greenery"]
     if greenery["value"] > 0:
-        greenery_max_level = greenery["level"] >= 2
-        enabled = balance >= 50 and not greenery_max_level and not eng.state.greenery_processed_today
+        enabled = balance >= 50 and not eng.state.greenery_processed_today
         reason = ""
-        if greenery_max_level:
-            reason = "已满级"
-        elif eng.state.greenery_processed_today:
+        if eng.state.greenery_processed_today:
             reason = "今天已经处理过绿化"
         elif balance < 50:
             reason = "金币不足"

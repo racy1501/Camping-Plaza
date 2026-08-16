@@ -3946,8 +3946,6 @@ class CampingPlazaEngine:
         if self.state.turn != 6:
             return "绿化管理只能在日终管理阶段（Turn 6）进行"
         facility = self.facilities["greenery"]
-        if action == "maintain" and facility.level >= 2:
-            return "绿化已达最高级（Lv.2）"
         if self.state.greenery_processed_today:
             return "今天已经处理过绿化了"
 

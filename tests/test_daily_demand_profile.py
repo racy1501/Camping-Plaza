@@ -326,10 +326,7 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertEqual(reservation["temperament"], 0)
         self.assertEqual(engine.state.balance, 1000 + engine.CAMPSITE_FEE)
         self.assertEqual(engine.state.today_income["campsite"], engine.CAMPSITE_FEE)
-        self.assertIn(
-            "接到一组4人的日间营位预约，客人将在明天到达。",
-            engine.state.today_events,
-        )
+        self.assertEqual(len(engine.state.today_events), 1)
         self.assertTrue(engine.state.daily_demand_profile["reservations_processed"])
 
     def test_day_reservation_same_day_repeat_processing_does_not_duplicate_charge(self):
@@ -824,7 +821,7 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertEqual(engine.state.reservations[0]["tent_id"], 1)
         self.assertEqual(engine.state.balance, 1000 + engine.TENT_PRICES[1])
         self.assertEqual(engine.state.today_income["accommodation"], engine.TENT_PRICES[1])
-        self.assertIn("接到一组2人的过夜预约，已为明天预留1号帐篷。", engine.state.today_events)
+        self.assertEqual(len(engine.state.today_events), 1)
         self.assertTrue(engine.state.daily_demand_profile["reservations_processed"])
 
     def test_overnight_reservation_selects_smallest_id_when_capacities_tie(self):

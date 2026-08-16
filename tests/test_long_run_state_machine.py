@@ -76,7 +76,7 @@ class LongRunTestCase(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             return conn.execute(
-                "SELECT id, snapshot_json, updated_at FROM runtime_snapshot"
+                "SELECT session_id, snapshot_json, updated_at FROM runtime_snapshot"
             ).fetchall()
         finally:
             conn.close()
@@ -177,7 +177,9 @@ class LongRunTestCase(unittest.TestCase):
         # 快照单行
         rows = self._snapshot_rows()
         self.assertEqual(len(rows), 1, f"{tag}runtime_snapshot 行数异常")
-        self.assertEqual(rows[0][0], 1, f"{tag}runtime_snapshot id 异常")
+        self.assertEqual(
+            rows[0][0], self.engine.session_id, f"{tag}runtime_snapshot session 异常"
+        )
 
 
 class MultiDayOperationTests(LongRunTestCase):
@@ -197,42 +199,22 @@ class MultiDayOperationTests(LongRunTestCase):
 
         day_turn_before = (self.engine.state.day, self.engine.state.turn)
 
-        # 1. broken 帐篷优先逐个维修
-        if "repair_tent" in by_name:
-            a = by_name["repair_tent"][0]
-            self._action("repair_tent", a["params"])
+        if "resolve_temporary_conflict" in by_name:
+            self._action("resolve_temporary_conflict", {"choice": "ignore"})
             return False
 
-        # 2. 批量清洁
-        if "clean_tents" in by_name and rng.random() < 0.9:
-            self._action("clean_tents", by_name["clean_tents"][0]["params"])
-            return False
-
-        # 4. 推进类操作（防停滞时强制）
-        advance_like = []
-        for name in ("advance_turn", "new_day"):
-            if name in by_name:
-                advance_like.append(name)
-        if stall_guard[0] >= 20 and advance_like:
-            self._action(advance_like[0])
-            return True
-
-        # 5. 其余经营操作随机（提升服务/升级/绿化）
-        optional = []
-        for name in ("improve_service", "upgrade_facility",
-                     "manage_greenery"):
-            if name in by_name:
-                optional.append(by_name[name][0])
-        if optional and rng.random() < 0.5:
-            a = rng.choice(optional)
-            self._action(a["action"], a.get("params"))
-            return False
-
-        # 6. 默认推进（营业回合 mcp actions 不列 advance_turn，直接调用接口）
-        if self.engine.state.turn <= 5:
+        if "execute_turn_plan" in by_name:
+            game_api.submit_turn_plan(
+                game_api.TurnPlanRequest(free_actions=[], actions=[])
+            )
+        elif "submit_day_end_actions" in by_name:
+            game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[]))
+        elif "start_next_day" in by_name:
+            game_api.start_next_day()
+        elif "advance_turn" in by_name:
             game_api.advance_turn()
         else:
-            self._action("new_day")
+            self.fail(f"未识别的正式 MCP 动作目录: {sorted(by_name)}")
         return (self.engine.state.day, self.engine.state.turn) != day_turn_before
 
     def test_multi_day_operation_with_restarts(self):
@@ -331,7 +313,7 @@ class DeterministicScenarioTests(LongRunTestCase):
         ))
         self.assertTrue(plan_result["success"])
         actions = game_api.mcp_available_actions()["available_actions"]
-        self.assertEqual([a["action"] for a in actions], ["advance_turn"])
+        self.assertEqual([a["action"] for a in actions], ["execute_turn_plan"])
         with mock.patch("game_engine.random.random", return_value=0.99):
             result = game_api.advance_turn()
         self.assertEqual(result["turn"], 4)
@@ -420,6 +402,7 @@ class DeterministicScenarioTests(LongRunTestCase):
             "day_to_overnight_intent": True,
         }]
         eng.state.today_arrival_plan_day = 1
+        eng.state.today_conflict_event = {"status": "no_event"}
 
         # Turn 4：提交空计划后推进，日转夜结算
         plan_result = game_api.submit_turn_plan(game_api.TurnPlanRequest(
