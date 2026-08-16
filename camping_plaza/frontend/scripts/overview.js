@@ -36,6 +36,11 @@
         LOCATION_TO_ANCHOR[`tent_${i}`] = `tent${i}`;
     }
 
+    const NPC_BADGE_IMAGES = {
+        day: 'assets/npc_badge_day.png',
+        overnight: 'assets/npc_badge_overnight.png'
+    };
+
     const els = {};
     let apiConnected = false;
     let actionsConnected = false;
@@ -478,7 +483,7 @@
         renderTopCards(state);
         renderMorningReview(state);
         renderMap(state);
-        renderNPCs(state.active_npcs || []);
+        renderNPCs(state.active_npcs || [], state.tents || {});
         renderIncome(state);
         renderReviewBook(state.review_history || []);
         renderOverview(state);
@@ -595,7 +600,7 @@
         }
     }
 
-    function renderNPCs(activeNpcs) {
+    function renderNPCs(activeNpcs, tents) {
         if (!els.npcLayer) return;
         els.npcLayer.innerHTML = '';
 
@@ -662,10 +667,45 @@
             marker.style.top = pos.top + '%';
             marker.style.transform = `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px))`;
             marker.title = `${npc.group_size}人 · ${npc.visit_type || 'unknown'} · ${npc.location}`;
-            marker.innerHTML = `<span class="npc-body">${npc.group_size}人</span>`;
+
+            const badge = document.createElement('div');
+            badge.className = 'npc-badge';
+            const badgeImage = document.createElement('img');
+            badgeImage.className = 'npc-badge-image';
+            badgeImage.src = NPC_BADGE_IMAGES[npc.visit_type] || NPC_BADGE_IMAGES.day;
+            badgeImage.alt = '';
+            const badgeText = document.createElement('div');
+            badgeText.className = 'npc-badge-text';
+            const badgeNumber = document.createElement('span');
+            badgeNumber.className = 'npc-badge-number';
+            const fixedNumber = fixedBadgeNumberForNpc(npc, tents);
+            badgeNumber.textContent = Number.isInteger(fixedNumber) ? `${fixedNumber}号` : '—号';
+            const badgeSize = document.createElement('span');
+            badgeSize.className = 'npc-badge-size';
+            badgeSize.textContent = `${npc.group_size}人`;
+            badgeText.append(badgeNumber, badgeSize);
+            badge.append(badgeImage, badgeText);
+            marker.appendChild(badge);
 
             els.npcLayer.appendChild(marker);
         });
+    }
+
+    function fixedBadgeNumberForNpc(npc, tents) {
+        if (npc.visit_type === 'day') {
+            const campsiteSlot = Number(npc.campsite_slot);
+            return Number.isInteger(campsiteSlot) && campsiteSlot > 0 ? campsiteSlot : null;
+        }
+        if (npc.visit_type !== 'overnight') return null;
+
+        const matchingTent = Object.entries(tents || {}).find(([, tent]) =>
+            Number(tent && tent.occupied_by) === Number(npc.id)
+        );
+        if (!matchingTent) return null;
+
+        const [tentKey, tent] = matchingTent;
+        const tentId = Number(tent && tent.id != null ? tent.id : tentKey);
+        return Number.isInteger(tentId) && tentId > 0 ? tentId : null;
     }
 
     function campsitePositionForNpc(npc) {

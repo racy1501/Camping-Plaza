@@ -24,6 +24,22 @@ class PlayerMapMovementFrontendTests(unittest.TestCase):
         self.assertIn("transition: left 0.3s ease-out, top 0.3s ease-out", styles)
         self.assertIn(".npc-layer", styles)
 
+    def test_npc_badge_keeps_fixed_identity_separate_from_map_location(self):
+        source = _OVERVIEW.read_text(encoding="utf-8")
+        styles = _STYLES.read_text(encoding="utf-8")
+        self.assertIn("renderNPCs(state.active_npcs || [], state.tents || {});", source)
+        self.assertIn("function fixedBadgeNumberForNpc(npc, tents)", source)
+        self.assertIn("const campsiteSlot = Number(npc.campsite_slot);", source)
+        self.assertIn("Object.entries(tents || {}).find", source)
+        self.assertIn("tent.occupied_by", source)
+        self.assertIn("NPC_BADGE_IMAGES[npc.visit_type]", source)
+        self.assertIn("assets/npc_badge_day.png", source)
+        self.assertIn("assets/npc_badge_overnight.png", source)
+        self.assertIn("className = 'npc-badge-number'", source)
+        self.assertIn("className = 'npc-badge-size'", source)
+        self.assertIn("const anchorId = anchorIdForNpc(npc.location);", source)
+        self.assertIn(".npc-badge", styles)
+
 
 if __name__ == "__main__":
     unittest.main()
