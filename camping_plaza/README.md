@@ -166,4 +166,4 @@ python game_api.py
 
 ## License
 
-MIT
+本项目使用 [PolyForm Noncommercial License 1.0.0](../LICENSE)。完整许可条件请参阅仓库根目录的 [`LICENSE`](../LICENSE) 文件。
