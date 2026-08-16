@@ -40,6 +40,7 @@
         day: 'assets/npc_badge_day.png',
         overnight: 'assets/npc_badge_overnight.png'
     };
+    const PLAYER_NAME_RULES = '中文名限 2-3 个汉字；英文名限 2-6 个英文字母或数字。';
 
     const els = {};
     let apiConnected = false;
@@ -62,6 +63,7 @@
     let eventsRenderDeferred = false;
     let visibilityPollingBound = false;
     let playerAnchorId = 'entrance';
+    let onboardingSubmitting = false;
     const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
     let sessionId = '';
 
@@ -114,6 +116,12 @@
     }
 
     function cacheElements() {
+        els.onboardingScreen = document.getElementById('onboardingScreen');
+        els.playerNameForm = document.getElementById('playerNameForm');
+        els.playerNameInput = document.getElementById('playerNameInput');
+        els.onboardingRules = document.getElementById('onboardingRules');
+        els.onboardingMessage = document.getElementById('onboardingMessage');
+        els.playerNameSubmit = document.getElementById('playerNameSubmit');
         els.connectionBanner = document.getElementById('connectionBanner');
         els.day = document.getElementById('day');
         els.turn = document.getElementById('turn');
@@ -183,6 +191,9 @@
                 if (event.target === els.achievementModal) closeAchievementCatalog();
             });
         }
+        if (els.playerNameForm) {
+            els.playerNameForm.addEventListener('submit', submitPlayerName);
+        }
     }
 
     function maxEventSequence(state) {
@@ -212,6 +223,11 @@
             apiConnected = true;
             currentState = state;
             renderConnected();
+            if (state.player_name == null) {
+                showPlayerNameOnboarding();
+                return;
+            }
+            hidePlayerNameOnboarding();
             renderAll(state, { skipEvents });
             if (skipEvents) eventsRenderDeferred = true;
             await fetchActions();
@@ -221,6 +237,53 @@
             actionsConnected = false;
             console.warn('无法连接游戏后端：', err);
             setDisconnected();
+        }
+    }
+
+    function showPlayerNameOnboarding() {
+        if (!els.onboardingScreen) return;
+        els.onboardingScreen.classList.remove('hidden');
+        if (els.onboardingRules) els.onboardingRules.textContent = PLAYER_NAME_RULES;
+        if (!onboardingSubmitting && els.playerNameInput) els.playerNameInput.focus();
+    }
+
+    function hidePlayerNameOnboarding() {
+        if (els.onboardingScreen) els.onboardingScreen.classList.add('hidden');
+        if (els.onboardingMessage) els.onboardingMessage.textContent = '';
+    }
+
+    async function submitPlayerName(event) {
+        event.preventDefault();
+        if (onboardingSubmitting || !els.playerNameInput) return;
+
+        onboardingSubmitting = true;
+        if (els.playerNameSubmit) els.playerNameSubmit.disabled = true;
+        if (els.onboardingMessage) {
+            els.onboardingMessage.className = 'onboarding-message';
+            els.onboardingMessage.textContent = '正在保存名称…';
+        }
+
+        try {
+            const res = await fetch('/api/player/name', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(sessionBody({ name: els.playerNameInput.value }))
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok || payload.success === false) {
+                const detail = payload.detail || {};
+                throw new Error(detail.message || payload.message || `请求失败 (${res.status})`);
+            }
+            await fetchState({ skipEvents: true });
+        } catch (err) {
+            console.warn('设置玩家名称失败：', err);
+            if (els.onboardingMessage) {
+                els.onboardingMessage.className = 'onboarding-message onboarding-message-error';
+                els.onboardingMessage.textContent = err.message || '名称保存失败，请重试。';
+            }
+        } finally {
+            onboardingSubmitting = false;
+            if (els.playerNameSubmit) els.playerNameSubmit.disabled = false;
         }
     }
 

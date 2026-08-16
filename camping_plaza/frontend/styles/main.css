@@ -92,6 +92,99 @@ button:disabled {
     display: none;
 }
 
+.onboarding-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(42, 49, 42, 0.28);
+}
+
+.onboarding-screen.hidden {
+    display: none;
+}
+
+.onboarding-card {
+    width: min(440px, 100%);
+    padding: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.86);
+    border-radius: var(--radius);
+    background: rgba(250, 248, 245, 0.96);
+    box-shadow: var(--shadow);
+}
+
+.onboarding-eyebrow {
+    color: var(--sage-dark);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+}
+
+.onboarding-card h1 {
+    margin-top: 6px;
+    color: var(--text);
+    font-size: 24px;
+}
+
+.onboarding-intro {
+    margin-top: 8px;
+    color: var(--text-light);
+    font-size: 13px;
+}
+
+.onboarding-label {
+    display: block;
+    margin-top: 22px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#playerNameInput {
+    width: 100%;
+    margin-top: 7px;
+    padding: 10px 12px;
+    border: 1px solid var(--sand);
+    border-radius: 10px;
+    background: #fffefa;
+    color: var(--text);
+    font: inherit;
+    outline-color: var(--sage);
+}
+
+.onboarding-rules {
+    margin-top: 8px;
+    color: var(--text-light);
+    font-size: 11px;
+}
+
+.onboarding-message {
+    min-height: 20px;
+    margin-top: 9px;
+    color: var(--text-light);
+    font-size: 12px;
+}
+
+.onboarding-message-error {
+    color: #7a2e2e;
+}
+
+.onboarding-submit {
+    width: 100%;
+    margin-top: 6px;
+    padding: 10px 14px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--sage-dark);
+    color: var(--cream);
+    font-weight: 700;
+}
+
+.onboarding-submit:hover:not(:disabled) {
+    background: var(--wood-dark);
+}
+
 .lost-icon {
     width: 22px;
     height: 22px;

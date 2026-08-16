@@ -13,6 +13,21 @@
             <span>未连接游戏后端</span>
         </div>
 
+        <section class="onboarding-screen hidden" id="onboardingScreen" aria-labelledby="onboardingTitle">
+            <div class="onboarding-card">
+                <p class="onboarding-eyebrow">露营广场</p>
+                <h1 id="onboardingTitle">欢迎来到营地</h1>
+                <p class="onboarding-intro">开门营业前，请先告诉我你的名字。</p>
+                <form id="playerNameForm" novalidate>
+                    <label class="onboarding-label" for="playerNameInput">经营者名称</label>
+                    <input id="playerNameInput" name="name" type="text" autocomplete="nickname" spellcheck="false">
+                    <p class="onboarding-rules" id="onboardingRules">中文名限 2-3 个汉字；英文名限 2-6 个字母或数字。</p>
+                    <p class="onboarding-message" id="onboardingMessage" role="alert" aria-live="polite"></p>
+                    <button class="onboarding-submit" id="playerNameSubmit" type="submit">进入营地</button>
+                </form>
+            </div>
+        </section>
+
         <!-- 顶部概览：独立状态卡 -->
         <header class="top-dashboard" aria-label="营地概览">
             <article class="metric-card day-card">
