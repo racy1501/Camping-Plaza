@@ -180,7 +180,7 @@ def _food_package_plan_description() -> str:
         "提交本轮营业计划（free_actions支持clean_tents，"
         "actions支持repair_tent、improve_service、buy_food_package，"
         "buy_food_package使用package_key，"
-        f"可选包：{package_text}，actions最多3项）"
+        f"可选包：{package_text}，actions最多3项）。决策点使用数量可以为 0–3。"
     )
 
 

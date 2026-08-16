@@ -43,6 +43,7 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertEqual(entry["endpoint"], "/api/turn/plan")
         self.assertIn("提交并执行", entry["description"])
         self.assertIn("推进到下一回合", entry["description"])
+        self.assertIn("决策点使用数量可以为 0–3。", entry["description"])
 
     def test_turn_specific_candidates_and_daily_limits(self):
         self.engine.state.turn = 3
