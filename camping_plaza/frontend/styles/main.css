@@ -1287,6 +1287,18 @@ button:disabled {
 .campsite-slot[data-slot="9"]::after { left: 10px; bottom: -20px; }
 .campsite-slot[data-slot="10"]::after { left: 14px; bottom: -18px; }
 
+/* 抵消营位底层错落角度，让 1-10 号牌保持水平 */
+.campsite-slot[data-slot="1"]::after { transform: rotate(5deg); }
+.campsite-slot[data-slot="2"]::after { transform: rotate(-4deg); }
+.campsite-slot[data-slot="3"]::after { transform: rotate(3deg); }
+.campsite-slot[data-slot="4"]::after { transform: rotate(-6deg); }
+.campsite-slot[data-slot="5"]::after { transform: rotate(4deg); }
+.campsite-slot[data-slot="6"]::after { transform: rotate(-4deg); }
+.campsite-slot[data-slot="7"]::after { transform: rotate(-3deg); }
+.campsite-slot[data-slot="8"]::after { transform: rotate(5deg); }
+.campsite-slot[data-slot="9"]::after { transform: rotate(2deg); }
+.campsite-slot[data-slot="10"]::after { transform: rotate(-4deg); }
+
 /* 地图锚点 */
 .anchor {
     position: absolute;

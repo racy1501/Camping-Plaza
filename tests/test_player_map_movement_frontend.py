@@ -53,6 +53,15 @@ class PlayerMapMovementFrontendTests(unittest.TestCase):
         self.assertIn("font-size: 19px", styles)
         self.assertIn(".anchor-tent1 .tent-damaged-indicator", styles)
 
+    def test_campsite_number_badges_counter_rotate_their_slot_angles(self):
+        styles = _STYLES.read_text(encoding="utf-8")
+        for slot, angle in ((1, 5), (2, -4), (3, 3), (4, -6), (5, 4),
+                            (6, -4), (7, -3), (8, 5), (9, 2), (10, -4)):
+            self.assertIn(
+                f'.campsite-slot[data-slot="{slot}"]::after {{ transform: rotate({angle}deg); }}',
+                styles,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
