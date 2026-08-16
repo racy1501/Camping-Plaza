@@ -255,8 +255,6 @@ class CampingPlazaEngine:
     }
     OPENING_FOOD_GIFT_PACKAGE = "medium"
 
-    FACILITY_UPGRADE_COST = [0, 400, 1000]
-    GREENERY_UPGRADE_COST = [0, 300, 800]
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
     ACHIEVEMENT_CATALOG = {
         "first_day_complete": {
@@ -2498,18 +2496,6 @@ class CampingPlazaEngine:
                 else f"{len(day_natural_slots)}组日间游客到达{slots}营位，共收入{income}金币。"
             )
             self._append_event_history(day, turn, message, "world")
-        if False and campsite_slots:
-            count = len(campsite_slots)
-            slot_text = "、".join(f"{slot}号" for slot in campsite_slots)
-            income = income_delta.get("campsite", 0)
-            prefix = "共" if count > 1 else ""
-            self._append_event_history(
-                day,
-                turn,
-                f"{count}组客人到达{slot_text}营位，{prefix}收入{income}金币。",
-                "world",
-            )
-
         converted_npcs = [
             npc
             for npc_id, before in snapshot["npcs"].items()
@@ -2584,21 +2570,6 @@ class CampingPlazaEngine:
                 else f"{len(overnight_natural_tent_ids)}组过夜客入住{tents}帐篷，共收入{income}金币。"
             )
             self._append_event_history(day, turn, message, "world")
-        if False and overnight_tent_ids:
-            count = len(overnight_tent_ids)
-            tent_text = "、".join(f"{tent_id}号" for tent_id in overnight_tent_ids)
-            income = (
-                accommodation_delta
-                if not converted_tent_ids
-                else overnight_income
-            )
-            prefix = "共" if count > 1 else ""
-            self._append_event_history(
-                day,
-                turn,
-                f"{count}组客人入住{tent_text}帐篷，{prefix}收入{income}金币。",
-                "world",
-            )
         if converted_tent_ids:
             count = len(converted_tent_ids)
             tent_text = "、".join(f"{tent_id}号" for tent_id in converted_tent_ids)
@@ -4944,15 +4915,6 @@ class CampingPlazaEngine:
             self.state.today_income["accommodation"] += payment
             overnight_reservation_income += payment
             overnight_groups += 1
-
-        if False and day_groups and overnight_groups:
-            self.state.today_events.append(
-                f"接到明日{day_groups}组日间营位预约、{overnight_groups}组帐篷预约。"
-            )
-        elif False and day_groups:
-            self.state.today_events.append(f"接到明日{day_groups}组日间营位预约。")
-        elif False and overnight_groups:
-            self.state.today_events.append(f"接到明日{overnight_groups}组帐篷预约。")
 
         if day_groups and overnight_groups:
             self.state.today_events.append(

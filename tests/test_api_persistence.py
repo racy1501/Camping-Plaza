@@ -1951,8 +1951,6 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
 
         with mock.patch.object(self.engine, "save_state") as save_mock:
             with mock.patch.object(
-                game_api, "_normalize_turn_plan_actions"
-            ) as normalize_mock, mock.patch.object(
                 self.engine, "submit_turn_plan"
             ) as submit_mock, mock.patch.object(
                 self.engine, "advance_turn"
@@ -1961,7 +1959,6 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
             ) as execute_mock:
                 game_api.mcp_state()
                 save_mock.assert_not_called()
-                normalize_mock.assert_not_called()
                 submit_mock.assert_not_called()
                 advance_mock.assert_not_called()
                 execute_mock.assert_not_called()

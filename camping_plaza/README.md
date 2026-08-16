@@ -107,7 +107,7 @@ python game_api.py
 
 #### `/api/action` 错误语义
 
-- **请求语义错误**：HTTP 400，结构 `{"detail": {"error_code": "...", "message": "..."}}`，当前错误码：`missing_tent_id`、`missing_facility_name`、`missing_package_key`、`invalid_project_id`、`unknown_action`。
+- **请求语义错误**：HTTP 400，结构 `{"detail": {"error_code": "...", "message": "..."}}`，当前错误码：`missing_action_param`、`invalid_action_param`、`invalid_project_id`、`unknown_action`。
 - **请求体 schema 校验错误**：HTTP 422，由 FastAPI/Pydantic 返回。
 - **合法业务动作被拒绝**：仍可能返回 HTTP 200 + `success: false` + `message`（此时部分失败动作可能已写入状态）。
 

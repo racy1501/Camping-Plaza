@@ -169,20 +169,6 @@ _API_ACTION_REQUIRED_PARAMS = {
 }
 
 
-def _food_package_action_entries() -> list[dict]:
-    entries = []
-    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
-        entries.append({
-            "action": "buy_food_package",
-            "params": {"package_key": package_key},
-            "cost": package["price"],
-            "description": (
-                f"购买{package['name']}（{package['portions']}份，{package['price']}金币）"
-            )
-        })
-    return entries
-
-
 def _food_package_plan_description() -> str:
     package_bits = []
     for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
@@ -393,16 +379,6 @@ def _validate_action_params(
     return params
 
 
-def _normalize_turn_plan_actions(actions: list[ActionRequest]) -> list[dict]:
-    normalized = []
-    for item in actions:
-        params = item.params or {}
-        if not isinstance(params, dict):
-            raise HTTPException(400, "params必须为对象")
-        normalized.append({"action": item.action, **params})
-    return normalized
-
-
 def _validate_turn_plan_actions(
     actions: list[ActionRequest], expected_kind: str
 ) -> list[dict]:
@@ -432,18 +408,6 @@ def _validate_turn_plan_actions(
             unknown_action_error="unknown_turn_plan_action",
         )
         normalized.append({"action": item.action, **params})
-    return normalized
-
-
-def _normalize_day_end_actions(actions: list[ActionRequest]) -> list[dict]:
-    """把 DayEndRequest.day_end_actions 转为引擎 submit_day_end_actions 期望的
-    [{"action": ..., "params": {...}}, ...] 结构，params 原样透传不新增字段。"""
-    normalized = []
-    for item in actions:
-        params = item.params or {}
-        if not isinstance(params, dict):
-            raise HTTPException(400, "params必须为对象")
-        normalized.append({"action": item.action, "params": params})
     return normalized
 
 
@@ -1322,18 +1286,6 @@ def mcp_available_actions(session_id: Optional[str] = None):
     state = eng.get_full_state()
     actions = []
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
-
-    # 存在待清洁帐篷时提供批量清洁操作（营业和日终阶段均可）
-    cleaning_tent_ids = [
-        int(tid) for tid, t in state["tents"].items()
-        if t["unlocked"] and t["status"] == "cleaning"
-    ]
-    if cleaning_tent_ids:
-        actions.append({
-            "action": "clean_tents",
-            "params": {"tent_ids": cleaning_tent_ids},
-            "description": "批量清洁待清洁帐篷（不消耗决策点）"
-        })
 
     if state["turn"] <= 5:
         actions = []
