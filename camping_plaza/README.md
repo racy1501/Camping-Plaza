@@ -61,6 +61,9 @@ python game_api.py
 ### MCP专用
 - `GET /mcp/state` — AI 决策需要的精简状态
 - `GET /mcp/actions` — 当前可用操作列表
+- `GET /mcp/query_growth_projects` — 主动查看设施与成长项目详情
+- `GET /mcp/query_debt` — 主动查看债务详情
+- `GET /mcp/achievements` — 主动查看成就图鉴
 
 `/mcp/state` 主要字段（按经营、设施、预约/客流、Turn Plan 分组）：
 
@@ -80,12 +83,20 @@ python game_api.py
 
 - 只暴露代码判定 `can_purchase_now == true` 的成长项目；
 - 成长购买动作为 `purchase_growth_project`，参数为 `project_id`；
-- 旧 `upgrade_facility` 不再由 `/mcp/actions` 推荐；
-- 旧 `upgrade_facility` 仍作为 `/api/action` 的兼容执行入口保留，但不建议新接入使用。
+- 常用查询菜单只需提供“查看设施升级详情”和“查看成就图鉴”；债务查询按需主动调用。
 
 ### 游戏操作
-- `POST /api/turn/advance` — 推进回合
-- `POST /api/action` — 执行经营操作（维修帐篷、购买成长项目、管理绿化等）
+- `POST /api/session` — 创建新 session；新存档首次读取先进入 onboarding
+- `POST /api/player/name` — 设置该存档的经营者名称，成功后直接进入 Day 1 / Turn 1
+- `POST /api/turn/advance` — 推进 Turn 1 或执行已提交计划
+- `POST /api/turn/plan` — Turn 2～5 提交并立即执行 `execute_turn_plan`
+- `POST /api/day/end` — Turn 6 提交完整 `submit_day_end_actions`
+- `POST /api/day/start` — 日终完成后显式进入下一天
+- `POST /api/action` — 仅执行当前仍存在的专门即时动作（例如临时事件）
+
+正式主链为：
+
+`新 session → onboarding → set_player_name → Day 1 / Turn 1 → Turn 2～5 execute_turn_plan → Turn 6 submit_day_end_actions → start_next_day`
 
 #### 预约机制
 
@@ -135,7 +146,7 @@ python game_api.py
 
 ## 设计文档
 
-完整游戏规则见 `DESIGN.md`（v0.3）
+当前完整游戏规则唯一来源为仓库根目录的 `露营广场策划.md`。
 
 ## 技术栈
 
@@ -148,8 +159,10 @@ python game_api.py
 合集站通过 MCP 封装层调用本项目的 API：
 1. 调用 `GET /mcp/state` 获取当前状态
 2. 调用 `GET /mcp/actions` 获取可用操作
-3. AI 决策后调用 `POST /api/action` 执行操作
-4. 调用 `POST /api/turn/advance` 推进回合
+3. 新 session 首次先调用 `POST /api/player/name` 完成 onboarding
+4. Turn 2～5 调用 `POST /api/turn/plan` 提交并执行完整计划
+5. Turn 6 调用 `POST /api/day/end` 提交日终清单
+6. 日终确认完成后调用 `POST /api/day/start` 开启下一天
 
 ## License
 

@@ -3905,7 +3905,7 @@ class McpLockingStateTests(unittest.TestCase):
 
         for turn in (3, 4, 5, 6):
             self.engine.state.turn = turn
-            self.assertEqual(game_api.mcp_state()["next_turn_checkout_tents"], [])
+            self.assertNotIn("next_turn_checkout_tents", game_api.mcp_state())
 
     def test_mcp_actions_do_not_offer_tent_upgrade(self):
         self.engine.state.turn = 6

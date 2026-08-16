@@ -1076,7 +1076,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertIn("buy_food_package", submit_action["description"])
         self.assertIn("package_key", submit_action["description"])
 
-    def test_turn2_submit_plan_includes_repair_candidates_when_broken(self):
+    def test_turn2_submit_plan_includes_repair_in_decision_candidates_when_broken(self):
         self.engine.state.turn = 2
         self.engine.tents[1].status = "broken"
 
@@ -1085,14 +1085,17 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             item for item in actions if item["action"] == "execute_turn_plan"
         )
 
-        self.assertIn("repair_candidates", submit_action)
-        candidates = submit_action["repair_candidates"]
+        self.assertNotIn("repair_candidates", submit_action)
+        candidates = [
+            item for item in submit_action["decision_action_candidates"]
+            if item["action"] == "repair_tent"
+        ]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["action"], "repair_tent")
         self.assertEqual(candidates[0]["params"], {"tent_id": 1})
-        self.assertIn("100", candidates[0]["description"])
+        self.assertEqual(candidates[0]["price"], CampingPlazaEngine.REPAIR_COST)
 
-    def test_turn2_no_repair_candidates_without_broken(self):
+    def test_turn2_no_repair_candidate_without_broken(self):
         self.engine.state.turn = 2
 
         actions = game_api.mcp_available_actions()["available_actions"]
@@ -1100,9 +1103,12 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             item for item in actions if item["action"] == "execute_turn_plan"
         )
 
-        self.assertNotIn("repair_candidates", submit_action)
+        self.assertNotIn(
+            "repair_tent",
+            [item["action"] for item in submit_action["decision_action_candidates"]],
+        )
 
-    def test_turn2_multiple_broken_has_multiple_repair_candidates(self):
+    def test_turn2_multiple_broken_have_multiple_repair_candidates(self):
         self.engine.state.turn = 2
         self.engine.tents[1].status = "broken"
         self.engine.tents[3].is_unlocked = True
@@ -1113,7 +1119,10 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             item for item in actions if item["action"] == "execute_turn_plan"
         )
 
-        candidates = submit_action["repair_candidates"]
+        candidates = [
+            item for item in submit_action["decision_action_candidates"]
+            if item["action"] == "repair_tent"
+        ]
         self.assertEqual(len(candidates), 2)
         tent_ids = sorted(c["params"]["tent_id"] for c in candidates)
         self.assertEqual(tent_ids, [1, 3])
@@ -1146,9 +1155,13 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             item for item in actions if item["action"] == "execute_turn_plan"
         )
 
-        self.assertIn("repair_candidates", submit_action)
+        self.assertNotIn("repair_candidates", submit_action)
         self.assertEqual(
-            submit_action["repair_candidates"][0]["params"], {"tent_id": 1}
+            next(
+                item for item in submit_action["decision_action_candidates"]
+                if item["action"] == "repair_tent"
+            )["params"],
+            {"tent_id": 1},
         )
 
     def test_turn2_repair_candidates_disappear_after_all_repaired(self):
@@ -1163,7 +1176,11 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         submit_action = next(
             item for item in actions if item["action"] == "execute_turn_plan"
         )
-        self.assertEqual(len(submit_action["repair_candidates"]), 2)
+        candidates = [
+            item for item in submit_action["decision_action_candidates"]
+            if item["action"] == "repair_tent"
+        ]
+        self.assertEqual(len(candidates), 2)
 
         # 修好全部 broken
         self.engine.tents[1].status = "available"
@@ -1173,7 +1190,10 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         submit_action = next(
             item for item in actions if item["action"] == "execute_turn_plan"
         )
-        self.assertNotIn("repair_candidates", submit_action)
+        self.assertNotIn(
+            "repair_tent",
+            [item["action"] for item in submit_action["decision_action_candidates"]],
+        )
 
 
 class HotSpringStateOutputTests(ApiPersistenceTestCase):

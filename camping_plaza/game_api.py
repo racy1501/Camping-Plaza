@@ -1355,20 +1355,6 @@ def mcp_available_actions(session_id: Optional[str] = None):
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
             submit_entry["max_decision_actions"] = eng.state.decisions_left
-            broken_candidates = [
-                {
-                    "action": item["action"],
-                    "params": dict(item["params"]),
-                    "cost": item.get("price", CampingPlazaEngine.REPAIR_COST),
-                    "enabled": item["enabled"],
-                    "reason": item["reason"],
-                    "description": f"维修{item['params']['tent_id']}号帐篷（{item.get('price', CampingPlazaEngine.REPAIR_COST)}金币）",
-                }
-                for item in turn_candidates["decision_action_candidates"]
-                if item["action"] == "repair_tent"
-            ]
-            if broken_candidates:
-                submit_entry["repair_candidates"] = broken_candidates
             temporary_event = _get_temporary_event_summary(eng)
             if temporary_event is not None:
                 actions.append({
