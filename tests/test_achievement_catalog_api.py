@@ -24,17 +24,40 @@ class AchievementCatalogEngineTests(unittest.TestCase):
         catalog = self.engine.get_achievement_catalog()["achievements"]
         return next(item for item in catalog if item["id"] == achievement_id)
 
-    def test_normal_achievement_title_stays_formal_while_description_reveals(self):
-        locked = self._achievement("served_groups_50")
-        self.assertEqual(locked["status"], "locked")
-        self.assertEqual(locked["title"], "客人来了")
-        self.assertEqual(locked["description"], "接待更多客人。")
-
-        self.engine._unlock_achievement("served_groups_50")
-        unlocked = self._achievement("served_groups_50")
-        self.assertEqual(unlocked["status"], "unlocked")
-        self.assertEqual(unlocked["title"], locked["title"])
-        self.assertEqual(unlocked["description"], "累计成功接待 50 组客人。")
+    def test_normal_achievement_order_hints_and_conditions_are_formal(self):
+        expected = [
+            ("first_served_group", "真来人了", "营地开始运转。", "首次成功接待一组客人。"),
+            ("first_day_complete", "老板上线", "欢迎光临！", "Day 1 正式结束并进入 Day 2。"),
+            ("first_overnight_group", "今晚住这儿", "有人愿意把一晚留在营地。", "首次成功接待一组过夜客。"),
+            ("first_day_to_overnight", "不着急走", "一次比原计划更久的停留。", "首次有日间客成功转为过夜客。"),
+            ("first_tip", "还有小费！", "客人离开时多留下的一点心意。", "首次收到客人小费。"),
+            ("tent_2_purchased", "地盘 +1", "开启新空间。", "购买 2 号帐篷。"),
+            ("all_tents_unlocked", "都住得下", "空间全开。", "解锁全部 6 顶帐篷。"),
+            ("dining_lv1", "先吃饭吧", "美食more more。", "首次升级餐饮至 Lv1。"),
+            ("entertainment_lv1", "有得玩了", "丰富一下娱乐活动。", "首次升级娱乐至 Lv1。"),
+            ("greenery_lv1", "有点绿了", "营地第一次有了更像样的绿意。", "首次升级绿化至 Lv1。"),
+            ("all_normal_growth_complete", "差不多齐活", "营地的常规建设逐渐接近完整。", "完成温泉之前全部 11 个普通成长节点。"),
+            ("hot_spring_built", "开泡", "营地迎来一项更大的设施。", "建成温泉。"),
+            ("served_groups_50", "客人来了", "营地渐渐有了稳定的人气。", "累计成功接待 50 组客人。"),
+            ("served_groups_100", "越来越热闹", "这份人气继续往上积累。", "累计成功接待 100 组客人。"),
+            ("served_groups_150", "生意兴隆", "营地真正热闹起来以后。", "累计成功接待 150 组客人。"),
+        ]
+        catalog = self.engine.get_achievement_catalog()["achievements"]
+        normal = [
+            item for item in catalog
+            if item["id"] not in self.engine.DEBT_RESULT_ACHIEVEMENT_IDS
+        ]
+        self.assertEqual(
+            [(item["id"], item["title"], item["description"]) for item in normal],
+            [(achievement_id, title, hint) for achievement_id, title, hint, _ in expected],
+        )
+        for achievement_id, title, hint, condition in expected:
+            self.assertEqual(self._achievement(achievement_id)["title"], title)
+            self.assertEqual(self._achievement(achievement_id)["description"], hint)
+            self.engine._unlock_achievement(achievement_id)
+            unlocked = self._achievement(achievement_id)
+            self.assertEqual(unlocked["title"], title)
+            self.assertEqual(unlocked["description"], condition)
 
     def test_locked_normal_entries_show_hint_without_locked_title(self):
         catalog = self.engine.get_achievement_catalog()["achievements"]

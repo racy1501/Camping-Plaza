@@ -254,79 +254,79 @@ class CampingPlazaEngine:
 
     GREENERY_LEVEL_MAX = {0: 4.0, 1: 7.0, 2: 10.0}
     ACHIEVEMENT_CATALOG = {
-        "first_day_complete": {
-            "title": "老板上线",
-            "hint": "继续经营营地。",
-            "condition": "Day 1 正式结束并进入 Day 2。",
-        },
         "first_served_group": {
             "title": "真来人了",
-            "hint": "迎接第一批客人。",
+            "hint": "营地开始运转。",
             "condition": "首次成功接待一组客人。",
+        },
+        "first_day_complete": {
+            "title": "老板上线",
+            "hint": "欢迎光临！",
+            "condition": "Day 1 正式结束并进入 Day 2。",
         },
         "first_overnight_group": {
             "title": "今晚住这儿",
-            "hint": "接待过夜客人。",
+            "hint": "有人愿意把一晚留在营地。",
             "condition": "首次成功接待一组过夜客。",
         },
         "first_day_to_overnight": {
             "title": "不着急走",
-            "hint": "让日间客留下过夜。",
+            "hint": "一次比原计划更久的停留。",
             "condition": "首次有日间客成功转为过夜客。",
         },
         "first_tip": {
             "title": "还有小费！",
-            "hint": "让客人留下小费。",
+            "hint": "客人离开时多留下的一点心意。",
             "condition": "首次收到客人小费。",
         },
         "tent_2_purchased": {
             "title": "地盘 +1",
-            "hint": "继续扩建营地。",
+            "hint": "开启新空间。",
             "condition": "购买 2 号帐篷。",
         },
         "all_tents_unlocked": {
             "title": "都住得下",
-            "hint": "继续扩建营地。",
+            "hint": "空间全开。",
             "condition": "解锁全部 6 顶帐篷。",
         },
         "dining_lv1": {
             "title": "先吃饭吧",
-            "hint": "发展餐饮设施。",
+            "hint": "美食more more。",
             "condition": "首次升级餐饮至 Lv1。",
         },
         "entertainment_lv1": {
             "title": "有得玩了",
-            "hint": "发展娱乐设施。",
+            "hint": "丰富一下娱乐活动。",
             "condition": "首次升级娱乐至 Lv1。",
         },
         "greenery_lv1": {
             "title": "有点绿了",
-            "hint": "完善营地绿化。",
+            "hint": "营地第一次有了更像样的绿意。",
             "condition": "首次升级绿化至 Lv1。",
         },
         "all_normal_growth_complete": {
             "title": "差不多齐活",
-            "hint": "继续完善营地。",
+            "hint": "营地的常规建设逐渐接近完整。",
             "condition": "完成温泉之前全部 11 个普通成长节点。",
         },
         "hot_spring_built": {
             "title": "开泡",
-            "hint": "推进大型设施建设。",
+            "hint": "营地迎来一项更大的设施。",
             "condition": "建成温泉。",
         },
         "served_groups_50": {
             "title": "客人来了",
-            "hint": "接待更多客人。",
+            "hint": "营地渐渐有了稳定的人气。",
             "condition": "累计成功接待 50 组客人。",
         },
         "served_groups_100": {
             "title": "越来越热闹",
-            "hint": "接待更多客人。",
+            "hint": "这份人气继续往上积累。",
             "condition": "累计成功接待 100 组客人。",
         },
         "served_groups_150": {
             "title": "生意兴隆",
-            "hint": "接待更多客人。",
+            "hint": "营地真正热闹起来以后。",
             "condition": "累计成功接待 150 组客人。",
         },
         "debt_paid_by_deadline": {
