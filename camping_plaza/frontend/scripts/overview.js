@@ -537,9 +537,9 @@
             els.playerMarker.style.top = anchor.top + '%';
             els.playerMarker.style.bottom = 'auto';
             els.playerMarker.style.right = 'auto';
-            els.playerMarker.title = `${displayName} 待命`;
+            els.playerMarker.title = displayName;
         }
-        if (els.playerLabel) els.playerLabel.textContent = `${displayName} 待命`;
+        if (els.playerLabel) els.playerLabel.textContent = displayName;
     }
 
     function renderAll(state, options = {}) {

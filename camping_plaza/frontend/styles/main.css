@@ -1276,7 +1276,7 @@ button:disabled {
 .campsite-slot[data-slot="10"] { left: 78%; top: 60%; transform: translate(-50%, -50%) rotate(4deg); }
 
 /* 营位编号视觉偏移：避开桌椅主体，保留同一 slot 作为 semantic anchor */
-.campsite-slot[data-slot="1"]::after { left: -55px; bottom: -60px; }
+.campsite-slot[data-slot="1"]::after { left: -30px; bottom: -25px; }
 .campsite-slot[data-slot="2"]::after { left: -19px; bottom: -40px; }
 .campsite-slot[data-slot="3"]::after { left: -28px; bottom: -28px; }
 .campsite-slot[data-slot="4"]::after { left: -16px; bottom: -28px; }
@@ -1284,8 +1284,8 @@ button:disabled {
 .campsite-slot[data-slot="6"]::after { left: -43px; bottom: -20px; }
 .campsite-slot[data-slot="7"]::after { left: -27px; bottom: -31px; }
 .campsite-slot[data-slot="8"]::after { left: -47px; bottom: -18px; }
-.campsite-slot[data-slot="9"]::after { left: -20px; bottom: -55px; }
-.campsite-slot[data-slot="10"]::after { left: -21px; bottom: -38px; }
+.campsite-slot[data-slot="9"]::after { left: -28px; bottom: -20px; }
+.campsite-slot[data-slot="10"]::after { left: -16px; bottom: -33px; }
 
 /* 抵消营位底层错落角度，让 1-10 号牌保持水平 */
 .campsite-slot[data-slot="1"]::after { transform: rotate(5deg); }
@@ -1506,9 +1506,18 @@ button:disabled {
 .anchor-entertainment { left: 51%; top: 83%; }
 .anchor-dining { left: 78%; top: 83%; }
 
-.anchor-entertainment .anchor-label,
-.anchor-dining .anchor-label,
 .anchor-entrance .anchor-label { transform: translateY(25px); }
+
+/* 功能建筑文字与营地服务站统一使用地图容器坐标 */
+.entertainment-label,
+.dining-label {
+    position: absolute;
+    top: 93%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+}
+.entertainment-label { left: 51%; }
+.dining-label { left: 78%; }
 
 /* 玩家标记 */
 .player-marker {
