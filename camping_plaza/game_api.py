@@ -854,6 +854,7 @@ def get_state(session_id: Optional[str] = None):
     """获取完整游戏状态（给MCP用）"""
     eng = get_engine(session_id)
     state = eng.get_full_state()
+    state["player_name"] = eng.state.player_name
     state.pop("achievements", None)
     state["debt_remaining"] = eng.state.debt_remaining
     state["hot_spring"] = _get_hot_spring_status(eng)

@@ -458,15 +458,17 @@
         if (els.playerMarker) els.playerMarker.style.display = 'none';
     }
 
-    function showPlayerMarker() {
+    function showPlayerMarker(playerName) {
+        const displayName = String(playerName || '玩家');
         if (els.playerMarker) {
             els.playerMarker.style.display = '';
             els.playerMarker.style.left = ANCHORS.entrance.left + '%';
             els.playerMarker.style.top = ANCHORS.entrance.top + '%';
             els.playerMarker.style.bottom = 'auto';
             els.playerMarker.style.right = 'auto';
+            els.playerMarker.title = `${displayName} 待命`;
         }
-        if (els.playerLabel) els.playerLabel.textContent = '小克';
+        if (els.playerLabel) els.playerLabel.textContent = `${displayName} 待命`;
     }
 
     function renderAll(state, options = {}) {
@@ -481,7 +483,7 @@
         if (options.skipEvents !== true) {
             renderEvents(state.event_history || [], state.today_events || []);
         }
-        showPlayerMarker();
+        showPlayerMarker(state.player_name);
     }
 
     function renderMorningReview(state) {
