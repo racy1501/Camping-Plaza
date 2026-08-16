@@ -1221,6 +1221,16 @@ button:disabled {
     z-index: 2;
 }
 
+.tent-damaged-indicator {
+    position: absolute;
+    top: -15px;
+    right: -17px;
+    z-index: 4;
+    font-size: 14px;
+    line-height: 1;
+    pointer-events: none;
+}
+
 .anchor.locked .anchor-label {
     opacity: 1;
 }

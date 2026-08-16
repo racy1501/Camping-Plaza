@@ -40,6 +40,15 @@ class PlayerMapMovementFrontendTests(unittest.TestCase):
         self.assertIn("const anchorId = anchorIdForNpc(npc.location);", source)
         self.assertIn(".npc-badge", styles)
 
+    def test_damaged_tent_indicator_follows_tent_status(self):
+        source = _OVERVIEW.read_text(encoding="utf-8")
+        styles = _STYLES.read_text(encoding="utf-8")
+        self.assertIn("tent.status === 'broken'", source)
+        self.assertIn("indicator.className = 'tent-damaged-indicator'", source)
+        self.assertIn("indicator.textContent = '⚠️'", source)
+        self.assertIn("damageIndicator.remove();", source)
+        self.assertIn(".tent-damaged-indicator", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

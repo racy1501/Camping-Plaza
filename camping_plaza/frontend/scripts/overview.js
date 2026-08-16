@@ -576,6 +576,18 @@
                 if (lock) lock.hidden = false;
                 anchor.title = `${i}号帐篷 · 未解锁`;
             }
+            const damageIndicator = anchor.querySelector('.tent-damaged-indicator');
+            if (tent && tent.unlocked && tent.status === 'broken') {
+                if (!damageIndicator) {
+                    const indicator = document.createElement('span');
+                    indicator.className = 'tent-damaged-indicator';
+                    indicator.setAttribute('aria-label', '帐篷损坏');
+                    indicator.textContent = '⚠️';
+                    anchor.appendChild(indicator);
+                }
+            } else if (damageIndicator) {
+                damageIndicator.remove();
+            }
         }
         const hotSpring = state.hot_spring || {};
         const onsen = document.querySelector('.anchor-onsen-locked');
