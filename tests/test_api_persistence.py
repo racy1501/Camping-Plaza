@@ -2270,8 +2270,6 @@ class CampsiteSlotStateOutputTests(ApiPersistenceTestCase):
             "has_left": False,
             "review_left": False,
             "review_rating": 0,
-            "visit_count": 1,
-            "last_visit_day": 0,
             "is_reserved": False,
             "paid": False,
         }])

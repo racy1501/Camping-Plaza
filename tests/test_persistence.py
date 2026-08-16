@@ -191,18 +191,12 @@ class FullSaveRestoreTests(PersistenceTestCase):
             id=7, group_size=2, visit_type="overnight", arrival_turn=2,
             location="tent_2", total_satisfaction=85, has_left=False,
             review_left=True, review_rating=4, review_attempted=True, economic_level=2,
-            spending_habit=0, temperament=1, visit_count=3,
-            last_visit_day=1, is_reserved=True, paid=True
+            spending_habit=0, temperament=1, is_reserved=True, paid=True
         )
         npc.last_dining_day = 3
         npc.checkout_turn = 2
         engine.npc_pool.append(npc)
         engine._npc_id_counter = 42
-        engine.npc_history.append({
-            "id": 1, "group_size": 2, "economic_level": 1,
-            "spending_habit": 1, "temperament": 0,
-            "visit_count": 1, "last_visit_day": 2
-        })
 
         self.assertTrue(engine.save_state())
 
@@ -293,17 +287,12 @@ class FullSaveRestoreTests(PersistenceTestCase):
         self.assertEqual(n.economic_level, 2)
         self.assertEqual(n.spending_habit, 0)
         self.assertEqual(n.temperament, 1)
-        self.assertEqual(n.visit_count, 3)
-        self.assertEqual(n.last_visit_day, 1)
         self.assertEqual(n.last_dining_day, 3)
         self.assertEqual(n.checkout_turn, 2)
         self.assertTrue(n.is_reserved)
         self.assertTrue(n.paid)
 
         self.assertEqual(restored._npc_id_counter, 42)
-        self.assertEqual(len(restored.npc_history), 1)
-        self.assertEqual(restored.npc_history[0]["id"], 1)
-        self.assertEqual(restored.npc_history[0]["last_visit_day"], 2)
 
     def test_opening_food_gift_persists_without_duplication(self):
         engine = CampingPlazaEngine(db_path=self.db_path)
@@ -650,8 +639,6 @@ class MissingLastDiningDayFallbackTests(PersistenceTestCase):
             "economic_level": 1,
             "spending_habit": 1,
             "temperament": 1,
-            "visit_count": 1,
-            "last_visit_day": 1,
             "is_reserved": False,
             "paid": False
         }]

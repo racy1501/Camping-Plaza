@@ -54,25 +54,7 @@ CREATE TABLE IF NOT EXISTS npcs (
     economic_level INTEGER NOT NULL DEFAULT 1,
     spending_habit INTEGER NOT NULL DEFAULT 1,
     temperament INTEGER NOT NULL DEFAULT 1,
-    -- 回访
-    visit_count INTEGER NOT NULL DEFAULT 1,
-    last_visit_day INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
--- NPC历史表（已离开但保留回访记录）
-CREATE TABLE IF NOT EXISTS npc_history (
-    id INTEGER PRIMARY KEY,
-    group_size INTEGER NOT NULL,
-    visit_count INTEGER NOT NULL DEFAULT 1,
-    last_visit_day INTEGER NOT NULL DEFAULT 0,
-    economic_level INTEGER NOT NULL DEFAULT 1,
-    spending_habit INTEGER NOT NULL DEFAULT 1,
-    temperament INTEGER NOT NULL DEFAULT 1,
-    total_reviews INTEGER NOT NULL DEFAULT 0,
-    avg_rating REAL,
-    last_satisfaction INTEGER,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 -- 运行时快照表（单行 JSON 快照，当前唯一权威运行存档）

@@ -38,7 +38,6 @@ def snapshot_dict(eng):
         "tents": {tid: asdict(t) for tid, t in eng.tents.items()},
         "facilities": {name: asdict(f) for name, f in eng.facilities.items()},
         "npc_pool": [asdict(n) for n in eng.npc_pool],
-        "npc_history": [dict(h) for h in eng.npc_history],
         "counter": eng._npc_id_counter,
     }
 
@@ -164,10 +163,9 @@ class LongRunTestCase(unittest.TestCase):
                 self.assertIn(eng.tents[tid].status, ("occupied", "broken"),
                               f"{tag}NPC{npc.id}所在帐篷{tid}状态异常")
 
-        # ID 计数器不小于任何已生成 NPC ID（含历史）
-        all_ids = npc_ids + [h["id"] for h in eng.npc_history]
-        if all_ids:
-            self.assertGreaterEqual(eng._npc_id_counter, max(all_ids),
+        # ID 计数器不小于当前 NPC ID。
+        if npc_ids:
+            self.assertGreaterEqual(eng._npc_id_counter, max(npc_ids),
                                     f"{tag}_npc_id_counter 小于已生成ID")
 
         # 收入结构

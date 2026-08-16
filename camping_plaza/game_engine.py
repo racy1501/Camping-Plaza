@@ -56,9 +56,6 @@ class NPCGroup:
     spending_habit: int = 0  # 0-2: 吝啬/普通/大方
     temperament: int = 0  # 0-2: 温和/普通/暴躁
 
-    # 回访记录
-    visit_count: int = 1
-    last_visit_day: int = 0
     last_dining_day: int = 0
     checkout_turn: Optional[int] = None
 
@@ -512,7 +509,6 @@ class CampingPlazaEngine:
         self.state = GameState()
         self.tents: dict[int, Tent] = {}
         self.npc_pool: list[NPCGroup] = []
-        self.npc_history: list[dict] = []
         self.facilities: dict[str, Facility] = {}
         self._npc_id_counter = 0
         self._init_game()
@@ -1573,7 +1569,6 @@ class CampingPlazaEngine:
                 "tents": {str(tid): asdict(t) for tid, t in self.tents.items()},
                 "facilities": {name: asdict(f) for name, f in self.facilities.items()},
                 "npc_pool": [asdict(n) for n in self.npc_pool],
-                "npc_history": list(self.npc_history),
                 "npc_id_counter": self._npc_id_counter,
             }
             data = json.dumps(payload, ensure_ascii=False)
@@ -1642,7 +1637,7 @@ class CampingPlazaEngine:
                 return "load_error"
 
             required = {"snapshot_version", "state", "tents", "facilities",
-                        "npc_pool", "npc_history", "npc_id_counter"}
+                        "npc_pool", "npc_id_counter"}
             if not required.issubset(payload.keys()):
                 return "load_error"
 
@@ -1735,7 +1730,6 @@ class CampingPlazaEngine:
                 normalized_ndata.setdefault("growth_dining_recorded", False)
                 normalized_ndata.setdefault("growth_paid_entertainment_recorded", False)
                 restored_npc_pool.append(NPCGroup(**normalized_ndata))
-            restored_npc_history = list(payload["npc_history"])
             restored_npc_id_counter = int(payload["npc_id_counter"])
 
             # 全部构造成功才提交到实例字段
@@ -1743,7 +1737,6 @@ class CampingPlazaEngine:
             self.tents = restored_tents
             self.facilities = restored_facilities
             self.npc_pool = restored_npc_pool
-            self.npc_history = restored_npc_history
             self._npc_id_counter = restored_npc_id_counter
             return "loaded"
         except Exception:
@@ -3574,19 +3567,7 @@ class CampingPlazaEngine:
     # -------------------------------------------------------------------------
 
     def _cleanup_left_npcs(self):
-        """清理所有已离开的NPC"""
-        # 修复：离场NPC写入轻量历史
-        for npc in self.npc_pool:
-            if npc.has_left:
-                self.npc_history.append({
-                    "id": npc.id,
-                    "group_size": npc.group_size,
-                    "economic_level": npc.economic_level,
-                    "spending_habit": npc.spending_habit,
-                    "temperament": npc.temperament,
-                    "visit_count": npc.visit_count,
-                    "last_visit_day": self.state.day
-                })
+        """移除所有已离开的 NPC。"""
         self.npc_pool = [n for n in self.npc_pool if not n.has_left]
 
     # -------------------------------------------------------------------------
@@ -4947,8 +4928,6 @@ class CampingPlazaEngine:
                     "has_left": n.has_left,
                     "review_left": n.review_left,
                     "review_rating": n.review_rating,
-                    "visit_count": n.visit_count,
-                    "last_visit_day": n.last_visit_day,
                     "is_reserved": n.is_reserved,
                     "paid": n.paid
                 })

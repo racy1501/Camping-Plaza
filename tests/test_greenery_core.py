@@ -392,7 +392,6 @@ class GreeneryCoreTests(unittest.TestCase):
                 name: asdict(facility) for name, facility in base_engine.facilities.items()
             },
             "npc_pool": [guest_payload],
-            "npc_history": [],
             "npc_id_counter": base_engine._npc_id_counter,
         }
 
