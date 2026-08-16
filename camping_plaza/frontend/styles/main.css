@@ -1399,7 +1399,7 @@ button:disabled {
     align-items: center;
     gap: 3px;
     z-index: 10;
-    transition: left 0.05s step-end, top 0.05s step-end, bottom 0.05s step-end, right 0.05s step-end;
+    transition: left 0.3s ease-out, top 0.3s ease-out, bottom 0.3s ease-out, right 0.3s ease-out;
     pointer-events: none;
 }
 

@@ -56,6 +56,7 @@
     let replayStatePending = false;
     let eventsRenderDeferred = false;
     let visibilityPollingBound = false;
+    let playerAnchorId = 'entrance';
     const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
     let sessionId = '';
 
@@ -297,6 +298,7 @@
     function movePlayerMarkerToAnchor(anchorId) {
         const anchor = ANCHORS[anchorId];
         if (!els.playerMarker || !anchor) return false;
+        playerAnchorId = anchorId;
         els.playerMarker.style.left = anchor.left + '%';
         els.playerMarker.style.top = anchor.top + '%';
         els.playerMarker.style.bottom = 'auto';
@@ -460,10 +462,11 @@
 
     function showPlayerMarker(playerName) {
         const displayName = String(playerName || '玩家');
+        const anchor = ANCHORS[playerAnchorId] || ANCHORS.entrance;
         if (els.playerMarker) {
             els.playerMarker.style.display = '';
-            els.playerMarker.style.left = ANCHORS.entrance.left + '%';
-            els.playerMarker.style.top = ANCHORS.entrance.top + '%';
+            els.playerMarker.style.left = anchor.left + '%';
+            els.playerMarker.style.top = anchor.top + '%';
             els.playerMarker.style.bottom = 'auto';
             els.playerMarker.style.right = 'auto';
             els.playerMarker.title = `${displayName} 待命`;
