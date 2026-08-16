@@ -703,26 +703,26 @@
             const isTent = /^tent\d+$/.test(anchorId);
             const isCampsite = Boolean(campsitePos);
             const campsiteBadgeOffsets = {
-                1: { x: 18, y: -22 },
-                2: { x: 16, y: -20 },
-                3: { x: 18, y: -22 },
-                4: { x: 20, y: -20 },
-                5: { x: 18, y: -20 },
-                6: { x: 18, y: -18 },
-                7: { x: 18, y: -22 },
-                8: { x: 16, y: -22 },
-                9: { x: 20, y: -20 },
-                10: { x: 18, y: -18 }
+                1: { x: 0, y: -4 },
+                2: { x: 0, y: -4 },
+                3: { x: 0, y: -4 },
+                4: { x: 0, y: -4 },
+                5: { x: 0, y: -4 },
+                6: { x: 0, y: -4 },
+                7: { x: 0, y: -4 },
+                8: { x: 0, y: -4 },
+                9: { x: 0, y: -4 },
+                10: { x: 0, y: -4 }
             };
             const campsiteSlot = Number(npc.campsite_slot);
-            const campsiteBadge = campsiteBadgeOffsets[campsiteSlot] || { x: 18, y: -18 };
+            const campsiteBadge = campsiteBadgeOffsets[campsiteSlot] || { x: 0, y: -4 };
             const tentBadgeOffsets = {
-                tent1: { x: 18, y: -18 },
-                tent2: { x: 18, y: -18 },
-                tent3: { x: -18, y: -20 },
-                tent4: { x: 22, y: -14 },
-                tent5: { x: 18, y: -18 },
-                tent6: { x: 18, y: -18 }
+                tent1: { x: 0, y: -4 },
+                tent2: { x: 0, y: -4 },
+                tent3: { x: 0, y: -4 },
+                tent4: { x: 0, y: -4 },
+                tent5: { x: 0, y: -4 },
+                tent6: { x: 0, y: -4 }
             };
             const baseOffset = tentBadgeOffsets[anchorId];
             const offsetX = isTent
