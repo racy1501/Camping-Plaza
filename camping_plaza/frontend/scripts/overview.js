@@ -77,19 +77,7 @@
         return { ...payload, session_id: sessionId };
     }
 
-    async function initializeSession() {
-        const urlSessionId = new URLSearchParams(window.location.search).get('session_id');
-        const savedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
-        const requestedSessionId = urlSessionId || savedSessionId;
-        if (requestedSessionId) {
-            const response = await fetch(sessionUrl('/api/state', requestedSessionId));
-            if (!response.ok) {
-                throw new Error('指定存档不存在或 session_id 无效。');
-            }
-            sessionId = requestedSessionId;
-            window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
-            return;
-        }
+    async function createSession() {
         const response = await fetch('/api/session', { method: 'POST' });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.session_id) {
@@ -100,6 +88,35 @@
         const url = new URL(window.location.href);
         url.searchParams.set('session_id', sessionId);
         window.history.replaceState(null, '', url);
+    }
+
+    function isSessionNotFoundResponse(response, payload) {
+        return response.status === 404
+            && payload.detail?.error_code === 'session_not_found';
+    }
+
+    async function initializeSession() {
+        const searchParams = new URLSearchParams(window.location.search);
+        const urlSessionId = searchParams.get('session_id');
+        const hasExplicitUrlSession = urlSessionId !== null;
+        const savedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
+        const requestedSessionId = hasExplicitUrlSession ? urlSessionId : savedSessionId;
+        if (hasExplicitUrlSession || requestedSessionId) {
+            const response = await fetch(sessionUrl('/api/state', requestedSessionId));
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                if (!hasExplicitUrlSession && isSessionNotFoundResponse(response, payload)) {
+                    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+                    await createSession();
+                    return;
+                }
+                throw new Error('指定存档不存在或 session_id 无效。');
+            }
+            sessionId = requestedSessionId;
+            window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+            return;
+        }
+        await createSession();
     }
 
     async function init() {
