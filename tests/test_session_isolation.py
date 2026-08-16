@@ -59,8 +59,13 @@ class SessionIsolationTests(unittest.TestCase):
         session_a = created_a["session_id"]
         session_b = created_b["session_id"]
         self.assertNotEqual(session_a, session_b)
-        self.assertEqual(created_a["state"]["day"], created_b["state"]["day"])
-        self.assertEqual(created_a["state"]["balance"], created_b["state"]["balance"])
+        self.assertNotIn("state", created_a)
+        self.assertNotIn("state", created_b)
+        for session_id, name in ((session_a, "小明"), (session_b, "露营者")):
+            named = self.client.post(
+                "/api/player/name", json={"session_id": session_id, "name": name},
+            )
+            self.assertEqual(named.status_code, 200, named.text)
 
         advanced_a = self.client.post("/api/turn/advance", json={"session_id": session_a})
         self.assertEqual(advanced_a.status_code, 200, advanced_a.text)

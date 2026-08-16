@@ -180,6 +180,7 @@ class AchievementCatalogApiTests(unittest.TestCase):
     def test_mcp_and_human_candidates_expose_both_limit_fields(self):
         session_id = self._create_session()
         engine = game_api.get_engine(session_id)
+        engine.state.player_name = "测试"
         engine.state.turn = 2
         engine.state.improve_service_uses_today = 2
         engine.state.clean_campsite_uses_today = 2

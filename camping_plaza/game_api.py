@@ -47,6 +47,8 @@ app.add_middleware(
 # 仅保留给既有直接函数测试注入；正式请求每次按 session_id 从持久化快照恢复。
 engine: Optional[CampingPlazaEngine] = None
 SESSION_ID_RE = re.compile(r"^sess_[0-9a-f]{32}$")
+CHINESE_PLAYER_NAME_RE = re.compile(r"^[\u4e00-\u9fff]{2,3}$")
+ASCII_PLAYER_NAME_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
 
 
 def _raise_session_error(error_code: str, message: str, status_code: int = 400):
@@ -122,6 +124,11 @@ class SessionRequest(StrictWriteRequest):
 
 class EmptyWriteRequest(StrictWriteRequest):
     pass
+
+
+class SetPlayerNameRequest(StrictWriteRequest):
+    session_id: Optional[str] = None
+    name: str
 
 
 TURN_PLAN_IMMEDIATE_ACTIONS = {
@@ -835,11 +842,10 @@ def health():
 def create_session(req: Optional[EmptyWriteRequest] = None):
     """创建一份独立的新游戏存档。"""
     session_id = f"sess_{uuid.uuid4().hex}"
-    eng = get_engine(session_id, create_new=True)
+    get_engine(session_id, create_new=True)
     return {
         "success": True,
         "session_id": session_id,
-        "state": eng.get_full_state(),
     }
 
 
@@ -961,10 +967,16 @@ def get_human_actions(session_id: Optional[str] = None):
 # 游戏操作接口
 # =============================================================================
 
+def _require_onboarding_complete(eng: CampingPlazaEngine) -> None:
+    """阻止绕过 MCP 动作目录直接开始新存档的经营操作。"""
+    if eng.state.player_name is None and engine is None:
+        _raise_action_request_error("onboarding_required", "请先设置玩家名称。")
+
 @app.post("/api/turn/advance")
 def advance_turn(req: Optional[SessionRequest] = None):
     """推进回合"""
     eng = get_engine(req.session_id if req is not None else None)
+    _require_onboarding_complete(eng)
     result = eng.advance_turn()
     # 写操作后统一保存（含故障阻塞早退补足决策点等分支）
     eng.save_state()
@@ -977,6 +989,7 @@ def submit_turn_plan(req: TurnPlanRequest):
     free_actions = _validate_turn_plan_actions(req.free_actions, "free")
     actions = _validate_turn_plan_actions(req.actions, "decision")
     eng = get_engine(req.session_id)
+    _require_onboarding_complete(eng)
     plan_result = eng.submit_turn_plan(
         free_actions,
         actions,
@@ -1035,6 +1048,7 @@ def submit_day_end(req: DayEndRequest):
         )
     day_end_actions = _validate_day_end_actions(req.day_end_actions)
     eng = get_engine(req.session_id)
+    _require_onboarding_complete(eng)
     result = eng.submit_day_end_actions(day_end_actions)
     if result.get("success"):
         result["day"] = eng.state.day
@@ -1051,6 +1065,7 @@ def submit_day_end(req: DayEndRequest):
 def start_next_day(req: Optional[SessionRequest] = None):
     """日终清单完成后开启下一天（确定性跨日推进）。"""
     eng = get_engine(req.session_id if req is not None else None)
+    _require_onboarding_complete(eng)
     result = eng.start_next_day()
     eng.save_state()
     return result
@@ -1060,6 +1075,7 @@ def start_next_day(req: Optional[SessionRequest] = None):
 def do_action(req: ActionRequest):
     """执行经营操作"""
     eng = get_engine(req.session_id)
+    _require_onboarding_complete(eng)
 
     # Turn 6 日终阶段：禁止逐项直接调用，统一走 /api/day/end 批处理
     _TURN6_DAY_END_ONLY = {
@@ -1142,6 +1158,36 @@ def do_action(req: ActionRequest):
     return result
 
 
+def _is_valid_player_name(name: str) -> bool:
+    return bool(
+        CHINESE_PLAYER_NAME_RE.fullmatch(name)
+        or ASCII_PLAYER_NAME_RE.fullmatch(name)
+    )
+
+
+@app.post("/api/player/name")
+def set_player_name(req: SetPlayerNameRequest):
+    """完成新存档的首次取名；正常游戏中不提供改名入口。"""
+    eng = get_engine(req.session_id)
+    if eng.state.player_name is not None:
+        _raise_action_request_error("player_name_already_set", "玩家名称已设置，不能修改。")
+    if not _is_valid_player_name(req.name):
+        _raise_action_request_error(
+            "invalid_player_name",
+            "名称须为 2-3 个汉字，或 2-6 个英文字母或数字。",
+        )
+
+    eng.state.player_name = req.name
+    if not eng.save_state():
+        eng.state.player_name = None
+        _raise_session_error("save_failed", "玩家名称保存失败，请稍后重试。", 500)
+    return {
+        "success": True,
+        "message": f"欢迎你，{req.name}。",
+        "state": mcp_state(req.session_id),
+    }
+
+
 # =============================================================================
 # MCP 专用接口
 # =============================================================================
@@ -1153,6 +1199,19 @@ def mcp_state(session_id: Optional[str] = None):
     AI不需要知道NPC隐藏标签、后台概率等
     """
     eng = get_engine(session_id)
+    # 注入 engine 仅用于既有直接函数测试；真实 HTTP session 一律走首次取名流程。
+    if eng.state.player_name is None and engine is None:
+        return {
+            "onboarding": {
+                "game": "露营广场",
+                "message": (
+                    "欢迎来到《露营广场》！你将接手一座刚刚起步的露营场。"
+                    "初始基础建设已完成，目前有 6,000 金币建设费用待偿还，"
+                    "需要在第 25 天结束前还清。开门营业前，请告诉我你的名字。"
+                ),
+                "name_rules": "中文名限 2-3 个汉字；英文名限 2-6 个字母或数字，不使用空格、标点或特殊符号。",
+            }
+        }
     state = eng.get_full_state()
     planning_available, plan_submitted, plan_target_turn = _get_turn_plan_status(eng)
 
@@ -1246,6 +1305,22 @@ def mcp_available_actions(session_id: Optional[str] = None):
     MCP接口：返回当前可用操作
     """
     eng = get_engine(session_id)
+    # 注入 engine 仅用于既有直接函数测试；真实 HTTP session 一律走首次取名流程。
+    if eng.state.player_name is None and engine is None:
+        return {
+            "available_actions": [{
+                "action": "set_player_name",
+                "endpoint": "/api/player/name",
+                "params": {"name": ""},
+                "required_params": [{
+                    "name": "name",
+                    "type": "string",
+                    "required": True,
+                }],
+                "description": "设置本存档的经营者名称。",
+            }],
+            "available_queries": [],
+        }
     state = eng.get_full_state()
     actions = []
     planning_available, plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)

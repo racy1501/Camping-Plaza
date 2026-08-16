@@ -97,6 +97,8 @@ class Facility:
 @dataclass
 class GameState:
     """游戏全局状态"""
+    # None 表示新存档尚未完成首次取名；它也是唯一的 onboarding 完成标志。
+    player_name: Optional[str] = None
     day: int = 1
     turn: int = 1  # 1-5 营业回合, 6 日终管理
     balance: int = 1000
