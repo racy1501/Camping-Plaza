@@ -1324,12 +1324,12 @@ button:disabled {
 }
 
 /* 警示标记独立贴在帐篷号牌右侧，不参与号牌白底尺寸计算 */
-.anchor-tent1 .tent-damaged-indicator { left: 4px; top: 16px; }
-.anchor-tent2 .tent-damaged-indicator { left: 8px; top: 22px; }
-.anchor-tent3 .tent-damaged-indicator { left: 16px; top: 20px; }
-.anchor-tent4 .tent-damaged-indicator { left: 16px; top: 20px; }
-.anchor-tent5 .tent-damaged-indicator { left: 14px; top: 18px; }
-.anchor-tent6 .tent-damaged-indicator { left: 4px; top: 18px; }
+.anchor-tent1 .tent-damaged-indicator { left: 2px; top: 16px; }
+.anchor-tent2 .tent-damaged-indicator { left: 6px; top: 22px; }
+.anchor-tent3 .tent-damaged-indicator { left: 14px; top: 20px; }
+.anchor-tent4 .tent-damaged-indicator { left: 14px; top: 20px; }
+.anchor-tent5 .tent-damaged-indicator { left: 12px; top: 18px; }
+.anchor-tent6 .tent-damaged-indicator { left: 2px; top: 18px; }
 
 .anchor.locked .anchor-label {
     opacity: 1;
