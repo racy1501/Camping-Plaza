@@ -1276,16 +1276,16 @@ button:disabled {
 .campsite-slot[data-slot="10"] { left: 78%; top: 60%; transform: translate(-50%, -50%) rotate(4deg); }
 
 /* 营位编号视觉偏移：避开桌椅主体，保留同一 slot 作为 semantic anchor */
-.campsite-slot[data-slot="1"]::after { left: -20px; bottom: -18px; }
-.campsite-slot[data-slot="2"]::after { left: -18px; bottom: -22px; }
-.campsite-slot[data-slot="3"]::after { left: -8px; bottom: -22px; }
-.campsite-slot[data-slot="4"]::after { left: 10px; bottom: -22px; }
-.campsite-slot[data-slot="5"]::after { left: 14px; bottom: -18px; }
-.campsite-slot[data-slot="6"]::after { left: 14px; bottom: -16px; }
-.campsite-slot[data-slot="7"]::after { left: -22px; bottom: -18px; }
-.campsite-slot[data-slot="8"]::after { left: -20px; bottom: -22px; }
-.campsite-slot[data-slot="9"]::after { left: 10px; bottom: -20px; }
-.campsite-slot[data-slot="10"]::after { left: 14px; bottom: -18px; }
+.campsite-slot[data-slot="1"]::after { left: -55px; bottom: -52px; }
+.campsite-slot[data-slot="2"]::after { left: -19px; bottom: -40px; }
+.campsite-slot[data-slot="3"]::after { left: -28px; bottom: -28px; }
+.campsite-slot[data-slot="4"]::after { left: -16px; bottom: -28px; }
+.campsite-slot[data-slot="5"]::after { left: -20px; bottom: -23px; }
+.campsite-slot[data-slot="6"]::after { left: -16px; bottom: -17px; }
+.campsite-slot[data-slot="7"]::after { left: -80px; bottom: -58px; }
+.campsite-slot[data-slot="8"]::after { left: -67px; bottom: -58px; }
+.campsite-slot[data-slot="9"]::after { left: -14px; bottom: -43px; }
+.campsite-slot[data-slot="10"]::after { left: -21px; bottom: -38px; }
 
 /* 抵消营位底层错落角度，让 1-10 号牌保持水平 */
 .campsite-slot[data-slot="1"]::after { transform: rotate(5deg); }
