@@ -42,12 +42,11 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertEqual(entry["action"], "execute_turn_plan")
         self.assertEqual(entry["endpoint"], "/api/turn/plan")
         description = entry["description"]
-        self.assertIn("本轮所有操作必须在一次 execute_turn_plan 中提交", description)
+        self.assertIn("每个 Turn 有 3 个决策点，不结转。", description)
+        self.assertIn("本轮所有操作须一次提交", description)
         self.assertIn("free_actions", description)
         self.assertIn("0～3 项 actions", description)
-        self.assertIn("成功后立即进入下一 Turn", description)
-        self.assertIn("未使用决策点作废", description)
-        self.assertIn("buy_food_package 使用 package_key", description)
+        self.assertIn("提交即进入下一 Turn", description)
 
     def test_turn_specific_candidates_and_daily_limits(self):
         self.engine.state.turn = 3
@@ -68,13 +67,9 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertEqual(candidates["make_post"]["remaining_today"], 0)
         self.assertTrue(candidates["improve_service"]["reason"])
 
-    def test_clean_tents_disabled_without_cleaning_tents(self):
+    def test_clean_tents_is_omitted_without_cleaning_tents(self):
         self.engine.state.turn = 2
-        clean = self._submit_entry()["free_action_candidates"][0]
-        self.assertEqual(clean["action"], "clean_tents")
-        self.assertFalse(clean["enabled"])
-        self.assertEqual(clean["params"], {"tent_ids": []})
-        self.assertTrue(clean["reason"])
+        self.assertEqual(self._submit_entry()["free_action_candidates"], [])
 
     def test_conflict_is_immediate_and_exposes_required_choice_enum(self):
         self.engine.state.turn = 3
@@ -109,10 +104,13 @@ class McpActionCatalogTests(unittest.TestCase):
             mcp_candidates = mcp["free_action_candidates"] + mcp["decision_action_candidates"]
             human_by_action = {item["action"]: item for item in human_candidates}
             mcp_by_action = {item["action"]: item for item in mcp_candidates}
-            self.assertEqual(set(human_by_action), set(mcp_by_action))
-            for action in human_by_action:
+            self.assertTrue(set(mcp_by_action).issubset(set(human_by_action)))
+            for action in mcp_by_action:
                 self.assertEqual(human_by_action[action]["enabled"], mcp_by_action[action]["enabled"])
-                self.assertEqual(human_by_action[action]["reason"], mcp_by_action[action]["reason"])
+                if not mcp_by_action[action]["enabled"]:
+                    self.assertEqual(human_by_action[action]["reason"], mcp_by_action[action]["reason"])
+                else:
+                    self.assertNotIn("reason", mcp_by_action[action])
 
     def test_mcp_adapter_does_not_depend_on_human_catalog(self):
         self.engine.state.turn = 2
@@ -122,7 +120,7 @@ class McpActionCatalogTests(unittest.TestCase):
             side_effect=AssertionError("MCP must use the neutral source"),
         ):
             candidates = game_api._build_turn_action_candidates(self.engine)
-        self.assertTrue(candidates["free_action_candidates"])
+        self.assertEqual(candidates["free_action_candidates"], [])
         self.assertTrue(candidates["decision_action_candidates"])
 
 

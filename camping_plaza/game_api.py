@@ -169,19 +169,6 @@ _API_ACTION_REQUIRED_PARAMS = {
 }
 
 
-def _food_package_plan_description() -> str:
-    package_bits = []
-    for package_key, package in CampingPlazaEngine.FOOD_PACKAGES.items():
-        package_bits.append(
-            f"{package_key}={package['name']}({package['portions']}份/{package['price']}金币)"
-        )
-    package_text = "，".join(package_bits)
-    return (
-        "食材包参数：buy_food_package 使用 package_key，可选包："
-        f"{package_text}。"
-    )
-
-
 def _required_day_end_param(name: str, value_type: str) -> dict:
     return {"name": name, "type": value_type, "required": True}
 
@@ -797,15 +784,24 @@ def _build_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
     for key in ("free_action_candidates", "decision_action_candidates"):
         normalized = []
         for source in catalog[key]:
+            if (
+                source["action"] == "clean_tents"
+                and not source["enabled"]
+            ):
+                continue
+            if (
+                source["action"] == "buy_food_package"
+                and not source["enabled"]
+            ):
+                continue
             item = {
                 "action": source["action"],
-                "kind": source["kind"],
                 "enabled": source["enabled"],
-                "reason": source.get("reason", ""),
                 "params": dict(source.get("params") or {}),
-                "repeatable": source.get("repeatable", False),
                 "cost_decision_points": 0 if source["kind"] == "free" else 1,
             }
+            if not source["enabled"] and source.get("reason"):
+                item["reason"] = source["reason"]
             for field in (
                 "remaining_today", "daily_limit", "price", "portions", "max_quantity"
             ):
@@ -915,25 +911,45 @@ def submit_turn_plan(req: TurnPlanRequest):
             "action_count": plan_result.get("actions_count", len(req.actions)),
         }
 
+    executed_day = eng.state.day
+    executed_turn = eng.state.turn
+    balance_before = eng.state.balance
+    income_before = dict(eng.state.today_income)
+    history_sequence_before = eng.state.event_sequence
     advance_result = eng.advance_turn()
     eng.save_state()
+    events = [
+        {"type": event.get("event_type", "world"), "text": event.get("text", "")}
+        for event in eng.state.event_history
+        if event.get("sequence", 0) > history_sequence_before
+    ]
+    execution_items = [
+        item
+        for group in ("free_actions", "actions")
+        for item in advance_result.get("plan_execution", {}).get(group, [])
+    ]
+    action_results = []
+    for item in execution_items:
+        compact = {"action": item.get("action"), "success": bool(item.get("success"))}
+        if not compact["success"]:
+            compact["message"] = item.get("message", "")
+        action_results.append(compact)
+    income_delta = {
+        key: amount - income_before.get(key, 0)
+        for key, amount in eng.state.today_income.items()
+        if amount != income_before.get(key, 0)
+    }
     response = {
         "success": True,
+        "executed_day": executed_day,
+        "executed_turn": executed_turn,
         "day": advance_result["day"],
         "turn": advance_result["turn"],
-        "events": advance_result.get("events", []),
+        "events": events,
+        "action_results": action_results,
+        "balance_delta": eng.state.balance - balance_before,
+        "income_delta": income_delta,
     }
-    action_failures = [
-        {
-            "action": item.get("action"),
-            "message": item.get("message", ""),
-        }
-        for action_group in advance_result.get("plan_execution", {}).values()
-        for item in action_group
-        if not item.get("success")
-    ]
-    if action_failures:
-        response["action_failures"] = action_failures
     return response
 
 
@@ -1118,62 +1134,44 @@ def mcp_state(session_id: Optional[str] = None):
             }
         }
     state = eng.get_full_state()
-    planning_available, plan_submitted, plan_target_turn = _get_turn_plan_status(eng)
+    planning_available, _plan_submitted, _plan_target_turn = _get_turn_plan_status(eng)
 
     # 只返回AI决策需要的信息
     response = {
         "day": state["day"],
         "turn": state["turn"],
         "balance": state["balance"],
-        "average_rating": state["average_rating"],
-        "tents": {
-            tid: {
-                "status": t["status"],
-                "needs_cleaning": t["needs_cleaning"],
-                "unlocked": t["unlocked"],
-                "capacity": t["capacity"]
-            }
-            for tid, t in state["tents"].items()
-        },
-        "active_guests_count": len(state["active_npcs"]),
         "facilities": {
-            k: {"level": v["level"]}
-            for k, v in state["facilities"].items()
+            k: v["level"] for k, v in state["facilities"].items()
         },
-        "reservations": state["reservations"],
-        "greenery": state["greenery"],
     }
+    actionable_tents = {
+        tid: {"status": t["status"]}
+        for tid, t in state["tents"].items()
+        if t["unlocked"] and t["status"] in ("cleaning", "broken", "reserved")
+    }
+    if actionable_tents:
+        response["tents"] = actionable_tents
+    if state["active_npcs"]:
+        response["active_guests_count"] = len(state["active_npcs"])
+    known_reservations = [
+        reservation for reservation in state["reservations"]
+        if reservation.get("status") == "accepted"
+    ]
+    if known_reservations:
+        response["confirmed_reservations"] = [{
+            "arrival_day": item.get("arrival_day"),
+            "visit_type": item.get("visit_type"),
+            "tent_id": item.get("tent_id"),
+        } for item in known_reservations]
+    if state["turn"] != 6:
+        response["food_stock"] = state["food_stock"]
     if state["turn"] in (2, 3, 4, 5):
         response.update({
             "decisions_left": state["decisions_left"],
             "planning_available": planning_available,
-            "plan_submitted": plan_submitted,
+            "food_stock": state["food_stock"],
         })
-        if plan_target_turn is not None:
-            response["plan_target_turn"] = plan_target_turn
-        if plan_target_turn is not None:
-            turn_plan = _get_turn_plan_summary(eng)
-            if turn_plan is not None:
-                response["turn_plan"] = turn_plan
-
-    if state["turn"] != 6:
-        response["food_stock"] = state["food_stock"]
-        response["today_income"] = state["today_income"]
-
-    hot_spring = _get_hot_spring_status(eng)
-    if (
-        hot_spring["built"]
-        or hot_spring["people_served_today"]
-        or hot_spring["today_income"]
-    ):
-        response["hot_spring"] = hot_spring
-
-    day_campsite = _get_day_campsite_status(eng)
-    if (
-        day_campsite["groups_served_today"]
-        or day_campsite["remaining_groups_today"] != day_campsite["group_capacity_per_day"]
-    ):
-        response["day_campsite"] = day_campsite
 
     next_turn_checkout_tents = eng.get_next_turn_checkout_tents()
     if next_turn_checkout_tents:
@@ -1181,9 +1179,6 @@ def mcp_state(session_id: Optional[str] = None):
 
     if state["turn"] == 6:
         response["day_end_completed"] = eng.state.day_end_completed
-
-    if eng.state.today_events:
-        response["today_events"] = list(eng.state.today_events)
 
     waiting_tent_ids = eng.get_waiting_cleaning_checkin_tent_ids()
     if waiting_tent_ids:
@@ -1213,7 +1208,6 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 }],
                 "description": "设置本存档的经营者名称。",
             }],
-            "available_queries": [],
         }
     state = eng.get_full_state()
     actions = []
@@ -1231,7 +1225,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 "action": "execute_turn_plan",
                 "params": {"free_actions": [], "actions": []},
                 "endpoint": "/api/turn/plan",
-                "description": "本轮所有操作必须在一次 execute_turn_plan 中提交：free_actions 与 0～3 项 actions 一并提交；成功后立即进入下一 Turn，未使用决策点作废。" + _food_package_plan_description(),
+                "description": "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。",
             }
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
@@ -1277,25 +1271,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
             }
             actions = [entry]
 
-    response = {
-        "balance": eng.state.balance,
-        "day_end_completed": eng.state.day_end_completed,
-        "total_cost_must_not_exceed_balance": True,
-        "day_end_budget_hint": (
-            TURN6_DAY_END_BUDGET_HINT if state["turn"] == 6 else None
-        ),
-        "available_actions": actions,
-        "available_queries": [
-            {
-                "name": "查看设施升级详情",
-                "endpoint": "/mcp/query_growth_projects",
-            },
-            {
-                "name": "查看成就图鉴",
-                "endpoint": "/mcp/achievements",
-            },
-        ],
-    }
+    response = {"available_actions": actions}
     if state["turn"] == 6 and not eng.state.day_end_completed:
         response["decision_summary"] = eng.get_turn6_decision_summary()
     return response

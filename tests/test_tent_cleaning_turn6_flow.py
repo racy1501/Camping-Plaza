@@ -110,10 +110,7 @@ class Turn6McpFlowTests(unittest.TestCase):
         self.assertEqual(response["decision_summary"]["broken_tents"][0]["tent_id"], 1)
         self.assertEqual(response["decision_summary"]["food_discarded_portions"], 3)
         self.assertIn("食材已废弃", response["decision_summary"]["alerts"][0])
-        self.assertEqual(
-            [item["name"] for item in response["available_queries"]],
-            ["查看设施升级详情", "查看成就图鉴"],
-        )
+        self.assertNotIn("available_queries", response)
 
         self.engine.state.day_end_completed = True
         confirmed = game_api.mcp_available_actions()["available_actions"]
