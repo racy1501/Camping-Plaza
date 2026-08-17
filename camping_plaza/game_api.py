@@ -888,6 +888,65 @@ def advance_turn(req: Optional[SessionRequest] = None):
     return result
 
 
+def _format_mcp_event(eng: CampingPlazaEngine, event: dict) -> str:
+    """从正式结构化经营事实生成给 AI 的紧凑摘要；不改写 event_history。"""
+    event_type = event.get("event_type", "world")
+    data = event.get("data") or {}
+    guest_ids = list(event.get("guest_ids") or [])
+    guests = eng._format_guest_labels(guest_ids)
+
+    if event_type == "dining_completed":
+        if "income" in data:
+            return f"{guests}完成用餐，共收入{data['income']}金币。"
+        return f"{guests}完成用餐。"
+
+    if event_type == "entertainment_completed":
+        both_ids = []
+        paid_only_ids = []
+        free_only_ids = []
+        both_income = 0
+        paid_only_income = 0
+        for item in data.get("items", []):
+            npc_id = item.get("npc_id")
+            activities = set(item.get("activities") or [])
+            has_paid = "收费娱乐" in activities
+            has_free = "免费娱乐" in activities
+            if has_paid and has_free:
+                both_ids.append(npc_id)
+                both_income += item.get("income", 0) or 0
+            elif has_paid:
+                paid_only_ids.append(npc_id)
+                paid_only_income += item.get("income", 0) or 0
+            elif has_free:
+                free_only_ids.append(npc_id)
+
+        both_ids = list(dict.fromkeys(both_ids))
+        paid_only_ids = list(dict.fromkeys(paid_only_ids))
+        free_only_ids = list(dict.fromkeys(free_only_ids))
+        parts = []
+        if both_ids:
+            parts.append(
+                f"{eng._format_guest_labels(both_ids)}参加收费娱乐和免费娱乐，共收入{both_income}金币。"
+            )
+        if paid_only_ids:
+            parts.append(
+                f"{eng._format_guest_labels(paid_only_ids)}参加收费娱乐，共收入{paid_only_income}金币。"
+            )
+        if free_only_ids:
+            parts.append(f"{eng._format_guest_labels(free_only_ids)}参加免费娱乐。")
+        return "；".join(parts) if parts else f"{guests}参与娱乐。"
+
+    if event_type == "hot_spring_completed":
+        if "income" in data:
+            return f"{guests}使用温泉，共收入{data['income']}金币。"
+        return f"{guests}使用温泉。"
+
+    if event_type == "review_pending":
+        return f"有{data.get('count', 0)}组客人留下评价，将于次日晨间结算。"
+
+    return str(event.get("text", ""))
+
+
 @app.post("/api/turn/plan")
 def submit_turn_plan(req: TurnPlanRequest):
     """提交本轮营业计划"""
@@ -919,7 +978,7 @@ def submit_turn_plan(req: TurnPlanRequest):
     advance_result = eng.advance_turn()
     eng.save_state()
     events = [
-        {"type": event.get("event_type", "world"), "text": event.get("text", "")}
+        {"type": event.get("event_type", "world"), "text": _format_mcp_event(eng, event)}
         for event in eng.state.event_history
         if event.get("sequence", 0) > history_sequence_before
     ]
