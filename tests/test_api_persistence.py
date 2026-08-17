@@ -774,7 +774,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         ):
             self.assertNotIn(field, state)
         self.assertIn("food_stock", state)
-        self.assertIn("today_income", state)
+        self.assertNotIn("today_income", state)
 
     def test_mcp_state_turn6_omits_income_and_food_stock(self):
         self.engine.state.turn = 6
@@ -784,7 +784,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.assertIn("day_end_completed", state)
         self.assertNotIn("today_income", state)
         self.assertNotIn("food_stock", state)
-        for field in ("day", "turn", "balance", "average_rating", "tents", "facilities", "reservations", "greenery"):
+        for field in ("day", "turn", "balance", "facilities"):
             self.assertIn(field, state)
 
     def test_mcp_state_exposes_food_stock(self):
@@ -807,15 +807,11 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
             state = game_api.mcp_state()
             save_mock.assert_not_called()
 
-        self.assertEqual(state["greenery"], expected_greenery)
-        self.assertEqual(
-            set(state["greenery"].keys()),
-            {"level", "value", "max", "maintained_today", "decay_next_day"},
-        )
+        self.assertNotIn("greenery", state)
         self.assertNotIn("phase", state)
         self.assertNotIn("available_actions", state)
 
-        self.assertIn("reservations", state)
+        self.assertNotIn("reservations", state)
         for field in [
             "hot_spring",
             "day_campsite",
@@ -838,7 +834,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
         state = game_api.mcp_state()
         self.assertTrue(state["planning_available"])
-        self.assertFalse(state["plan_submitted"])
+        self.assertNotIn("plan_submitted", state)
         self.assertNotIn("plan_target_turn", state)
         self.assertNotIn("turn_plan", state)
         self.assertNotIn("pending_turn_plan", state)
@@ -848,7 +844,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self._plan()
         state = game_api.mcp_state()
         self.assertTrue(state["planning_available"])
-        self.assertFalse(state["plan_submitted"])
+        self.assertNotIn("plan_submitted", state)
         self.assertNotIn("plan_target_turn", state)
         self.assertNotIn("turn_plan", state)
         self.assertNotIn("next_turn_checkout_tents", state)
@@ -1014,7 +1010,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
         actions = game_api.mcp_available_actions()
 
-        self.assertTrue(actions["day_end_completed"])
+        self.assertNotIn("day_end_completed", actions)
         self.assertEqual(actions["available_actions"][0]["action"], "start_next_day")
         self.assertEqual(actions["available_actions"][0]["endpoint"], "/api/day/start")
 
@@ -1073,8 +1069,8 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         actions = game_api.mcp_available_actions()["available_actions"]
         submit_action = next(item for item in actions if item["action"] == "execute_turn_plan")
 
-        self.assertIn("buy_food_package", submit_action["description"])
-        self.assertIn("package_key", submit_action["description"])
+        self.assertIn("buy_food_package", str(submit_action["decision_action_candidates"]))
+        self.assertIn("package_key", str(submit_action["decision_action_candidates"]))
 
     def test_turn2_submit_plan_includes_repair_in_decision_candidates_when_broken(self):
         self.engine.state.turn = 2
@@ -1148,6 +1144,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_turn2_repair_candidates_present_even_when_balance_zero(self):
         """余额不足时维修候选仍出现，执行时才会失败"""
         self.engine.state.turn = 2
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         self.engine.state.balance = 0
         self.engine.tents[1].status = "broken"
 
@@ -1345,6 +1342,7 @@ class PublicStateHidingTests(ApiPersistenceTestCase):
         self.assertIn("state.reservations", source)
         self.assertIn("reservation.status === 'accepted'", source)
         self.assertIn("Number(reservation.arrival_day) === Number(state.day)", source)
+        self.assertIn("Number(reservation.arrival_day) === tomorrowDay", source)
         self.assertNotIn("state.arrival_plan", source)
 
 
@@ -1644,7 +1642,7 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         state = game_api.mcp_state()
 
         self.assertNotIn("turn_plan", state)
-        self.assertFalse(state["plan_submitted"])
+        self.assertNotIn("plan_submitted", state)
         self.assertNotIn("plan_target_turn", state)
         self.assertTrue(state["planning_available"])
 

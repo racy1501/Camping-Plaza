@@ -1120,7 +1120,7 @@ def set_player_name(req: SetPlayerNameRequest):
 @app.get("/mcp/state")
 def mcp_state(session_id: Optional[str] = None):
     """
-    MCP接口：返回AI需要的精简状态
+    MCP接口：用于首次进入、恢复上下文或明确需要额外状态时查询；不要求每个 Turn 重复调用。
     AI不需要知道NPC隐藏标签、后台概率等
     """
     eng = get_engine(session_id)
@@ -1154,16 +1154,6 @@ def mcp_state(session_id: Optional[str] = None):
         response["tents"] = actionable_tents
     if state["active_npcs"]:
         response["active_guests_count"] = len(state["active_npcs"])
-    known_reservations = [
-        reservation for reservation in state["reservations"]
-        if reservation.get("status") == "accepted"
-    ]
-    if known_reservations:
-        response["confirmed_reservations"] = [{
-            "arrival_day": item.get("arrival_day"),
-            "visit_type": item.get("visit_type"),
-            "tent_id": item.get("tent_id"),
-        } for item in known_reservations]
     if state["turn"] != 6:
         response["food_stock"] = state["food_stock"]
     if state["turn"] in (2, 3, 4, 5):
@@ -1191,7 +1181,7 @@ def mcp_state(session_id: Optional[str] = None):
 @app.get("/mcp/actions")
 def mcp_available_actions(session_id: Optional[str] = None):
     """
-    MCP接口：返回当前可用操作
+    MCP接口：普通 Turn 的主要决策入口，返回当前可执行操作和必要决策信息。
     """
     eng = get_engine(session_id)
     # 注入 engine 仅用于既有直接函数测试；真实 HTTP session 一律走首次取名流程。
@@ -1225,7 +1215,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 "action": "execute_turn_plan",
                 "params": {"free_actions": [], "actions": []},
                 "endpoint": "/api/turn/plan",
-                "description": "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。",
+                "description": "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
             }
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
@@ -1271,7 +1261,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
             }
             actions = [entry]
 
-    response = {"available_actions": actions}
+    response = {"food_stock": int(eng.state.food_stock), "available_actions": actions}
     if state["turn"] == 6 and not eng.state.day_end_completed:
         response["decision_summary"] = eng.get_turn6_decision_summary()
     return response

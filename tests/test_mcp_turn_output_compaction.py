@@ -66,7 +66,7 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
         self.assertEqual(state["decisions_left"], 3)
         self.assertIn("food_stock", state)
 
-    def test_mcp_state_keeps_compact_accepted_reservation_facts(self):
+    def test_mcp_state_does_not_keep_reservation_context(self):
         self.engine.state.reservations = [{
             "group_size": 3, "visit_type": "overnight", "arrival_day": 2,
             "status": "accepted", "tent_id": 1,
@@ -75,9 +75,7 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
         state = game_api.mcp_state()
 
         self.assertNotIn("reservations", state)
-        self.assertEqual(state["confirmed_reservations"], [{
-            "arrival_day": 2, "visit_type": "overnight", "tent_id": 1,
-        }])
+        self.assertNotIn("confirmed_reservations", state)
 
     def test_mcp_actions_omits_fixed_query_menu_and_enabled_reasons(self):
         self.engine.state.turn = 2
@@ -87,8 +85,11 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
         self.assertNotIn("available_queries", response)
         self.assertEqual(
             entry["description"],
-            "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。",
+            "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
         )
+        self.assertEqual(response["food_stock"], self.engine.state.food_stock)
+        self.assertNotIn("confirmed_reservations", response)
+        self.assertNotIn("reservation_summary", response)
         for candidate in entry["decision_action_candidates"]:
             if candidate["enabled"]:
                 self.assertNotIn("reason", candidate)

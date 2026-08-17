@@ -175,19 +175,20 @@ class MultiReservationTests(unittest.TestCase):
         api_state = game_api.get_state()
         mcp_state = game_api.mcp_state()
 
-        for state in (api_state, mcp_state):
-            self.assertIn("reservations", state)
-            self.assertNotIn("reservation", state)
-            self.assertEqual(len(state["reservations"]), 1)
-            self.assertEqual(
-                state["reservations"][0],
-                {
-                    "group_size": 4,
-                    "visit_type": "day",
-                    "arrival_day": self.engine.state.day + 1,
-                    "status": "accepted",
-                },
-            )
+        self.assertIn("reservations", api_state)
+        self.assertNotIn("reservation", api_state)
+        self.assertEqual(len(api_state["reservations"]), 1)
+        self.assertEqual(
+            api_state["reservations"][0],
+            {
+                "group_size": 4,
+                "visit_type": "day",
+                "arrival_day": self.engine.state.day + 1,
+                "status": "accepted",
+            },
+        )
+        self.assertNotIn("reservations", mcp_state)
+        self.assertNotIn("confirmed_reservations", mcp_state)
 
 
 if __name__ == "__main__":

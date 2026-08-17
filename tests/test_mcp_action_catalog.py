@@ -47,6 +47,7 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertIn("free_actions", description)
         self.assertIn("0～3 项 actions", description)
         self.assertIn("提交即进入下一 Turn", description)
+        self.assertIn("普通连续经营优先读取下一 Turn 的 /mcp/actions", description)
 
     def test_turn_specific_candidates_and_daily_limits(self):
         self.engine.state.turn = 3

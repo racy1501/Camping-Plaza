@@ -65,25 +65,13 @@ python game_api.py
 - `GET /mcp/query_debt` — 主动查看债务详情
 - `GET /mcp/achievements` — 主动查看成就图鉴
 
-`/mcp/state` 主要字段（按经营、设施、预约/客流、Turn Plan 分组）：
+`/mcp/state` 是紧凑的恢复/补充上下文入口，用于首次进入、恢复上下文或明确需要额外状态时查询，不要求每个 Turn 重复调用。它只返回当前决策必要的状态，不持续发送预约列表；预约是客组来源渠道，不是持续经营状态。
 
-- **经营状态**：`day`、`turn`、`balance`、`average_rating`、`decisions_left`、`food_stock`、`today_income`
-- **设施/帐篷**：`tents`（含 status/unlocked/capacity）、`facilities`（含 level）、`greenery`、`hot_spring`、`day_campsite`
-- **预约/客流**：`active_guests_count`、`reservations`
-- **Turn Plan**：`planning_available`、`plan_submitted`、`plan_target_turn`、`turn_plan`、`next_turn_checkout_tents`
+`/mcp/actions` 是普通 Turn 的主要决策入口，返回当前可执行操作、必要参数、决策点成本、每日剩余次数、临时事件、食材库存和 Turn 6 候选。
 
-`turn_plan` 说明：
+普通连续经营使用：`execute_turn_plan → /mcp/actions → execute_turn_plan → /mcp/actions`。`execute_turn_plan` 成功后已进入下一 Turn，只有恢复上下文或明确需要额外状态时才重新查询 `/mcp/state`。
 
-- 只存在于 `/mcp/state`；
-- 无已提交计划时为 `null`；
-- 有计划时包含：`target_day`、`target_turn`、`free_actions`、`decision_actions`；
-- 只暴露动作名和白名单参数摘要，不暴露原始 `pending_turn_plan`。
-
-`/mcp/actions` 说明：
-
-- 只暴露代码判定 `can_purchase_now == true` 的成长项目；
-- 成长购买动作为 `purchase_growth_project`，参数为 `project_id`；
-- 常用查询菜单只需提供“查看设施升级详情”和“查看成就图鉴”；债务查询按需主动调用。
+预约信息与 MCP 输出分离：预约产生时作为事件返回一次；人类 `/api/state` 继续提供前端“今日预约”和“明日预约”展示所需数据。
 
 ### 游戏操作
 - `POST /api/session` — 创建新 session；新存档首次读取先进入 onboarding
@@ -157,10 +145,10 @@ python game_api.py
 ## 合集站对接说明
 
 合集站通过 MCP 封装层调用本项目的 API：
-1. 调用 `GET /mcp/state` 获取当前状态
-2. 调用 `GET /mcp/actions` 获取可用操作
+1. 首次进入或恢复时调用 `GET /mcp/state`
+2. 调用 `GET /mcp/actions` 获取普通 Turn 的可用操作
 3. 新 session 首次先调用 `POST /api/player/name` 完成 onboarding
-4. Turn 2～5 调用 `POST /api/turn/plan` 提交并执行完整计划
+4. Turn 2～5 调用 `POST /api/turn/plan` 提交并执行完整计划，成功后优先读取下一 Turn 的 `/mcp/actions`
 5. Turn 6 调用 `POST /api/day/end` 提交日终清单
 6. 日终确认完成后调用 `POST /api/day/start` 开启下一天
 
