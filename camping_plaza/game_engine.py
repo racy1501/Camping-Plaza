@@ -2279,13 +2279,46 @@ class CampingPlazaEngine:
                 parts.append(f"{'、'.join(str(tent_id) for tent_id in sorted(set(tent_ids)))}号帐篷住客入住营地")
             return "；".join(parts) + "。"
         if event_type == "dining_completed":
+            if "income" in data:
+                return f"{guests}完成用餐，收入{data['income']}金币。"
             return f"{guests}完成用餐。"
         if event_type == "dining_shortage":
             return f"{guests}想要用餐，但因食材不足未能提供。"
         if event_type == "entertainment_completed":
-            return f"{guests}参与收费娱乐。"
+            items = data.get("items", [])
+            grouped_items = {}
+            for item in items:
+                key = (
+                    tuple(item.get("activities", [])),
+                    item.get("tier_name"),
+                    item.get("income", 0),
+                    item.get("satisfaction_gain", 0),
+                )
+                grouped_items.setdefault(key, []).append(item.get("npc_id"))
+            parts = []
+            for (activities, tier_name, income, satisfaction), guest_ids in grouped_items.items():
+                label = self._format_guest_labels(guest_ids)
+                if not label or not activities:
+                    continue
+                if "收费娱乐" in activities and "免费娱乐" in activities:
+                    action_text = "参加收费娱乐和免费娱乐"
+                    result = f"整组收费+{income}，整组满意度+{satisfaction}"
+                elif "收费娱乐" in activities:
+                    action_text = f"参加{tier_name}" if tier_name else "参加收费娱乐"
+                    result = f"整组收费+{income}，整组满意度+{satisfaction}"
+                else:
+                    action_text = "参加免费娱乐"
+                    result = f"整组满意度+{satisfaction}"
+                parts.append(f"{label}{action_text}，{result}")
+            return "；".join(parts) + "。" if parts else f"{guests}参与娱乐。"
         if event_type == "hot_spring_completed":
+            if "income" in data:
+                satisfaction = data.get("satisfaction_gain")
+                suffix = f"，满意度+{satisfaction}" if satisfaction is not None else ""
+                return f"{guests}使用温泉，收入{data['income']}金币{suffix}。"
             return f"{guests}使用温泉。"
+        if event_type == "review_pending":
+            return f"有{data.get('count', 0)}组客人留下评价，将于次日晨间结算。"
         if event_type == "repay_debt":
             return f"偿还启动负债{data['amount']}金币。"
         if event_type == "improve_service":
@@ -2328,6 +2361,11 @@ class CampingPlazaEngine:
                 previous["guest_ids"] = merged_guests
                 if event_type == "day_departure":
                     previous["data"]["count"] = previous.get("data", {}).get("count", 0) + data.get("count", 0)
+                elif event_type == "review_pending":
+                    previous["data"]["count"] = previous.get("data", {}).get("count", 0) + data.get("count", 0)
+                elif event_type in {"dining_completed", "hot_spring_completed"}:
+                    for field in ("income", "food_portions", "satisfaction_gain"):
+                        previous["data"][field] = previous.get("data", {}).get(field, 0) + data.get(field, 0)
                 previous["text"] = self._format_business_event(event_type, merged_guests, previous.get("data", data))
                 return
         self._append_event_history(day, turn, text, kind, event_type, guest_ids, data)
@@ -2477,7 +2515,7 @@ class CampingPlazaEngine:
                 if len(day_reservation_slots) == 1
                 else f"{len(day_reservation_slots)}组日间预约客按约到达，分别进入{slots}营位。"
             )
-            self._append_event_history(day, turn, message, "world")
+            self._append_event_history(day, turn, message, "world", "arrival")
         if day_natural_slots:
             slots = "、".join(f"{slot}号" for slot in day_natural_slots)
             income = income_delta.get("campsite", 0)
@@ -2486,7 +2524,7 @@ class CampingPlazaEngine:
                 if len(day_natural_slots) == 1
                 else f"{len(day_natural_slots)}组日间游客到达{slots}营位，共收入{income}金币。"
             )
-            self._append_event_history(day, turn, message, "world")
+            self._append_event_history(day, turn, message, "world", "arrival")
         converted_npcs = [
             npc
             for npc_id, before in snapshot["npcs"].items()
@@ -2551,7 +2589,7 @@ class CampingPlazaEngine:
                 if len(overnight_reservation_tent_ids) == 1
                 else f"{len(overnight_reservation_tent_ids)}组过夜预约客按约到达，分别入住{tents}帐篷。"
             )
-            self._append_event_history(day, turn, message, "world")
+            self._append_event_history(day, turn, message, "world", "arrival")
         if overnight_natural_tent_ids:
             tents = "、".join(f"{tent_id}号" for tent_id in overnight_natural_tent_ids)
             income = accommodation_delta
@@ -2560,7 +2598,7 @@ class CampingPlazaEngine:
                 if len(overnight_natural_tent_ids) == 1
                 else f"{len(overnight_natural_tent_ids)}组过夜客入住{tents}帐篷，共收入{income}金币。"
             )
-            self._append_event_history(day, turn, message, "world")
+            self._append_event_history(day, turn, message, "world", "arrival")
         if converted_tent_ids:
             count = len(converted_tent_ids)
             tent_text = "、".join(f"{tent_id}号" for tent_id in converted_tent_ids)
@@ -2575,6 +2613,7 @@ class CampingPlazaEngine:
                 turn,
                 f"{count}组客人选择留宿，入住{tent_text}帐篷，{prefix}新增住宿收入{income}金币。",
                 "world",
+                "day_to_overnight",
             )
 
         completed_actions = []
@@ -2588,6 +2627,7 @@ class CampingPlazaEngine:
                     completed_actions.append({
                         "action": action.get("action"),
                         "npc_id": npc_id,
+                        "data": dict(action),
                     })
 
         summary_definitions = (
@@ -2609,6 +2649,7 @@ class CampingPlazaEngine:
                 turn,
                 f"{food_shortage_dining_count}组客人想要用餐，但因食材不足未能提供。",
                 "world",
+                "dining_shortage",
             )
 
         def visible_guest_label(npc_id):
@@ -2652,6 +2693,7 @@ class CampingPlazaEngine:
                     day, turn,
                     f"{guests_text}{display_label}，{income_text}{income}金币。",
                     "world",
+                    f"{action_name}_completed",
                 )
 
         entertainment_by_guest = {}
@@ -2660,24 +2702,47 @@ class CampingPlazaEngine:
                 continue
             entertainment_by_guest.setdefault(item["npc_id"], set()).add(item["action"])
         if entertainment_by_guest:
-            parts = []
+            entertainment_items = []
             for npc_id, action_names in entertainment_by_guest.items():
-                label = visible_guest_label(npc_id)
-                if not label:
-                    continue
-                activity = "、".join(
-                    name for name, action in (
-                        ("收费娱乐", "paid_entertainment"),
-                        ("免费娱乐", "free_entertainment"),
-                    ) if action in action_names
+                action_items = [
+                    item for item in completed_actions
+                    if item["npc_id"] == npc_id
+                    and item["action"] in action_names
+                ]
+                paid_item = next(
+                    (item for item in action_items if item["action"] == "paid_entertainment"),
+                    None,
                 )
-                parts.append(f"{label}参与{activity}")
-            if parts:
-                income = income_delta.get("entertainment", 0)
-                self._append_event_history(
-                    day, turn,
-                    f"{'；'.join(parts)}，收费娱乐共收入{income}金币。",
-                    "world",
+                free_item = next(
+                    (item for item in action_items if item["action"] == "free_entertainment"),
+                    None,
+                )
+                activities = []
+                if paid_item is not None:
+                    activities.append("收费娱乐")
+                if free_item is not None:
+                    activities.append("免费娱乐")
+                paid_data = paid_item["data"] if paid_item else {}
+                free_data = free_item["data"] if free_item else {}
+                entertainment_items.append({
+                    "npc_id": npc_id,
+                    "activities": activities,
+                    "tier_name": (
+                        self.ENTERTAINMENT_TIER_OPTIONS.get(
+                            paid_data.get("tier_key"), {}
+                        ).get("display_name")
+                    ),
+                    "income": paid_data.get("charged_amount", 0),
+                    "satisfaction_gain": (
+                        paid_data.get("satisfaction_gain", 0)
+                        + free_data.get("satisfaction_gain", 0)
+                    ),
+                })
+            if entertainment_items:
+                self._record_business_event(
+                    day, turn, "entertainment_completed",
+                    guest_ids=[item["npc_id"] for item in entertainment_items],
+                    data={"items": entertainment_items}, merge=False,
                 )
 
         departed_ids = [
@@ -2691,7 +2756,7 @@ class CampingPlazaEngine:
         ]
         if departed_ids and not has_structured_event("day_departure"):
             text = f"{len(departed_ids)}组客人离场"
-            self._append_event_history(day, turn, text + "。", "world")
+            self._append_event_history(day, turn, text + "。", "world", "day_departure")
 
         checkout_tent_ids = [
             tent_id for tent_id, before in snapshot["tents"].items()
@@ -2701,7 +2766,7 @@ class CampingPlazaEngine:
         ]
         if checkout_tent_ids:
             tents = "、".join(f"{tent_id}号" for tent_id in checkout_tent_ids)
-            self._append_event_history(day, turn, f"{tents}帐篷住客退房。", "world")
+            self._append_event_history(day, turn, f"{tents}帐篷住客退房。", "world", "checkout")
 
         broken_tent_ids = [
             tent_id for tent_id, before in snapshot["tents"].items()
@@ -2709,17 +2774,15 @@ class CampingPlazaEngine:
         ]
         if broken_tent_ids:
             tents = "、".join(f"{tent_id}号" for tent_id in broken_tent_ids)
-            self._append_event_history(day, turn, f"⚠️ {tents}帐篷出现故障，需要维修。", "world")
+            self._append_event_history(day, turn, f"⚠️ {tents}帐篷出现故障，需要维修。", "world", "tent_breakdown")
 
         new_review_count = len({
             review.get("npc_id") for review in self.state.pending_reviews
             if isinstance(review, dict)
         } - snapshot["pending_review_ids"])
         if new_review_count:
-            self._append_event_history(
-                day, turn,
-                f"{new_review_count}组客人离场后留下评价，将在次日晨间结算。",
-                "world",
+            self._record_business_event(
+                day, turn, "review_pending", data={"count": new_review_count}
             )
 
     def advance_turn(self) -> dict:
@@ -3111,7 +3174,12 @@ class CampingPlazaEngine:
         action["food_portions_used"] = npc.group_size
         action["satisfaction_gain"] = menu["satisfaction_gain"]
         self._record_business_event(
-            self.state.day, self.state.turn, "dining_completed", guest_ids=[npc.id]
+            self.state.day, self.state.turn, "dining_completed", guest_ids=[npc.id],
+            data={
+                "income": spend,
+                "food_portions": npc.group_size,
+                "satisfaction_gain": menu["satisfaction_gain"],
+            },
         )
         result["events"].append(
             f"1组客人购买{menu['display_name']}，"
@@ -3228,6 +3296,10 @@ class CampingPlazaEngine:
                     self._record_business_event(
                         self.state.day, self.state.turn, "hot_spring_completed",
                         guest_ids=[npc.id],
+                        data={
+                            "income": spend,
+                            "satisfaction_gain": self.HOT_SPRING_SATISFACTION_GAIN,
+                        },
                     )
                     action["people_served"] = npc.group_size
                     result["events"].append(

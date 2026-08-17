@@ -70,6 +70,23 @@ class HotSpringExecutionTests(unittest.TestCase):
         self.assertEqual(npc.total_satisfaction, 56)
         self.assertEqual(npc.location, "hot_spring")
 
+    def test_multiple_hot_spring_actions_are_one_formal_summary(self):
+        first, first_action = self._add_guest(group_size=1)
+        second, second_action = self._add_guest(group_size=2)
+        first.campsite_slot = 1
+        second.campsite_slot = 2
+        self.engine._process_hot_spring({"events": []})
+
+        logs = [
+            item for item in self.engine.state.event_history
+            if item.get("event_type") == "hot_spring_completed"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [first.id, second.id])
+        self.assertIn("收入240金币", logs[0]["text"])
+        self.assertIn("满意度+12", logs[0]["text"])
+        self.assertNotEqual(logs[0]["event_type"], "legacy")
+
     def test_capacity_can_be_shared_and_exact_capacity_succeeds(self):
         self.engine.state.hot_spring_people_served_today = 18
         npc, action = self._add_guest(group_size=2)

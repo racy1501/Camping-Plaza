@@ -4718,6 +4718,9 @@ class EventHistoryTests(unittest.TestCase):
         ]
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["guest_ids"], [301, 302])
+        self.assertIn("3、5号营位客人", logs[0]["text"])
+        self.assertIn("收入120金币", logs[0]["text"])
+        self.assertNotEqual(logs[0]["event_type"], "legacy")
     def test_multiple_paid_entertainment_actions_are_summarized(self):
         engine = self._empty_business_engine(3)
         for npc_id, campsite_slot in ((401, 3), (402, 6)):
@@ -4730,7 +4733,8 @@ class EventHistoryTests(unittest.TestCase):
                 arrival_status="arrived",
                 planned_actions=[{
                     "action": "paid_entertainment", "planned_turn": 3,
-                    "status": "pending", "tier_key": "basic",
+                    "status": "pending",
+                    "tier_key": "basic" if npc_id == 401 else "premium",
                 }],
             )
         self.assertTrue(engine.submit_turn_plan([], [])['success'])
@@ -4742,6 +4746,93 @@ class EventHistoryTests(unittest.TestCase):
         ]
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["guest_ids"], [401, 402])
+        self.assertIn("基础娱乐", logs[0]["text"])
+        self.assertIn("高级娱乐", logs[0]["text"])
+        self.assertIn("收费+40", logs[0]["text"])
+        self.assertIn("收费+90", logs[0]["text"])
+        self.assertIn("满意度+2", logs[0]["text"])
+        self.assertIn("满意度+6", logs[0]["text"])
+
+    def test_multiple_free_entertainment_actions_are_formal_and_summarized(self):
+        engine = self._empty_business_engine(3)
+        for npc_id, campsite_slot in ((411, 2), (412, 5)):
+            engine.npc_pool.append(NPCGroup(
+                id=npc_id, group_size=1, visit_type="day", location="campsite",
+                campsite_slot=campsite_slot,
+            ))
+            self._add_arrival_entry(
+                engine, npc_id, visit_type="day", arrival_turn=2,
+                arrival_status="arrived",
+                planned_actions=[{
+                    "action": "free_entertainment", "planned_turn": 3,
+                    "status": "pending",
+                }],
+            )
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 3
+            and item.get("event_type") == "entertainment_completed"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["guest_ids"], [411, 412])
+        self.assertIn("2、5号营位客人", logs[0]["text"])
+        self.assertIn("满意度+1", logs[0]["text"])
+        self.assertNotIn("收入0", logs[0]["text"])
+        self.assertNotIn("收费0", logs[0]["text"])
+        self.assertNotEqual(logs[0]["event_type"], "legacy")
+
+    def test_paid_and_free_entertainment_same_turn_keep_real_results(self):
+        engine = self._empty_business_engine(3)
+        for npc_id, campsite_slot, actions in (
+            (421, 2, [{"action": "paid_entertainment", "tier_key": "basic"}]),
+            (422, 5, [{"action": "free_entertainment"}]),
+        ):
+            engine.npc_pool.append(NPCGroup(
+                id=npc_id, group_size=1, visit_type="day", location="campsite",
+                campsite_slot=campsite_slot,
+            ))
+            for action in actions:
+                action.update({"planned_turn": 3, "status": "pending"})
+            self._add_arrival_entry(
+                engine, npc_id, visit_type="day", arrival_turn=2,
+                arrival_status="arrived", planned_actions=actions,
+            )
+        self.assertTrue(engine.submit_turn_plan([], [])['success'])
+        engine.advance_turn()
+        logs = [
+            item for item in engine.state.event_history
+            if item["day"] == engine.state.day and item["turn"] == 3
+            and item.get("event_type") == "entertainment_completed"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertIn("收费+40", logs[0]["text"])
+        self.assertIn("满意度+2", logs[0]["text"])
+        self.assertIn("满意度+1", logs[0]["text"])
+        self.assertNotIn("legacy", logs[0]["event_type"])
+
+    def test_multiple_review_pending_events_are_anonymous_formal_summary(self):
+        engine = self._empty_business_engine(5)
+        guests = [
+            NPCGroup(id=431, group_size=1, visit_type="day", campsite_slot=1),
+            NPCGroup(id=432, group_size=1, visit_type="day", campsite_slot=4),
+        ]
+        engine.npc_pool.extend(guests)
+        snapshot = engine._snapshot_turn_business_state()
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            for guest in guests:
+                engine._try_leave_review(guest, {"events": []})
+        engine._append_turn_business_summaries(snapshot, engine.state.day, 5)
+        logs = [
+            item for item in engine.state.event_history
+            if item.get("event_type") == "review_pending"
+        ]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["text"], "有2组客人留下评价，将于次日晨间结算。")
+        self.assertNotIn("营位", logs[0]["text"])
+        self.assertNotIn("帐篷", logs[0]["text"])
+        self.assertNotIn("npc_id", logs[0]["text"])
     def test_day_guest_returns_to_campsite_after_idle_turn(self):
         engine = self._empty_business_engine(2)
         guest = NPCGroup(id=701, group_size=1, visit_type="day", location="campsite", campsite_slot=4)
