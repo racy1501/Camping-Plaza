@@ -584,9 +584,19 @@
         const newReviews = Array.isArray(state.review_history)
             ? state.review_history.filter(review => Number(review.created_day) === previousDay).length
             : 0;
-        const plan = state.arrival_plan || {};
-        const overnight = Number(plan.reservation_overnight_groups) || 0;
-        const day = Number(plan.reservation_day_groups) || 0;
+        const confirmedReservations = Array.isArray(state.reservations)
+            ? state.reservations.filter(reservation => (
+                reservation &&
+                reservation.status === 'accepted' &&
+                Number(reservation.arrival_day) === Number(state.day)
+            ))
+            : [];
+        const overnight = confirmedReservations.filter(
+            reservation => reservation.visit_type === 'overnight'
+        ).length;
+        const day = confirmedReservations.filter(
+            reservation => reservation.visit_type === 'day'
+        ).length;
         const reservations = [];
         if (overnight) reservations.push(`帐篷 ${overnight} 顶`);
         if (day) reservations.push(`营位 ${day} 组`);

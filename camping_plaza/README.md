@@ -69,7 +69,7 @@ python game_api.py
 
 - **经营状态**：`day`、`turn`、`balance`、`average_rating`、`decisions_left`、`food_stock`、`today_income`
 - **设施/帐篷**：`tents`（含 status/unlocked/capacity）、`facilities`（含 level）、`greenery`、`hot_spring`、`day_campsite`
-- **预约/客流**：`active_guests_count`、`reservations`、`arrival_plan`
+- **预约/客流**：`active_guests_count`、`reservations`
 - **Turn Plan**：`planning_available`、`plan_submitted`、`plan_target_turn`、`turn_plan`、`next_turn_checkout_tents`
 
 `turn_plan` 说明：

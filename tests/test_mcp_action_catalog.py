@@ -41,9 +41,13 @@ class McpActionCatalogTests(unittest.TestCase):
         entry = self._submit_entry()
         self.assertEqual(entry["action"], "execute_turn_plan")
         self.assertEqual(entry["endpoint"], "/api/turn/plan")
-        self.assertIn("提交并执行", entry["description"])
-        self.assertIn("推进到下一回合", entry["description"])
-        self.assertIn("决策点使用数量可以为 0–3。", entry["description"])
+        description = entry["description"]
+        self.assertIn("本轮所有操作必须在一次 execute_turn_plan 中提交", description)
+        self.assertIn("free_actions", description)
+        self.assertIn("0～3 项 actions", description)
+        self.assertIn("成功后立即进入下一 Turn", description)
+        self.assertIn("未使用决策点作废", description)
+        self.assertIn("buy_food_package 使用 package_key", description)
 
     def test_turn_specific_candidates_and_daily_limits(self):
         self.engine.state.turn = 3

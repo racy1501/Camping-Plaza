@@ -177,10 +177,8 @@ def _food_package_plan_description() -> str:
         )
     package_text = "，".join(package_bits)
     return (
-        "提交本轮营业计划（free_actions支持clean_tents，"
-        "actions支持repair_tent、improve_service、buy_food_package，"
-        "buy_food_package使用package_key，"
-        f"可选包：{package_text}，actions最多3项）。决策点使用数量可以为 0–3。"
+        "食材包参数：buy_food_package 使用 package_key，可选包："
+        f"{package_text}。"
     )
 
 
@@ -733,56 +731,6 @@ def _get_day_campsite_status(eng: CampingPlazaEngine) -> dict:
     }
 
 
-def _get_arrival_plan_summary(eng: CampingPlazaEngine) -> dict:
-    """今日到达计划安全摘要（只读），仅聚合不生成/不修改计划。"""
-    today = eng.state.day
-    current_entries = [
-        e for e in eng.state.today_arrival_plan
-        if e.get("planned_day") == today
-    ]
-
-    total_groups = len(current_entries)
-    total_people = sum(e.get("group_size", 0) for e in current_entries)
-    pending_entries = [e for e in current_entries if e.get("arrival_status") == "pending"]
-    arrived_groups = sum(1 for e in current_entries if e.get("arrival_status") == "arrived")
-    turned_away_full_groups = sum(
-        1 for e in current_entries if e.get("arrival_status") == "turned_away_full"
-    )
-    reservation_day_groups = sum(1 for e in current_entries if e.get("source") == "reservation" and e.get("visit_type") == "day")
-    reservation_overnight_groups = sum(1 for e in current_entries if e.get("source") == "reservation" and e.get("visit_type") == "overnight")
-
-    pending_by_turn = {
-        "2": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
-        "3": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
-        "4": {"day_groups": 0, "day_people": 0, "overnight_groups": 0, "overnight_people": 0},
-    }
-    for e in pending_entries:
-        turn_key = str(e.get("arrival_turn"))
-        if turn_key not in pending_by_turn:
-            continue
-        size = e.get("group_size", 0)
-        bucket = pending_by_turn[turn_key]
-        if e.get("visit_type") == "overnight":
-            bucket["overnight_groups"] += 1
-            bucket["overnight_people"] += size
-        else:
-            bucket["day_groups"] += 1
-            bucket["day_people"] += size
-
-    return {
-        "day": eng.state.today_arrival_plan_day,
-        "total_groups": total_groups,
-        "total_people": total_people,
-        "pending_groups": len(pending_entries),
-        "pending_people": sum(e.get("group_size", 0) for e in pending_entries),
-        "arrived_groups": arrived_groups,
-        "turned_away_full_groups": turned_away_full_groups,
-        "reservation_day_groups": reservation_day_groups,
-        "reservation_overnight_groups": reservation_overnight_groups,
-        "pending_by_turn": pending_by_turn,
-    }
-
-
 # =============================================================================
 # 游戏状态接口
 # =============================================================================
@@ -820,7 +768,6 @@ def get_state(session_id: Optional[str] = None):
     state["debt_remaining"] = eng.state.debt_remaining
     state["hot_spring"] = _get_hot_spring_status(eng)
     state["day_campsite"] = _get_day_campsite_status(eng)
-    state["arrival_plan"] = _get_arrival_plan_summary(eng)
     state["today_events"] = list(eng.state.today_events)
     state["event_history"] = list(eng.state.event_history)
     state["review_history"] = list(eng.state.review_history)
@@ -1209,17 +1156,6 @@ def mcp_state(session_id: Optional[str] = None):
             if turn_plan is not None:
                 response["turn_plan"] = turn_plan
 
-    arrival_plan = _get_arrival_plan_summary(eng)
-    if (
-        arrival_plan["total_groups"]
-        or arrival_plan["pending_groups"]
-        or arrival_plan["arrived_groups"]
-        or arrival_plan["turned_away_full_groups"]
-        or arrival_plan["reservation_day_groups"]
-        or arrival_plan["reservation_overnight_groups"]
-    ):
-        response["arrival_plan"] = arrival_plan
-
     if state["turn"] != 6:
         response["food_stock"] = state["food_stock"]
         response["today_income"] = state["today_income"]
@@ -1295,7 +1231,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 "action": "execute_turn_plan",
                 "params": {"free_actions": [], "actions": []},
                 "endpoint": "/api/turn/plan",
-                "description": "提交并执行当前回合完整计划，执行完成后推进到下一回合。" + _food_package_plan_description(),
+                "description": "本轮所有操作必须在一次 execute_turn_plan 中提交：free_actions 与 0～3 项 actions 一并提交；成功后立即进入下一 Turn，未使用决策点作废。" + _food_package_plan_description(),
             }
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
