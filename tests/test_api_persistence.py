@@ -1031,6 +1031,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.state.turn = 6
 
         actions = game_api.mcp_available_actions()["available_actions"]
+        actions = [item for item in actions if item["action"] != "restart_game"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "submit_day_end_actions")
         food_actions = [
@@ -1060,6 +1061,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         )
 
         actions = game_api.mcp_available_actions()["available_actions"]
+        actions = [item for item in actions if item["action"] != "restart_game"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "start_next_day")
 
@@ -1129,6 +1131,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
         self.engine.tents[1].status = "broken"
 
         actions = game_api.mcp_available_actions()["available_actions"]
+        actions = [item for item in actions if item["action"] != "restart_game"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "submit_day_end_actions")
         self.assertNotIn("repair_candidates", actions[0])
@@ -1450,6 +1453,7 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         self.engine.state.balance = 10000
 
         actions = game_api.mcp_available_actions()["available_actions"]
+        actions = [item for item in actions if item["action"] != "restart_game"]
         self.assertEqual(len(actions), 1)
         entry = actions[0]
         self.assertEqual(entry["action"], "submit_day_end_actions")

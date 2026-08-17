@@ -497,13 +497,7 @@ class CampingPlazaEngine:
         self.database_url = database_url.strip()
         self.use_postgres = self.database_url.startswith(("postgres://", "postgresql://"))
         self.session_id = session_id
-        self.state = GameState()
-        self.tents: dict[int, Tent] = {}
-        self.npc_pool: list[NPCGroup] = []
-        self.facilities: dict[str, Facility] = {}
-        self._npc_id_counter = 0
-        self._init_game()
-        self.state.day_start_balance = self.state.balance
+        self._initialize_fresh_game()
         # 持久化：数据库中的 session_id 是存档隔离边界；先读后写，绝不覆盖其他 session。
         self._ensure_snapshot_table()
         load_result = self.load_state()
@@ -519,6 +513,30 @@ class CampingPlazaEngine:
 
         if self.state.turn == 1 and self._ensure_today_arrival_plan():
             self.save_state()
+
+    def _initialize_fresh_game(self, player_name: Optional[str] = None) -> None:
+        """建立完整的新游戏运行态；不触碰 session_id 或数据库。"""
+        self.state = GameState(player_name=player_name)
+        self.tents = {}
+        self.npc_pool = []
+        self.facilities = {}
+        self._npc_id_counter = 0
+        self._init_game()
+        self.state.day_start_balance = self.state.balance
+
+    def restart_game(self) -> dict:
+        """在当前 session 原地重启，并保留已完成 onboarding 的玩家名称。"""
+        player_name = self.state.player_name
+        self._initialize_fresh_game(player_name=player_name)
+        self._apply_opening_food_gift()
+        self._ensure_today_arrival_plan()
+        return {
+            "success": True,
+            "restarted": True,
+            "day": self.state.day,
+            "turn": self.state.turn,
+            "message": "游戏已重新开始。",
+        }
 
     def _current_turn_plan_target(self) -> tuple[int, int]:
         return self.state.day, self.state.turn

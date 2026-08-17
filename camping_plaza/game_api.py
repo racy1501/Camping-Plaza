@@ -160,6 +160,7 @@ _API_ACTION_PARAM_TYPES = {
     "purchase_growth_project": {"project_id": "string"},
     "advance_turn": {},
     "new_day": {},
+    "restart_game": {"confirm": "string"},
 }
 _API_ACTION_REQUIRED_PARAMS = {
     "resolve_temporary_conflict": {"choice"},
@@ -1133,6 +1134,15 @@ def do_action(req: ActionRequest):
         # 日终结束，推进到新的一天
         result = eng.advance_turn()  # 这会推进到 day+1
 
+    elif req.action == "restart_game":
+        if params.get("confirm") != "确认重新开始":
+            return {
+                "success": False,
+                "confirmation_required": True,
+                "message": "重新开始将清空当前游戏进度，并从第1天重新开始。此操作无法撤销。如确认，请再次提交‘确认重新开始’。",
+            }
+        result = eng.restart_game()
+
     else:
         _raise_action_request_error("unknown_action", f"未知操作: {req.action}")
 
@@ -1320,6 +1330,13 @@ def mcp_available_actions(session_id: Optional[str] = None):
             }
             actions = [entry]
 
+    if eng.state.player_name is not None:
+        actions.append({
+            "action": "restart_game",
+            "endpoint": "/api/action",
+            "params": {"confirm": ""},
+            "description": "重新开始当前游戏，需二次确认。",
+        })
     response = {"food_stock": int(eng.state.food_stock), "available_actions": actions}
     if state["turn"] == 6 and not eng.state.day_end_completed:
         response["decision_summary"] = eng.get_turn6_decision_summary()

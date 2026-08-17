@@ -75,6 +75,7 @@ python game_api.py
 
 ### 游戏操作
 - `POST /api/session` — 创建新 session；新存档首次读取先进入 onboarding
+- `POST /api/action` 的 `restart_game` — AI 原地重新开始当前 session；需精确提交 `confirm: "确认重新开始"` 二次确认，不占决策点、不属于 Turn Plan 或 Turn 6 清单；人类前端不提供入口
 - `POST /api/player/name` — 设置该存档的经营者名称，成功后直接进入 Day 1 / Turn 1
 - `POST /api/turn/advance` — 推进 Turn 1 或执行已提交计划
 - `POST /api/turn/plan` — Turn 2～5 提交并立即执行 `execute_turn_plan`
