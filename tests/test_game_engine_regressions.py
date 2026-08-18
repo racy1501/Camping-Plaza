@@ -1803,12 +1803,17 @@ class RepairStateRecoveryTests(unittest.TestCase):
         tent.status = "occupied"
         occupant.location = "tent_1"
 
-        engine._handle_breakdowns({"events": [], "next_actions": []})
+        breakdown_result = {"events": [], "next_actions": []}
+        engine._handle_breakdowns(breakdown_result)
 
         self.assertEqual(tent.status, "broken")
         self.assertEqual(tent.occupied_by, occupant.id)
         self.assertEqual(occupant.total_satisfaction, 68)
         self.assertEqual(occupant.broken_tent_penalty, 2)
+        self.assertEqual(
+            breakdown_result["next_actions"],
+            [{"action": "repair_tent", "params": {"tent_id": 1}}],
+        )
 
     def test_same_breakdown_does_not_penalize_twice(self):
         """同一次故障不重复应用扣分"""

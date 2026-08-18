@@ -836,6 +836,26 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
     }
 
 
+def _build_temporary_conflict_action(eng: CampingPlazaEngine) -> Optional[dict]:
+    temporary_event = _get_temporary_event_summary(eng)
+    if temporary_event is None:
+        return None
+    return {
+        "action": "resolve_temporary_conflict",
+        "params": {"choice": None},
+        "required_params": [{
+            "name": "choice",
+            "type": "string",
+            "required": True,
+            "enum": ["mediate", "ignore"],
+        }],
+        "choices": ["mediate", "ignore"],
+        "choice_details": temporary_event["choices"],
+        "temporary_event": temporary_event,
+        "description": "先立即处理临时事件，再提交本轮经营计划。",
+    }
+
+
 @app.get("/mcp/query_growth_projects")
 def mcp_query_growth_projects(session_id: Optional[str] = None):
     """MCP 只读查询：复用现有成长目录和进度读取逻辑。"""
@@ -962,7 +982,7 @@ def submit_turn_plan(req: TurnPlanRequest):
     )
     if not plan_result["success"]:
         eng.save_state()
-        return {
+        response = {
             "success": False,
             "message": plan_result.get("message", ""),
             "target_day": plan_result.get("target_day"),
@@ -970,6 +990,10 @@ def submit_turn_plan(req: TurnPlanRequest):
             "free_action_count": plan_result.get("free_actions_count", len(req.free_actions)),
             "action_count": plan_result.get("actions_count", len(req.actions)),
         }
+        if plan_result.get("error_code") == "temporary_conflict_pending":
+            response["error_code"] = "temporary_conflict_pending"
+            response["next_action"] = _build_temporary_conflict_action(eng)
+        return response
 
     executed_day = eng.state.day
     executed_turn = eng.state.turn
@@ -1289,22 +1313,9 @@ def mcp_available_actions(session_id: Optional[str] = None):
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
             submit_entry["max_decision_actions"] = eng.state.decisions_left
-            temporary_event = _get_temporary_event_summary(eng)
-            if temporary_event is not None:
-                actions.append({
-                    "action": "resolve_temporary_conflict",
-                    "params": {"choice": None},
-                    "required_params": [{
-                        "name": "choice",
-                        "type": "string",
-                        "required": True,
-                        "enum": ["mediate", "ignore"],
-                    }],
-                    "choices": ["mediate", "ignore"],
-                    "choice_details": temporary_event["choices"],
-                    "temporary_event": temporary_event,
-                    "description": "先立即处理临时事件，再提交本轮经营计划。",
-                })
+            temporary_action = _build_temporary_conflict_action(eng)
+            if temporary_action is not None:
+                actions.append(temporary_action)
             else:
                 actions.append(submit_entry)
         if plan_submitted:

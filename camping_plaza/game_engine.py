@@ -1288,7 +1288,11 @@ class CampingPlazaEngine:
         if not isinstance(free_actions, list) or not isinstance(actions, list):
             return {"success": False, "message": "invalid turn plan"}
         if self.get_current_temporary_conflict_event() is not None:
-            return {"success": False, "message": "temporary event choice required"}
+            return {
+                "success": False,
+                "error_code": "temporary_conflict_pending",
+                "message": "temporary event choice required",
+            }
         if conflict_choice is not None:
             return {"success": False, "message": "temporary event must be resolved before planning"}
         if len(actions) > self.state.decisions_left:
@@ -3586,7 +3590,10 @@ class CampingPlazaEngine:
                 result["events"].append(
                     f"⚠️ {tent_id}号帐篷出现故障，需要维修{reaction}"
                 )
-                result["next_actions"].append(f"repair_tent_{tent_id}")
+                result["next_actions"].append({
+                    "action": "repair_tent",
+                    "params": {"tent_id": tent_id},
+                })
 
     def clean_tents(self, tent_ids: Optional[list[int]] = None) -> dict:
         """AI主动清洁帐篷。不消耗决策点，支持批量清洁。

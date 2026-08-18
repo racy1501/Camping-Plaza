@@ -86,6 +86,32 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertEqual(actions[0]["required_params"][0]["enum"], ["mediate", "ignore"])
         self.assertEqual(self.engine.state, before)
 
+    def test_blocked_plan_returns_conflict_resolution_guidance(self):
+        self.engine.state.turn = 3
+        self.engine.state.today_conflict_event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3,
+            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+        }
+
+        result = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "temporary_conflict_pending")
+        next_action = result["next_action"]
+        self.assertEqual(next_action["action"], "resolve_temporary_conflict")
+        self.assertEqual(next_action["params"], {"choice": None})
+        self.assertEqual(next_action["choices"], ["mediate", "ignore"])
+
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("ignore")["success"])
+        resumed = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+        self.assertTrue(resumed["success"])
+
     def test_submitted_plan_only_exposes_advance(self):
         self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
