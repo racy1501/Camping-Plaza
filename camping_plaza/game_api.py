@@ -685,7 +685,10 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         "panel_title": "营业经营",
         "planning_available": True,
         "plan_submitted": False,
-        "max_decision_actions": eng.state.decisions_left,
+        "max_decision_actions": min(
+            CampingPlazaEngine.MAX_TURN_PLAN_DECISION_ACTIONS,
+            eng.state.decisions_left,
+        ),
         "turn_plan": None,
         "free_action_candidates": free_action_candidates,
         "decision_action_candidates": decision_action_candidates,
@@ -836,6 +839,16 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
     }
 
 
+def _get_operating_decision_message(eng: CampingPlazaEngine) -> str:
+    message = (
+        "今日经营决策点："
+        f"{eng.state.decisions_left} / {CampingPlazaEngine.DAILY_DECISION_LIMIT}"
+    )
+    if eng.state.turn == 1:
+        message += "｜全天营业轮次共享｜当日未使用点数不结转。"
+    return message
+
+
 def _build_temporary_conflict_action(eng: CampingPlazaEngine) -> Optional[dict]:
     temporary_event = _get_temporary_event_summary(eng)
     if temporary_event is None:
@@ -904,6 +917,7 @@ def advance_turn(req: Optional[SessionRequest] = None):
     eng = get_engine(req.session_id if req is not None else None)
     _require_onboarding_complete(eng)
     result = eng.advance_turn()
+    result["events"] = [_get_operating_decision_message(eng), *result["events"]]
     # 写操作后统一保存（含故障阻塞早退补足决策点等分支）
     eng.save_state()
     return result
@@ -1007,6 +1021,10 @@ def submit_turn_plan(req: TurnPlanRequest):
         for event in eng.state.event_history
         if event.get("sequence", 0) > history_sequence_before
     ]
+    events.insert(0, {
+        "type": "operating_decisions",
+        "text": _get_operating_decision_message(eng),
+    })
     execution_items = [
         item
         for group in ("free_actions", "actions")
@@ -1076,6 +1094,8 @@ def start_next_day(req: Optional[SessionRequest] = None):
     eng = get_engine(req.session_id if req is not None else None)
     _require_onboarding_complete(eng)
     result = eng.start_next_day()
+    if result.get("success"):
+        result["events"] = [_get_operating_decision_message(eng), *result["events"]]
     eng.save_state()
     return result
 
@@ -1231,6 +1251,7 @@ def mcp_state(session_id: Optional[str] = None):
 
     # 只返回AI决策需要的信息
     response = {
+        "player_message": _get_operating_decision_message(eng),
         "day": state["day"],
         "turn": state["turn"],
         "balance": state["balance"],
@@ -1308,11 +1329,14 @@ def mcp_available_actions(session_id: Optional[str] = None):
                 "action": "execute_turn_plan",
                 "params": {"free_actions": [], "actions": []},
                 "endpoint": "/api/turn/plan",
-                "description": "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
+                "description": "本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
             }
             turn_candidates = _build_turn_action_candidates(eng)
             submit_entry.update(turn_candidates)
-            submit_entry["max_decision_actions"] = eng.state.decisions_left
+            submit_entry["max_decision_actions"] = min(
+                CampingPlazaEngine.MAX_TURN_PLAN_DECISION_ACTIONS,
+                eng.state.decisions_left,
+            )
             temporary_action = _build_temporary_conflict_action(eng)
             if temporary_action is not None:
                 actions.append(temporary_action)
@@ -1348,7 +1372,12 @@ def mcp_available_actions(session_id: Optional[str] = None):
             "params": {"confirm": ""},
             "description": "重新开始当前游戏，需二次确认。",
         })
-    response = {"food_stock": int(eng.state.food_stock), "available_actions": actions}
+    response = {
+        "player_message": _get_operating_decision_message(eng),
+        "decisions_left": eng.state.decisions_left,
+        "food_stock": int(eng.state.food_stock),
+        "available_actions": actions,
+    }
     if state["turn"] == 6 and not eng.state.day_end_completed:
         response["decision_summary"] = eng.get_turn6_decision_summary()
     return response

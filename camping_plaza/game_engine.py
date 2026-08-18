@@ -134,7 +134,7 @@ class GameState:
     today_events: list = field(default_factory=list)
     event_history: list = field(default_factory=list)
     event_sequence: int = 0
-    decisions_left: int = 3
+    decisions_left: int = 5
     improve_service_uses_today: int = 0
     clean_campsite_uses_today: int = 0
     day_campsite_groups_served: int = 0
@@ -178,6 +178,8 @@ class CampingPlazaEngine:
     """露营广场游戏引擎"""
 
     DAY_CAMPSITE_CAPACITY = 10
+    DAILY_DECISION_LIMIT = 5
+    MAX_TURN_PLAN_DECISION_ACTIONS = 3
     EVENT_HISTORY_LIMIT = 100
     DAY_TO_OVERNIGHT_INTENT_PROBABILITY = 0.15
     TENT_PRICES = {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500}
@@ -1295,6 +1297,8 @@ class CampingPlazaEngine:
             }
         if conflict_choice is not None:
             return {"success": False, "message": "temporary event must be resolved before planning"}
+        if len(actions) > self.MAX_TURN_PLAN_DECISION_ACTIONS:
+            return {"success": False, "message": "too many actions"}
         if len(actions) > self.state.decisions_left:
             return {"success": False, "message": "too many actions"}
 
@@ -1331,7 +1335,7 @@ class CampingPlazaEngine:
             "free_actions": normalized_free_actions,
             "actions": normalized_actions,
         }
-        self.state.decisions_left = 0
+        self.state.decisions_left -= len(normalized_actions)
         return {
             "success": True,
             "target_day": target_day,
@@ -2867,8 +2871,6 @@ class CampingPlazaEngine:
                     )
                 self.state.food_stock = 0
                 self._settle_daily_operating_costs()
-            self.state.decisions_left = 3
-
             # 推进到下一回合
             self.state.turn += 1
             self._restore_active_npc_base_locations()
@@ -4953,7 +4955,7 @@ class CampingPlazaEngine:
             "hot_spring_operating": 0,
         }
         self.state.today_events = []
-        self.state.decisions_left = 3
+        self.state.decisions_left = self.DAILY_DECISION_LIMIT
         self.state.improve_service_uses_today = 0
         self.state.clean_campsite_uses_today = 0
         self.state.pending_turn_plan = None
@@ -5160,7 +5162,10 @@ class CampingPlazaEngine:
                 if state["average_rating"] is not None
                 else "⭐ 营地评价: -- ★"
             ),
-            f"🎯 剩余决策点: {state['decisions_left']}",
+            (
+                "今日经营决策点："
+                f"{state['decisions_left']} / {self.DAILY_DECISION_LIMIT}"
+            ),
             "",
             "--- 帐篷状态 ---"
         ]

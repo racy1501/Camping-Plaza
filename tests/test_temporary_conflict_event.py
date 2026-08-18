@@ -144,7 +144,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.assertTrue(self.engine.resolve_current_temporary_conflict("mediate")["success"])
         accepted = self.engine.submit_turn_plan([], actions[:2])
         self.assertTrue(accepted["success"])
-        self.assertEqual(self.engine.state.decisions_left, 0)
+        self.assertEqual(self.engine.state.decisions_left, 2)
 
         self.engine.state.pending_turn_plan = None
         self.engine.state.decisions_left = 3
@@ -552,7 +552,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
         }
         result = self.engine.resolve_current_temporary_conflict("mediate")
         self.assertTrue(result["success"])
-        self.assertEqual(self.engine.state.decisions_left, 2)
+        self.assertEqual(self.engine.state.decisions_left, 4)
         self.assertEqual(self.engine.state.today_conflict_event["status"], "resolved")
         entry = self.engine.state.event_history[-1]
         self.assertEqual((entry["turn"], entry["event_type"]), (3, "temporary_conflict"))

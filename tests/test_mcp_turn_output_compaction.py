@@ -63,7 +63,11 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
             "day_campsite", "reservations", "turn_plan",
         ):
             self.assertNotIn(field, state)
-        self.assertEqual(state["decisions_left"], 3)
+        self.assertEqual(state["decisions_left"], 5)
+        self.assertEqual(
+            state["player_message"],
+            "今日经营决策点：5 / 5",
+        )
         self.assertIn("food_stock", state)
 
     def test_mcp_state_does_not_keep_reservation_context(self):
@@ -85,7 +89,7 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
         self.assertNotIn("available_queries", response)
         self.assertEqual(
             entry["description"],
-            "每个 Turn 有 3 个决策点，不结转。本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
+            "本轮所有操作须一次提交：free_actions + 0～3 项 actions；提交即进入下一 Turn。成功后已进入下一 Turn，普通连续经营优先读取下一 Turn 的 /mcp/actions。",
         )
         self.assertEqual(response["food_stock"], self.engine.state.food_stock)
         self.assertNotIn("confirmed_reservations", response)

@@ -42,7 +42,7 @@ class McpActionCatalogTests(unittest.TestCase):
         self.assertEqual(entry["action"], "execute_turn_plan")
         self.assertEqual(entry["endpoint"], "/api/turn/plan")
         description = entry["description"]
-        self.assertIn("每个 Turn 有 3 个决策点，不结转。", description)
+        self.assertNotIn("每个 Turn 有 3 个决策点，不结转。", description)
         self.assertIn("本轮所有操作须一次提交", description)
         self.assertIn("free_actions", description)
         self.assertIn("0～3 项 actions", description)
