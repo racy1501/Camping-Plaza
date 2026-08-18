@@ -44,14 +44,15 @@ class TemporaryConflictEventTests(unittest.TestCase):
 
     def test_scheduled_event_is_generated_once_with_fixed_results(self):
         self._add_planned_guests(2)
-        with mock.patch("game_engine.random.random", side_effect=[0.0, 0.0, 1.0, 1.0, 1.0]), \
+        with mock.patch("game_engine.random.random", side_effect=[0.0, 1.0, 1.0, 1.0, 1.0]), \
              mock.patch("game_engine.random.sample", return_value=self.engine.state.today_arrival_plan), \
              mock.patch("game_engine.random.randint", return_value=5):
             self.engine._initialize_today_conflict_event()
         event = self.engine.state.today_conflict_event
         self.assertEqual(event["status"], "scheduled")
         self.assertEqual(event["trigger_turn"], 5)
-        self.assertEqual(event["mediate_result"], {"npc_a_delta": 0, "npc_b_delta": 0})
+        self.assertEqual(event["verbal_result"], {"npc_a_delta": 0, "npc_b_delta": 0})
+        self.assertEqual(event["gift_result"], {"npc_a_delta": 0, "npc_b_delta": 0})
         before = dict(event)
         self.engine._initialize_today_conflict_event()
         self.assertEqual(self.engine.state.today_conflict_event, before)
@@ -64,48 +65,47 @@ class TemporaryConflictEventTests(unittest.TestCase):
             self.engine._get_temporary_conflict_probability(same, different),
         )
 
-    def test_mediation_weight_differs_only_by_temperament_match(self):
-        same = {"temperament": 1}
-        different = {"temperament": 2}
-        same_probability = self.engine._get_temporary_conflict_penalty_probability(
-            same, same, "mediate"
+    def test_resolution_probability_depends_only_on_each_npc_temperament(self):
+        self.assertEqual(
+            [self.engine._get_temporary_conflict_penalty_probability({"temperament": value}, "verbal") for value in range(3)],
+            [0.10, 0.30, 0.55],
         )
-        different_probability = self.engine._get_temporary_conflict_penalty_probability(
-            same, different, "mediate"
+        self.assertEqual(
+            [self.engine._get_temporary_conflict_penalty_probability({"temperament": value}, "gift") for value in range(3)],
+            [0.05, 0.15, 0.30],
         )
-        self.assertGreater(different_probability, same_probability)
-        self.assertLess(different_probability - same_probability, 0.1)
 
-    def test_ignore_keeps_formal_path_with_small_different_temperament_adjustment(self):
-        same = {"temperament": 1}
-        different = {"temperament": 2}
-        same_probability = self.engine._get_temporary_conflict_penalty_probability(
-            same, same, "ignore"
-        )
-        different_probability = self.engine._get_temporary_conflict_penalty_probability(
-            same, different, "ignore"
-        )
-        self.assertGreaterEqual(different_probability, same_probability)
-        self.assertLess(different_probability - same_probability, 0.1)
+    def test_resolution_reads_pre_generated_result_without_new_random_roll(self):
+        self.engine.state.turn = 3
+        self.engine.state.today_conflict_event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3,
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": -2, "npc_b_delta": 0},
+        }
+        with mock.patch("game_engine.random.random", side_effect=AssertionError("must not re-roll")):
+            result = self.engine.resolve_current_temporary_conflict("verbal")
+
+        self.assertTrue(result["success"])
 
     def test_plan_requires_immediate_conflict_resolution_only_on_trigger_turn(self):
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
         }
         self.assertFalse(self.engine.submit_turn_plan([], [])["success"])
         self.engine.state.today_conflict_event = {"status": "no_event"}
-        self.assertFalse(self.engine.submit_turn_plan([], [], "mediate")["success"])
+        self.assertFalse(self.engine.submit_turn_plan([], [], "verbal")["success"])
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
         }
-        self.assertTrue(self.engine.resolve_current_temporary_conflict("ignore")["success"])
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("verbal")["success"])
         self.assertTrue(self.engine.submit_turn_plan([], [])["success"])
 
     def test_conflict_history_keeps_trigger_turn_after_state_advances(self):
@@ -120,57 +120,99 @@ class TemporaryConflictEventTests(unittest.TestCase):
                 "npc_a_id": 1000 + trigger_turn * 2,
                 "npc_b_id": 1001 + trigger_turn * 2,
                 "trigger_turn": trigger_turn,
-                "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-                "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+                "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+                "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
             }
-            result = {"events": [], "conflict_choice": "mediate"}
+            result = {"events": [], "conflict_choice": "verbal"}
             self.engine._apply_temporary_conflict_event(result)
             self.engine.state.turn = trigger_turn + 1
             entry = self.engine.state.event_history[-1]
             self.assertEqual(entry["turn"], trigger_turn)
 
-    def test_mediate_consumes_one_decision_slot_but_ignore_does_not(self):
+    def test_verbal_and_gift_do_not_consume_daily_decisions(self):
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
         }
         actions = [
             {"action": "repair_tent", "tent_id": tent_id}
             for tent_id in (1, 2, 3)
         ]
-        self.assertTrue(self.engine.resolve_current_temporary_conflict("mediate")["success"])
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("verbal")["success"])
         accepted = self.engine.submit_turn_plan([], actions[:2])
         self.assertTrue(accepted["success"])
-        self.assertEqual(self.engine.state.decisions_left, 2)
+        self.assertEqual(self.engine.state.decisions_left, 3)
 
         self.engine.state.pending_turn_plan = None
         self.engine.state.decisions_left = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
         }
-        self.assertTrue(self.engine.resolve_current_temporary_conflict("ignore")["success"])
+        balance_before = self.engine.state.balance
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("gift")["success"])
+        self.assertEqual(self.engine.state.balance, balance_before - 40)
+        self.assertEqual(self.engine.state.today_expenses["conflict_care"], 40)
+        self.assertEqual(self.engine.state.decisions_left, 3)
         self.assertTrue(self.engine.submit_turn_plan([], actions)["success"])
 
-    def test_mcp_event_choices_expose_cost_and_risk_without_results(self):
+    def test_mcp_event_choices_expose_cost_without_hidden_results(self):
         original_engine = game_api.engine
         game_api.engine = self.engine
         self.addCleanup(setattr, game_api, "engine", original_engine)
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2, "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": -2}, "ignore_result": {"npc_b_delta": -2},
+            "verbal_result": {"npc_a_delta": -2}, "gift_result": {"npc_b_delta": -2},
         }
         event = game_api.mcp_available_actions()["available_actions"][0]["temporary_event"]
-        self.assertEqual(event["choices"][0]["decision_cost"], 1)
+        self.assertEqual(event["choices"][0]["cost"], 0)
+        self.assertEqual(event["choices"][1]["cost"], 40)
         self.assertTrue(event["choices"][0]["effect"])
         self.assertNotIn("result", str(event))
         self.assertNotIn("delta", str(event))
+        self.assertNotIn("temperament", str(event))
+        self.assertNotIn("probability", str(event))
+        human_event = game_api.get_human_actions()["temporary_event"]
+        self.assertEqual(human_event["choices"][1]["cost"], 40)
+
+    def test_gift_insufficient_balance_keeps_event_pending_without_charge(self):
+        self.engine.state.turn = 3
+        self.engine.state.balance = 39
+        self.engine.state.today_conflict_event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3,
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": -2, "npc_b_delta": -2},
+        }
+
+        result = self.engine.resolve_current_temporary_conflict("gift")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(self.engine.state.balance, 39)
+        self.assertEqual(self.engine.state.today_expenses["conflict_care"], 0)
+        self.assertEqual(self.engine.state.today_conflict_event["status"], "scheduled")
+
+    def test_gift_cost_is_not_refunded_when_both_guests_reject(self):
+        self.engine.state.turn = 3
+        self.engine.state.today_conflict_event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3,
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": -2, "npc_b_delta": -2},
+        }
+        balance_before = self.engine.state.balance
+
+        result = self.engine.resolve_current_temporary_conflict("gift")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(self.engine.state.balance, balance_before - 40)
+        self.assertEqual(self.engine.state.today_expenses["conflict_care"], 40)
 
     def test_settlement_uses_fixed_result_once_and_resolves_before_turn_five_departures(self):
         self.engine.state.turn = 5
@@ -187,10 +229,10 @@ class TemporaryConflictEventTests(unittest.TestCase):
         ]
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2, "trigger_turn": 5,
-            "mediate_result": {"npc_a_delta": -2, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": -2},
+            "verbal_result": {"npc_a_delta": -2, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": -2},
         }
-        self.assertTrue(self.engine.resolve_current_temporary_conflict("mediate")["success"])
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("verbal")["success"])
         self.assertTrue(self.engine.submit_turn_plan([], [])["success"])
         self.engine.advance_turn()
         self.assertEqual(guests[0].total_satisfaction, 0)
@@ -206,12 +248,12 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2, "trigger_turn": 3,
-            "mediate_result": {}, "ignore_result": {},
+            "verbal_result": {}, "gift_result": {},
         }
         entry = game_api.mcp_available_actions()["available_actions"][0]
         self.assertIn("temporary_event", entry)
         self.assertNotIn("npc_id", str(entry["temporary_event"]))
-        self.assertEqual(entry["temporary_event"]["choices"][0]["value"], "mediate")
+        self.assertEqual(entry["temporary_event"]["choices"][0]["value"], "verbal")
 
     def test_entering_turn_two_settles_arrivals_before_actions_without_repeat_charge(self):
         day_guest = NPCGroup(id=101, group_size=2, visit_type="day")
@@ -280,7 +322,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.assertEqual(self.engine.state.turn, 3)
         self.assertEqual(self.engine.state.today_arrival_plan[0]["arrival_status"], "arrived")
         if self.engine.get_current_temporary_conflict_event() is not None:
-            self.assertTrue(self.engine.resolve_current_temporary_conflict("ignore")["success"])
+            self.assertTrue(self.engine.resolve_current_temporary_conflict("verbal")["success"])
         self.assertTrue(self.engine.submit_turn_plan([], [])["success"])
         self.engine.advance_turn()
         self.assertEqual(self.engine.state.turn, 4)
@@ -301,16 +343,20 @@ class TemporaryConflictEventTests(unittest.TestCase):
             ({"npc_a_delta": 0, "npc_b_delta": -2}, "1号帐篷住客仍有些不满"),
             ({"npc_a_delta": -2, "npc_b_delta": -2}, "双方情绪都没有完全平复"),
         ]:
+            guests[0].total_satisfaction = 60
+            guests[1].total_satisfaction = 60
             self.engine.state.today_conflict_event = {
                 "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
-                "trigger_turn": 3, "mediate_result": outcome, "ignore_result": outcome,
+                "trigger_turn": 3, "verbal_result": outcome, "gift_result": outcome,
             }
-            result = {"events": [], "conflict_choice": "mediate"}
+            result = {"events": [], "conflict_choice": "verbal"}
             history_before = len(self.engine.state.event_history)
             self.engine._apply_temporary_conflict_event(result)
             self.assertEqual(len(result["events"]), 1)
             self.assertIn(expected, result["events"][0])
             self.assertEqual(len(self.engine.state.event_history), history_before + 1)
+            self.assertEqual(guests[0].total_satisfaction, 60 + outcome["npc_a_delta"])
+            self.assertEqual(guests[1].total_satisfaction, 60 + outcome["npc_b_delta"])
 
     def _run_dining_turn_for_logging(self, guests, food_stock):
         self.engine.state.turn = 3
@@ -538,7 +584,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
         ])
         self.assertEqual([item["turn"] for item in history], [5, 5])
 
-    def test_immediate_conflict_resolution_writes_once_and_consumes_current_turn_point(self):
+    def test_immediate_conflict_resolution_writes_once_without_consuming_decision_point(self):
         self.engine.state.turn = 3
         self.engine.npc_pool.extend([
             NPCGroup(id=801, group_size=1, visit_type="day", campsite_slot=1),
@@ -547,12 +593,12 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 801, "npc_b_id": 802,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": -2, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": -2, "npc_b_delta": 0},
         }
-        result = self.engine.resolve_current_temporary_conflict("mediate")
+        result = self.engine.resolve_current_temporary_conflict("verbal")
         self.assertTrue(result["success"])
-        self.assertEqual(self.engine.state.decisions_left, 4)
+        self.assertEqual(self.engine.state.decisions_left, 5)
         self.assertEqual(self.engine.state.today_conflict_event["status"], "resolved")
         entry = self.engine.state.event_history[-1]
         self.assertEqual((entry["turn"], entry["event_type"]), (3, "temporary_conflict"))

@@ -1244,7 +1244,9 @@
             button.className = 'btn-action compact';
             button.textContent = choice.label;
             const detail = document.createElement('small');
-            detail.textContent = `消耗${choice.decision_cost}个决策点 · ${choice.effect}`;
+            detail.textContent = choice.cost > 0
+                ? `花费${choice.cost}金币 · ${choice.effect}`
+                : choice.effect;
             button.appendChild(detail);
             button.addEventListener('click', async () => {
                 const buttons = els.temporaryEventChoices.querySelectorAll('button');

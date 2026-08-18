@@ -76,14 +76,14 @@ class McpActionCatalogTests(unittest.TestCase):
         self.engine.state.turn = 3
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
-            "trigger_turn": 3, "mediate_result": {}, "ignore_result": {},
+            "trigger_turn": 3, "verbal_result": {}, "gift_result": {},
         }
         before = copy.deepcopy(self.engine.state)
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual([item["action"] for item in actions], ["resolve_temporary_conflict"])
-        self.assertEqual(actions[0]["choices"], ["mediate", "ignore"])
+        self.assertEqual(actions[0]["choices"], ["verbal", "gift"])
         self.assertIsNone(actions[0]["params"]["choice"])
-        self.assertEqual(actions[0]["required_params"][0]["enum"], ["mediate", "ignore"])
+        self.assertEqual(actions[0]["required_params"][0]["enum"], ["verbal", "gift"])
         self.assertEqual(self.engine.state, before)
 
     def test_blocked_plan_returns_conflict_resolution_guidance(self):
@@ -91,8 +91,8 @@ class McpActionCatalogTests(unittest.TestCase):
         self.engine.state.today_conflict_event = {
             "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
             "trigger_turn": 3,
-            "mediate_result": {"npc_a_delta": 0, "npc_b_delta": 0},
-            "ignore_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
         }
 
         result = game_api.submit_turn_plan(
@@ -104,9 +104,9 @@ class McpActionCatalogTests(unittest.TestCase):
         next_action = result["next_action"]
         self.assertEqual(next_action["action"], "resolve_temporary_conflict")
         self.assertEqual(next_action["params"], {"choice": None})
-        self.assertEqual(next_action["choices"], ["mediate", "ignore"])
+        self.assertEqual(next_action["choices"], ["verbal", "gift"])
 
-        self.assertTrue(self.engine.resolve_current_temporary_conflict("ignore")["success"])
+        self.assertTrue(self.engine.resolve_current_temporary_conflict("verbal")["success"])
         resumed = game_api.submit_turn_plan(
             game_api.TurnPlanRequest(free_actions=[], actions=[])
         )

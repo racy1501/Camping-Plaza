@@ -828,12 +828,12 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
         ),
         "choices": [
             {
-                "value": "mediate", "label": "调解", "decision_cost": 1,
-                "effect": "降低双方不满风险",
+                "value": "verbal", "label": "口头调解", "cost": 0,
+                "effect": "不额外花费金币；可能解决，也可能没有完全解决。",
             },
             {
-                "value": "ignore", "label": "不调解", "decision_cost": 0,
-                "effect": "双方更可能产生不满",
+                "value": "gift", "label": "准备一点水果或小礼物安抚", "cost": 40,
+                "effect": "花费40金币；整体更稳妥，但仍不保证成功。",
             },
         ],
     }
@@ -860,9 +860,9 @@ def _build_temporary_conflict_action(eng: CampingPlazaEngine) -> Optional[dict]:
             "name": "choice",
             "type": "string",
             "required": True,
-            "enum": ["mediate", "ignore"],
+            "enum": ["verbal", "gift"],
         }],
-        "choices": ["mediate", "ignore"],
+        "choices": ["verbal", "gift"],
         "choice_details": temporary_event["choices"],
         "temporary_event": temporary_event,
         "description": "先立即处理临时事件，再提交本轮经营计划。",

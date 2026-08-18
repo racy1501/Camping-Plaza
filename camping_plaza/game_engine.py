@@ -122,6 +122,7 @@ class GameState:
         "food": 0,
         "greenery": 0,
         "repair": 0,
+        "conflict_care": 0,
         "growth": 0,
         "lodging_consumables": 0,
         "hot_spring_operating": 0,
@@ -196,14 +197,12 @@ class CampingPlazaEngine:
     TEMPORARY_CONFLICT_EVENT_PROBABILITY = 0.70
     TEMPORARY_CONFLICT_SAME_TEMPERAMENT_MULTIPLIER = 0.95
     TEMPORARY_CONFLICT_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.05
-    TEMPORARY_CONFLICT_MEDIATION_SAME_TEMPERAMENT_MULTIPLIER = 0.90
-    TEMPORARY_CONFLICT_MEDIATION_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.10
-    TEMPORARY_CONFLICT_IGNORE_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.05
     TEMPORARY_CONFLICT_SATISFACTION_PENALTY = 2
     TEMPORARY_CONFLICT_PENALTY_PROBABILITIES = {
-        "mediate": {0: 0.00, 1: 0.20, 2: 0.05},
-        "ignore": {0: 0.05, 1: 0.45, 2: 0.05},
+        "verbal": {0: 0.10, 1: 0.30, 2: 0.55},
+        "gift": {0: 0.05, 1: 0.15, 2: 0.30},
     }
+    TEMPORARY_CONFLICT_GIFT_COST = 40
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -1087,8 +1086,8 @@ class CampingPlazaEngine:
             "npc_a_id": npc_a["npc_id"],
             "npc_b_id": npc_b["npc_id"],
             "trigger_turn": trigger_turn,
-            "mediate_result": self._roll_temporary_conflict_result(npc_a, npc_b, "mediate"),
-            "ignore_result": self._roll_temporary_conflict_result(npc_a, npc_b, "ignore"),
+            "verbal_result": self._roll_temporary_conflict_result(npc_a, npc_b, "verbal"),
+            "gift_result": self._roll_temporary_conflict_result(npc_a, npc_b, "gift"),
         }
 
     def _get_temporary_conflict_probability(self, npc_a: dict, npc_b: dict) -> float:
@@ -1100,36 +1099,21 @@ class CampingPlazaEngine:
         )
         return self.TEMPORARY_CONFLICT_EVENT_PROBABILITY * multiplier
 
-    def _get_temporary_conflict_penalty_probability(
-        self, npc: dict, other_npc: dict, choice: str
-    ) -> float:
-        probability = self.TEMPORARY_CONFLICT_PENALTY_PROBABILITIES[choice].get(
+    def _get_temporary_conflict_penalty_probability(self, npc: dict, choice: str) -> float:
+        """返回该客组不接受当前处理方式的后台概率。"""
+        return self.TEMPORARY_CONFLICT_PENALTY_PROBABILITIES[choice].get(
             npc.get("temperament"), 0.0
         )
-        same_temperament = npc.get("temperament") == other_npc.get("temperament")
-        if choice == "mediate":
-            multiplier = (
-                self.TEMPORARY_CONFLICT_MEDIATION_SAME_TEMPERAMENT_MULTIPLIER
-                if same_temperament
-                else self.TEMPORARY_CONFLICT_MEDIATION_DIFFERENT_TEMPERAMENT_MULTIPLIER
-            )
-        else:
-            multiplier = (
-                1.0
-                if same_temperament
-                else self.TEMPORARY_CONFLICT_IGNORE_DIFFERENT_TEMPERAMENT_MULTIPLIER
-            )
-        return min(1.0, probability * multiplier)
 
     def _roll_temporary_conflict_result(self, npc_a: dict, npc_b: dict, choice: str) -> dict:
         return {
             "npc_a_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
             if random.random() < self._get_temporary_conflict_penalty_probability(
-                npc_a, npc_b, choice
+                npc_a, choice
             ) else 0,
             "npc_b_delta": -self.TEMPORARY_CONFLICT_SATISFACTION_PENALTY
             if random.random() < self._get_temporary_conflict_penalty_probability(
-                npc_b, npc_a, choice
+                npc_b, choice
             ) else 0,
         }
 
@@ -1146,7 +1130,7 @@ class CampingPlazaEngine:
         if event is None:
             return
         choice = result.get("conflict_choice")
-        if choice not in {"mediate", "ignore"}:
+        if choice not in {"verbal", "gift"}:
             raise RuntimeError("scheduled temporary conflict is missing a choice")
         outcome = event[f"{choice}_result"]
         npc_by_id = {npc.id: npc for npc in self.npc_pool}
@@ -1159,19 +1143,19 @@ class CampingPlazaEngine:
             label for label, delta_key in zip(labels, ("npc_a_delta", "npc_b_delta"))
             if outcome[delta_key] < 0
         ]
-        if choice == "mediate":
+        if choice == "verbal":
             if not affected_labels:
-                outcome_text = "你进行了调解，双方很快平静下来。"
+                outcome_text = "你进行了口头调解，双方很快平静下来。"
             elif len(affected_labels) == 1:
-                outcome_text = f"你进行了调解，但{affected_labels[0]}仍有些不满。"
+                outcome_text = f"你进行了口头调解，但{affected_labels[0]}仍有些不满。"
             else:
-                outcome_text = "你进行了调解，但双方情绪都没有完全平复。"
+                outcome_text = "你进行了口头调解，但双方情绪都没有完全平复。"
         elif not affected_labels:
-            outcome_text = "你没有介入，双方随后自行平静下来。"
+            outcome_text = "你准备了水果或小礼物安抚，双方很快平静下来。"
         elif len(affected_labels) == 1:
-            outcome_text = f"你没有介入，{affected_labels[0]}仍有些不满。"
+            outcome_text = f"你准备了水果或小礼物安抚，但{affected_labels[0]}仍有些不满。"
         else:
-            outcome_text = "你没有介入，双方情绪都没有完全平复。"
+            outcome_text = "你准备了水果或小礼物安抚，但双方情绪都没有完全平复。"
         message = f"临时事件：{labels[0]}与{labels[1]}发生了争执。{outcome_text}"
         result["events"].append(message)
         self._record_business_event(
@@ -1194,18 +1178,22 @@ class CampingPlazaEngine:
         event = self.get_current_temporary_conflict_event()
         if event is None:
             return {"success": False, "message": "当前没有可处理的临时事件"}
-        if choice not in {"mediate", "ignore"}:
+        if choice not in {"verbal", "gift"}:
             return {"success": False, "message": "无效的临时事件处理方式"}
-        cost = 1 if choice == "mediate" else 0
-        if self.state.decisions_left < cost:
-            return {"success": False, "message": "本轮剩余决策点不足"}
+        cost = self.TEMPORARY_CONFLICT_GIFT_COST if choice == "gift" else 0
+        if self.state.balance < cost:
+            return {"success": False, "message": "余额不足，无法准备水果或小礼物"}
+        if cost:
+            self.state.balance -= cost
+            self.state.today_expenses["conflict_care"] = (
+                self.state.today_expenses.get("conflict_care", 0) + cost
+            )
         result = {"events": [], "conflict_choice": choice}
         self._apply_temporary_conflict_event(result)
-        self.state.decisions_left -= cost
         return {
             "success": True,
             "message": result["events"][-1] if result["events"] else "临时事件已处理",
-            "decision_cost": cost,
+            "cost": cost,
             "decisions_left": self.state.decisions_left,
         }
 
@@ -1342,7 +1330,6 @@ class CampingPlazaEngine:
             "target_turn": target_turn,
             "free_actions_count": len(normalized_free_actions),
             "actions_count": len(normalized_actions),
-            "conflict_decision_cost": 0,
         }
 
     def _run_turn_plan_action(self, action_data: dict) -> dict:
@@ -1666,7 +1653,7 @@ class CampingPlazaEngine:
             restored_state.today_expenses = {
                 category: int((restored_state.today_expenses or {}).get(category, 0) or 0)
                 for category in (
-                    "food", "greenery", "repair", "growth",
+                    "food", "greenery", "repair", "conflict_care", "growth",
                     "lodging_consumables", "hot_spring_operating",
                 )
             }
@@ -2274,10 +2261,14 @@ class CampingPlazaEngine:
     def _format_business_event(self, event_type: str, guest_ids: list[int], data: dict) -> str:
         guests = self._format_guest_labels(guest_ids)
         if event_type == "temporary_conflict":
-            choice = "你进行了调解" if data.get("choice") == "mediate" else "你没有介入"
+            choice = (
+                "你进行了口头调解"
+                if data.get("choice") == "verbal"
+                else "你准备了水果或小礼物安抚"
+            )
             affected = self._format_guest_labels(data.get("affected_guest_ids", []))
             if not affected:
-                outcome = "双方很快平静下来。" if data.get("choice") == "mediate" else "双方随后自行平静下来。"
+                outcome = "双方很快平静下来。"
             elif len(data.get("affected_guest_ids", [])) == 1:
                 outcome = f"但{affected}仍有些不满。"
             else:
@@ -4950,6 +4941,7 @@ class CampingPlazaEngine:
             "food": 0,
             "greenery": 0,
             "repair": 0,
+            "conflict_care": 0,
             "growth": 0,
             "lodging_consumables": 0,
             "hot_spring_operating": 0,

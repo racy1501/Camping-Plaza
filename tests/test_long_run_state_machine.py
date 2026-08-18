@@ -198,7 +198,7 @@ class MultiDayOperationTests(LongRunTestCase):
         day_turn_before = (self.engine.state.day, self.engine.state.turn)
 
         if "resolve_temporary_conflict" in by_name:
-            self._action("resolve_temporary_conflict", {"choice": "ignore"})
+            self._action("resolve_temporary_conflict", {"choice": "verbal"})
             return False
 
         if "execute_turn_plan" in by_name:
