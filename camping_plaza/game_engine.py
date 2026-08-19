@@ -4279,7 +4279,10 @@ class CampingPlazaEngine:
             self.state.reservations.append(record)
             message = "今日发布的帖子带来了一组明日预约。"
         else:
-            message = "今日发布的帖子收到一组预约咨询，但未能接下。"
+            if record["visit_type"] == "day":
+                message = "今日帖子带来一组明日预约请求，但明日日间营位已满，未能接下。"
+            else:
+                message = "今日帖子带来一组明日预约请求，但没有可接待该客组的空闲帐篷，未能接下。"
         result["events"].append(message)
         self.state.pending_post_reservation = None
 

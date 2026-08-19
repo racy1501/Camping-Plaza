@@ -608,6 +608,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
         with mock.patch("game_engine.random.random", return_value=0.99):
             first = self.engine.make_post()
         self.assertTrue(first["success"])
+        self.assertEqual(first["message"], "帖子已发布")
         self.assertIsNone(self.engine.state.pending_post_reservation)
         self.assertFalse(any("预约" in entry["text"] for entry in self.engine.state.event_history))
         second = self.engine.make_post()
@@ -630,6 +631,30 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine._ensure_today_arrival_plan()
         self.assertTrue(any(entry.get("source") == "reservation" for entry in self.engine.state.today_arrival_plan))
 
+    def test_post_day_without_campsite_capacity_is_missed(self):
+        self.engine.state.turn = 3
+        target_day = self.engine.state.day + 1
+        self.engine.state.reservations = [
+            {
+                "arrival_day": target_day,
+                "visit_type": "day",
+                "status": "accepted",
+            }
+            for _ in range(self.engine.DAY_CAMPSITE_CAPACITY)
+        ]
+        with mock.patch("game_engine.random.random", side_effect=[0.0, 0.0]), mock.patch(
+            "game_engine.random.randint", return_value=1
+        ):
+            self.assertTrue(self.engine.make_post()["success"])
+        result = {"events": []}
+        self.engine.state.turn = 6
+        self.engine._finalize_post_reservation(result)
+        self.assertEqual(len(self.engine.state.reservations), self.engine.DAY_CAMPSITE_CAPACITY)
+        self.assertEqual(
+            result["events"],
+            ["今日帖子带来一组明日预约请求，但明日日间营位已满，未能接下。"],
+        )
+
     def test_post_overnight_without_resource_is_missed(self):
         self.engine.state.turn = 3
         for tent in self.engine.tents.values():
@@ -642,7 +667,10 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine.state.turn = 6
         self.engine._finalize_post_reservation(result)
         self.assertEqual(self.engine.state.reservations, [])
-        self.assertTrue(any("未能接下" in text for text in result["events"]))
+        self.assertEqual(
+            result["events"],
+            ["今日帖子带来一组明日预约请求，但没有可接待该客组的空闲帐篷，未能接下。"],
+        )
 
     def test_tips_settle_once_and_zero_has_no_log(self):
         guest = NPCGroup(id=601, group_size=1, visit_type="day", campsite_slot=1)
