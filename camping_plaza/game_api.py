@@ -846,6 +846,8 @@ def _get_operating_decision_message(eng: CampingPlazaEngine) -> str:
     )
     if eng.state.turn == 1:
         message += "｜全天营业轮次共享｜当日未使用点数不结转。"
+    if eng.state.day == 1 and eng.state.turn == 1:
+        message += "客人用餐会消耗食材，未使用的食材会在营业结束后作废。"
     return message
 
 
