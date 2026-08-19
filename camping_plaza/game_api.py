@@ -849,6 +849,9 @@ def _get_operating_decision_message(eng: CampingPlazaEngine) -> str:
     return message
 
 
+_FIRST_GROWTH_PHASE_MESSAGE = "扩建与升级仅在 Turn 6 日终管理阶段进行。"
+
+
 def _build_temporary_conflict_action(eng: CampingPlazaEngine) -> Optional[dict]:
     temporary_event = _get_temporary_event_summary(eng)
     if temporary_event is None:
@@ -916,7 +919,11 @@ def advance_turn(req: Optional[SessionRequest] = None):
     """推进回合"""
     eng = get_engine(req.session_id if req is not None else None)
     _require_onboarding_complete(eng)
+    executed_day = eng.state.day
+    executed_turn = eng.state.turn
     result = eng.advance_turn()
+    if executed_day == 2 and executed_turn == 5 and result.get("turn") == 6:
+        result["events"].append(_FIRST_GROWTH_PHASE_MESSAGE)
     result["events"] = [_get_operating_decision_message(eng), *result["events"]]
     # 写操作后统一保存（含故障阻塞早退补足决策点等分支）
     eng.save_state()
@@ -1025,6 +1032,11 @@ def submit_turn_plan(req: TurnPlanRequest):
         "type": "operating_decisions",
         "text": _get_operating_decision_message(eng),
     })
+    if executed_day == 2 and executed_turn == 5:
+        events.append({
+            "type": "growth_phase_guidance",
+            "text": _FIRST_GROWTH_PHASE_MESSAGE,
+        })
     execution_items = [
         item
         for group in ("free_actions", "actions")

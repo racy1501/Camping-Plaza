@@ -121,3 +121,53 @@ class DailyOperatingDecisionsTests(unittest.TestCase):
         restored = CampingPlazaEngine(db_path=self.db_path)
         self.assertEqual(restored.load_state(), "loaded")
         self.assertEqual(restored.state.decisions_left, 2)
+
+    def test_first_growth_phase_guidance_only_on_day_two_turn_six_entry(self):
+        self.engine.state.day = 2
+        self.engine.state.turn = 4
+        day_two_turn_five = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+        self.assertTrue(day_two_turn_five["success"])
+        self.assertFalse(
+            any(event.get("text") == "扩建与升级仅在 Turn 6 日终管理阶段进行。"
+                for event in day_two_turn_five["events"])
+        )
+        self.assertEqual(self.engine.state.turn, 5)
+
+        day_two_turn_six = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+        self.assertTrue(day_two_turn_six["success"])
+        self.assertEqual(self.engine.state.turn, 6)
+        self.assertTrue(
+            any(
+                event.get("text") == "扩建与升级仅在 Turn 6 日终管理阶段进行。"
+                for event in day_two_turn_six["events"]
+            )
+        )
+        day_two_actions = game_api.mcp_available_actions()["available_actions"]
+
+        self.engine.state.day = 3
+        self.engine.state.turn = 4
+        day_three_turn_five = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+        self.assertTrue(day_three_turn_five["success"])
+        self.assertFalse(
+            any(event.get("text") == "扩建与升级仅在 Turn 6 日终管理阶段进行。"
+                for event in day_three_turn_five["events"])
+        )
+        day_three_turn_six = game_api.submit_turn_plan(
+            game_api.TurnPlanRequest(free_actions=[], actions=[])
+        )
+        self.assertTrue(day_three_turn_six["success"])
+        self.assertFalse(
+            any(event.get("text") == "扩建与升级仅在 Turn 6 日终管理阶段进行。"
+                for event in day_three_turn_six["events"])
+        )
+        day_three_actions = game_api.mcp_available_actions()["available_actions"]
+        self.assertEqual(
+            [item["action"] for item in day_two_actions],
+            [item["action"] for item in day_three_actions],
+        )
