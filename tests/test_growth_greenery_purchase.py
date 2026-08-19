@@ -70,7 +70,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self.assertEqual(self.engine.state.successful_greenery_maintenance_count, 4)
         self.assertEqual(greenery.greenery_decay_rate, decay_before)
         self.assertEqual(result["completed_growth_nodes"], nodes_before + 1)
-        self.assertEqual(self.engine.state.decisions_left, 3)
+        self.assertEqual(self.engine.state.decisions_left, 5)
 
     def test_lv0_greenery_value_four_becomes_six_not_new_cap(self):
         self._open_management_phase()

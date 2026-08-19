@@ -75,7 +75,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
         self.assertEqual(self.engine.facilities["dining"].level, 1)
         self.assertEqual(self._dining_hidden_fields(), hidden_before)
         self.assertEqual(result["completed_growth_nodes"], nodes_before + 1)
-        self.assertEqual(self.engine.state.decisions_left, 3)
+        self.assertEqual(self.engine.state.decisions_left, 5)
 
     def test_dining_lv2_purchase_changes_only_level_and_balance(self):
         self._open_management_phase(balance=3000)

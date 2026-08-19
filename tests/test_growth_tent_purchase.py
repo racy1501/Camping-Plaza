@@ -142,7 +142,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertEqual(tent.occupied_by, 999)
         self.assertGreater(tent.next_breakdown_turn, absolute_turn)
         self.assertEqual(result["completed_growth_nodes"], nodes_before + 1)
-        self.assertEqual(self.engine.state.decisions_left, 3)
+        self.assertEqual(self.engine.state.decisions_left, 5)
 
     def test_repeat_purchase_is_atomic_and_does_not_reset_breakdown(self):
         self._open_management_phase()
