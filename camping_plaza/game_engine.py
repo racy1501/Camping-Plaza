@@ -4836,13 +4836,13 @@ class CampingPlazaEngine:
         self.state.total_rating_sum += rating
 
     def _calculate_rating(self, satisfaction: int) -> int:
-        if satisfaction >= 86:
+        if satisfaction >= 84:
             return 5
         elif satisfaction >= 72:
             return 4
-        elif satisfaction >= 60:
+        elif satisfaction >= 64:
             return 3
-        elif satisfaction >= 45:
+        elif satisfaction >= 56:
             return 2
         else:
             return 1

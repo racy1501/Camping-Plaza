@@ -2062,14 +2062,14 @@ class DelayedReviewSettlementTests(unittest.TestCase):
     def test_rating_threshold_boundaries(self):
         engine = make_engine()
         expected = {
-            44: 1,
-            45: 2,
-            59: 2,
-            60: 3,
+            55: 1,
+            56: 2,
+            63: 2,
+            64: 3,
             71: 3,
             72: 4,
-            85: 4,
-            86: 5,
+            83: 4,
+            84: 5,
         }
         for satisfaction, rating in expected.items():
             with self.subTest(satisfaction=satisfaction):
