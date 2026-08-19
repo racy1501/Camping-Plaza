@@ -182,6 +182,7 @@ class CampingPlazaEngine:
     DAILY_DECISION_LIMIT = 5
     MAX_TURN_PLAN_DECISION_ACTIONS = 3
     EVENT_HISTORY_LIMIT = 100
+    GUEST_MOMENT_CHANCE = 0.45
     DAY_TO_OVERNIGHT_INTENT_PROBABILITY = 0.15
     TENT_PRICES = {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500}
     CAMPSITE_FEE = 70
@@ -2802,6 +2803,188 @@ class CampingPlazaEngine:
                 day, turn, "review_pending", data={"count": new_review_count}
             )
 
+    def _format_guest_moment_label(self, npc_id: int, snapshot: dict) -> str:
+        """为表现层镜头保留本 Turn 已离场客组的可见位置称呼。"""
+        npc = self._find_npc(npc_id)
+        before = snapshot.get("npcs", {}).get(npc_id, {})
+        campsite_slot = getattr(npc, "campsite_slot", None)
+        if not isinstance(campsite_slot, int):
+            campsite_slot = before.get("campsite_slot")
+        visit_type = getattr(npc, "visit_type", before.get("visit_type"))
+        if visit_type == "day" and isinstance(campsite_slot, int):
+            return f"{campsite_slot}号营位的客人"
+        tent = self._find_occupied_tent_for_npc(npc_id)
+        if tent is not None:
+            return f"{tent.id}号帐篷住客"
+        for tent_id, tent_before in snapshot.get("tents", {}).items():
+            if tent_before.get("occupied_by") == npc_id:
+                return f"{tent_id}号帐篷住客"
+        return "这组客人"
+
+    def _build_guest_moment_candidates(
+        self, snapshot: dict, day: int, turn: int
+    ) -> list[dict]:
+        """只从本 Turn 已确定的经营事实构造表现层候选，不改写任何经营状态。"""
+        candidates = []
+        current_entries = {
+            entry.get("npc_id"): entry for entry in self.state.today_arrival_plan
+            if entry.get("planned_day") == day
+        }
+
+        completed_actions = []
+        shortage_npc_ids = []
+        for npc_id, entry in current_entries.items():
+            for index, action in enumerate(entry.get("planned_actions", [])):
+                before_status = snapshot.get("action_statuses", {}).get((npc_id, index))
+                if before_status == action.get("status"):
+                    continue
+                if action.get("status") == "completed":
+                    completed_actions.append((npc_id, action))
+                elif (
+                    action.get("action") == "dining"
+                    and action.get("status") == "waiting_for_restock"
+                ):
+                    shortage_npc_ids.append(npc_id)
+
+        for npc_id, action in completed_actions:
+            if action.get("action") != "dining":
+                continue
+            menu = self.DINING_SET_MENUS.get(action.get("menu_key"))
+            if menu is None:
+                continue
+            label = self._format_guest_moment_label(npc_id, snapshot)
+            menu_name = menu["display_name"]
+            candidates.append({
+                "priority": "normal",
+                "source": "dining",
+                "npc_ids": [npc_id],
+                "texts": (
+                    f"{label}在菜单前看了一会儿，最后点了{menu_name}。",
+                    f"到了饭点，{label}很快进了篝火厨房，选了{menu_name}。",
+                ),
+            })
+
+        for npc_id in dict.fromkeys(shortage_npc_ids):
+            npc = self._find_npc(npc_id)
+            if npc is None:
+                continue
+            label = self._format_guest_moment_label(npc_id, snapshot)
+            reaction = (
+                "听完说明后点头表示理解。",
+                "听完说明后在餐饮区旁停了一会儿。",
+                "听完说明后神情里明显带着些介意。",
+            )[max(0, min(2, npc.temperament))]
+            candidates.append({
+                "priority": "high",
+                "source": "dining_shortage",
+                "npc_ids": [npc_id],
+                "texts": (f"{label}原本准备吃饭，{reaction}",),
+            })
+
+        entertainment_by_npc = {}
+        for npc_id, action in completed_actions:
+            if action.get("action") in {"paid_entertainment", "free_entertainment"}:
+                entertainment_by_npc.setdefault(npc_id, []).append(action)
+        for npc_id, actions in entertainment_by_npc.items():
+            label = self._format_guest_moment_label(npc_id, snapshot)
+            paid_action = next(
+                (item for item in actions if item.get("action") == "paid_entertainment"), None
+            )
+            has_free = any(item.get("action") == "free_entertainment" for item in actions)
+            tier = self.ENTERTAINMENT_TIER_OPTIONS.get(
+                (paid_action or {}).get("tier_key"), {}
+            ).get("display_name")
+            if paid_action is not None and has_free:
+                text = f"{label}先体验了{tier or '收费娱乐'}，又在免费娱乐区多待了一会儿。"
+            elif paid_action is not None:
+                text = f"{label}在娱乐区玩了一会儿，选了{tier or '收费娱乐'}。"
+            else:
+                text = f"{label}在免费娱乐区停留了一会儿。"
+            candidates.append({
+                "priority": "normal",
+                "source": "entertainment",
+                "npc_ids": [npc_id],
+                "texts": (text,),
+            })
+
+        for npc_id, entry in current_entries.items():
+            if (
+                snapshot.get("arrival_statuses", {}).get(npc_id) == "arrived"
+                or entry.get("arrival_status") != "arrived"
+            ):
+                continue
+            label = self._format_guest_moment_label(npc_id, snapshot)
+            if not any(action.get("action") == "dining" for action in entry.get("planned_actions", [])):
+                candidates.append({
+                    "priority": "normal",
+                    "source": "no_dining",
+                    "npc_ids": [npc_id],
+                    "texts": (f"{label}路过篝火厨房时停了停，随后还是回了自己的营位。",),
+                })
+            npc = self._find_npc(npc_id)
+            if npc is not None and npc.greenery_entry_bonus_applied and self.facilities["greenery"].level > 0:
+                candidates.append({
+                    "priority": "normal",
+                    "source": "greenery",
+                    "npc_ids": [npc_id],
+                    "texts": (f"{label}进营地时在入口的绿植旁停了一会儿。",),
+                })
+
+        converted_npcs = [
+            npc for npc_id, before in snapshot.get("npcs", {}).items()
+            if before.get("visit_type") == "day" and not before.get("has_left")
+            for npc in [self._find_npc(npc_id)]
+            if npc is not None and npc.visit_type == "overnight"
+            and self._tent_id_from_location(npc.location) is not None
+        ]
+        for npc in converted_npcs:
+            tent_id = self._tent_id_from_location(npc.location)
+            candidates.append({
+                "priority": "high",
+                "source": "day_to_overnight",
+                "npc_ids": [npc.id],
+                "texts": (f"{self._format_guest_moment_label(npc.id, snapshot)}决定多留一晚，正往{tent_id}号帐篷方向收拾东西。",),
+            })
+
+        if any(
+            event.get("day") == day and event.get("turn") == turn
+            and event.get("event_type") == "temporary_conflict"
+            for event in self.state.event_history
+        ):
+            candidates.append({
+                "priority": "high",
+                "source": "temporary_conflict",
+                "npc_ids": [],
+                "texts": ("刚处理完争执的两组客人各自散开，又回到了原本的活动里。",),
+            })
+        return candidates
+
+    def _record_guest_moment(self, snapshot: dict, day: int, turn: int) -> None:
+        """在正式经营播报之后，低频落盘一条独立客人剧情镜头。"""
+        moments_today = [
+            event for event in self.state.event_history
+            if event.get("day") == day and event.get("event_type") == "guest_moment"
+        ]
+        if len(moments_today) >= 2 or any(event.get("turn") == turn for event in moments_today):
+            return
+        candidates = self._build_guest_moment_candidates(snapshot, day, turn)
+        if not candidates:
+            return
+        rng = random.Random()
+        if rng.random() >= self.GUEST_MOMENT_CHANCE:
+            return
+        high_priority = [item for item in candidates if item["priority"] == "high"]
+        selected = rng.choice(high_priority or candidates)
+        self._append_event_history(
+            day,
+            turn,
+            rng.choice(selected["texts"]),
+            "world",
+            "guest_moment",
+            selected["npc_ids"],
+            {"source": selected["source"]},
+        )
+
     def advance_turn(self) -> dict:
         """推进一个回合，返回结算后的真实状态"""
         executed_day = self.state.day
@@ -2843,6 +3026,9 @@ class CampingPlazaEngine:
                 self._process_day_to_overnight(result)
             self._handle_breakdowns(result)
             self._append_turn_business_summaries(
+                business_snapshot, executed_day, executed_turn
+            )
+            self._record_guest_moment(
                 business_snapshot, executed_day, executed_turn
             )
             if self.state.turn == 5:
