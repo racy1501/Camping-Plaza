@@ -232,20 +232,25 @@ class CampingPlazaEngine:
     }
     ENTERTAINMENT_TIER_OPTIONS = {
         "basic": {
-            "display_name": "基础娱乐",
+            "display_name": "桌游箱租赁",
             "price_per_group": 40,
             "satisfaction_gain": 2,
         },
         "standard": {
-            "display_name": "中档娱乐",
+            "display_name": "射箭体验",
             "price_per_group": 60,
             "satisfaction_gain": 4,
         },
         "premium": {
-            "display_name": "高级娱乐",
+            "display_name": "便携 K 歌设备租赁",
             "price_per_group": 90,
             "satisfaction_gain": 6,
         },
+    }
+    FREE_ENTERTAINMENT_NAMES_BY_LEVEL = {
+        0: ("飞盘", "纸牌"),
+        1: ("飞盘", "纸牌", "投壶"),
+        2: ("飞盘", "纸牌", "投壶", "露天电影"),
     }
     FOOD_PACKAGES = {
         "small": {"name": "小包", "portions": 4, "price": 80},
@@ -465,22 +470,89 @@ class CampingPlazaEngine:
     }
 
     REVIEW_COMMENT_PHRASES = {
-        "dining": ("饭菜挺不错", "吃得挺满意", "餐饮比预想中更好"),
-        "paid_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
-        "free_entertainment": ("游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错"),
-        "hot_spring": ("温泉泡得很舒服", "泡汤体验不错"),
-        "service_boost": ("工作人员挺贴心", "服务很周到"),
-        "greenery": ("营地环境挺舒服", "绿化让人很放松"),
-        "food_shortage": ("吃饭的时候稍微折腾了一下", "餐饮准备还有提升空间"),
-        "tent_problem": ("帐篷出了点状况", "住宿的小问题有点影响体验"),
-        "hot_spring_full": ("想泡温泉的时候没排上", "温泉有点太抢手了"),
+        "dining": (
+            "饭菜挺不错", "吃得挺满意", "餐饮比预想中更好",
+            "用餐的时候氛围挺好", "套餐分量挺实在", "饭菜热乎，吃得挺舒坦",
+            "篝火厨房的饭比想象中好吃",
+        ),
+        "paid_entertainment": (
+            "游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错",
+            "玩起来挺带劲", "娱乐区的项目比预想中好玩",
+            "在娱乐区玩得很尽兴", "这次娱乐体验很顺",
+        ),
+        "free_entertainment": (
+            "游戏屋挺有意思", "玩得挺开心", "娱乐项目还不错",
+            "飞盘和纸牌都挺有意思", "和大家一起玩得很开心",
+            "娱乐区氛围不错", "在娱乐区玩了一会儿，感觉挺放松",
+        ),
+        "hot_spring": (
+            "温泉泡得很舒服", "泡汤体验不错", "温泉水温正好",
+            "泡完温泉整个人都松快了", "温泉区环境很舒服",
+            "晚上泡温泉很解乏", "温泉比预想中舒服",
+        ),
+        "service_boost": (
+            "工作人员挺贴心", "服务很周到", "有什么需求响应得挺快",
+            "工作人员很热情", "被照顾得很周到", "服务让人感觉很舒服",
+            "营地方做事挺细致",
+        ),
+        "greenery": (
+            "营地环境挺舒服", "绿化让人很放松", "营地里绿意很足",
+            "环境清清爽爽的", "绿植多，待着心情很好",
+            "营地比照片里看着更舒服", "空气里都是草木的味道，挺舒服",
+        ),
+        "food_shortage": (
+            "吃饭的时候稍微折腾了一下", "餐饮准备还有提升空间",
+            "等了一会儿才吃上饭", "用餐时食材有点跟不上",
+            "想吃饭的时候等了等", "餐台补货有点慢", "那天吃饭等了挺久",
+        ),
+        "tent_problem": (
+            "帐篷出了点状况", "住宿的小问题有点影响体验",
+            "帐篷有些小毛病", "夜里帐篷有点状况", "住宿时帐篷出了点问题",
+            "帐篷的拉链不太好用", "帐篷有点旧，有些小问题",
+        ),
+        "hot_spring_full": (
+            "想泡温泉的时候没排上", "温泉有点太抢手了",
+            "去泡温泉的时候人满了", "没赶上温泉，有点遗憾",
+            "温泉人太多没泡上", "想泡温泉得早点去，人不少",
+            "温泉排队没轮上",
+        ),
     }
     REVIEW_GENERIC_COMMENTS = {
-        5: ("很满意，下次还想再来。", "整体体验很好，待得很舒服。"),
-        4: ("整体不错，是一次挺舒服的体验。", "挺喜欢这里的，下次有机会还会来。"),
-        3: ("整体还可以，还有一些提升空间。", "中规中矩，体验还算顺利。"),
-        2: ("这次体验比较一般，希望之后能更完善。", "有些地方不太顺利，还有改进空间。"),
-        1: ("这次体验不太理想。", "整体没有达到预期。"),
+        5: (
+            "很满意，下次还想再来。",
+            "整体体验很好，待得很舒服。",
+            "各方面都很顺利，玩得很开心。",
+            "营地体验超出预期，很满意。",
+            "这次住得很舒服，会推荐给朋友。",
+        ),
+        4: (
+            "整体不错，是一次挺舒服的体验。",
+            "挺喜欢这里的，下次有机会还会来。",
+            "体验总体不错，一些小地方可以更好。",
+            "玩得挺开心，整体满意。",
+            "营地氛围很好，体验不错。",
+        ),
+        3: (
+            "整体还可以，还有一些提升空间。",
+            "中规中矩，体验还算顺利。",
+            "体验一般，不算差也不算特别好。",
+            "还有进步空间，但整体过得去。",
+            "中等的体验，期望能更好一些。",
+        ),
+        2: (
+            "这次体验比较一般，希望之后能更完善。",
+            "有些地方不太顺利，还有改进空间。",
+            "体验有点失望，希望下次能更好。",
+            "这次不太尽兴，有些环节需要改进。",
+            "整体体验一般，有些方面没跟上。",
+        ),
+        1: (
+            "这次体验不太理想。",
+            "整体没有达到预期。",
+            "这次住得不太舒服。",
+            "体验比较糟糕，希望改进。",
+            "不太符合预期，这次挺失望的。",
+        ),
     }
 
     # 快照版本号，结构变更时递增
@@ -2167,7 +2239,7 @@ class CampingPlazaEngine:
 
         self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
         self._record_growth_project_achievements(project_id)
-        return {
+        result = {
             "success": True,
             "project_id": project_id,
             "category": category,
@@ -2181,6 +2253,12 @@ class CampingPlazaEngine:
                 "completed_growth_nodes"
             ],
         }
+        if category == "entertainment":
+            result["message"] = {
+                1: "娱乐升级成功，新增：投壶、射箭体验。",
+                2: "娱乐升级成功，新增：露天电影、便携 K 歌设备租赁。",
+            }.get(project_definition["target_level"], "娱乐升级成功。")
+        return result
 
     # -------------------------------------------------------------------------
     # 修复 #3 辅助方法：判断帐篷是否为今日预定帐篷
@@ -2861,24 +2939,52 @@ class CampingPlazaEngine:
                 "texts": (
                     f"{label}在菜单前看了一会儿，最后点了{menu_name}。",
                     f"到了饭点，{label}很快进了篝火厨房，选了{menu_name}。",
+                    f"{label}围着餐台转了半圈，要了一份{menu_name}。",
+                    f"{label}看了看今天的套餐，最后点了{menu_name}。",
+                    f"开饭时间，{label}没怎么犹豫，选了{menu_name}。",
+                    f"{label}和同伴商量了几句，最后点了{menu_name}。",
+                    f"{label}把{menu_name}端回营位，坐下慢慢吃了起来。",
                 ),
             })
 
+        shortage_reactions = {
+            0: (
+                "听完说明后点了点头，说可以等一会儿。",
+                "听完说明后表示理解，没多说什么。",
+                "听完说明后把菜单放了回去，打算晚些再来。",
+            ),
+            1: (
+                "听完说明后在餐饮区旁停了一会儿。",
+                "听完说明后有些犹豫，又看了看餐台。",
+                "听完说明后站在原地想了想。",
+            ),
+            2: (
+                "听完说明后神情里明显带着些介意。",
+                "听完说明后皱了皱眉，最后还是走开了。",
+                "听完说明后有些不满地嘀咕了两句。",
+            ),
+        }
+        shortage_templates = (
+            "{label}原本准备吃饭，{reaction}",
+            "{label}本想点一份餐，{reaction}",
+            "{label}走到餐台前才得知暂时没有食材，{reaction}",
+        )
         for npc_id in dict.fromkeys(shortage_npc_ids):
             npc = self._find_npc(npc_id)
             if npc is None:
                 continue
             label = self._format_guest_moment_label(npc_id, snapshot)
-            reaction = (
-                "听完说明后点头表示理解。",
-                "听完说明后在餐饮区旁停了一会儿。",
-                "听完说明后神情里明显带着些介意。",
-            )[max(0, min(2, npc.temperament))]
+            tier = max(0, min(2, npc.temperament))
+            reaction = shortage_reactions[tier][npc_id % len(shortage_reactions[tier])]
+            texts = tuple(
+                template.format(label=label, reaction=reaction)
+                for template in shortage_templates
+            )
             candidates.append({
                 "priority": "high",
                 "source": "dining_shortage",
                 "npc_ids": [npc_id],
-                "texts": (f"{label}原本准备吃饭，{reaction}",),
+                "texts": texts,
             })
 
         entertainment_by_npc = {}
@@ -2894,17 +3000,39 @@ class CampingPlazaEngine:
             tier = self.ENTERTAINMENT_TIER_OPTIONS.get(
                 (paid_action or {}).get("tier_key"), {}
             ).get("display_name")
+            entertainment_level = max(
+                0,
+                min(2, int(self.facilities["entertainment"].level)),
+            )
+            free_names = "、".join(
+                self.FREE_ENTERTAINMENT_NAMES_BY_LEVEL[entertainment_level]
+            )
             if paid_action is not None and has_free:
-                text = f"{label}先体验了{tier or '收费娱乐'}，又在免费娱乐区多待了一会儿。"
+                texts = (
+                    f"{label}先体验了{tier or '娱乐项目'}，又去玩了{free_names}。",
+                    f"{label}玩完{tier or '娱乐项目'}，又在{free_names}之间转了一圈。",
+                    f"{label}先去了{tier or '娱乐项目'}，之后又加入了{free_names}的活动。",
+                )
             elif paid_action is not None:
-                text = f"{label}在娱乐区玩了一会儿，选了{tier or '收费娱乐'}。"
+                texts = (
+                    f"{label}在娱乐区玩了一会儿，选了{tier or '娱乐项目'}。",
+                    f"{label}直奔{tier or '娱乐项目'}，玩得挺投入。",
+                    f"{label}在娱乐区转了一圈，最后选了{tier or '娱乐项目'}。",
+                    f"{label}跟同伴一起体验了{tier or '娱乐项目'}，笑声不断。",
+                )
             else:
-                text = f"{label}在免费娱乐区停留了一会儿。"
+                texts = (
+                    f"{label}在{free_names}之间玩了一会儿。",
+                    f"{label}路过娱乐区时停下来，加入了{free_names}的活动。",
+                    f"{label}和别的客人一起玩了会儿{free_names}。",
+                    f"{label}在{free_names}之间待了好一会儿才走。",
+                    f"{label}被{free_names}的热闹吸引，凑过去玩了一会儿。",
+                )
             candidates.append({
                 "priority": "normal",
                 "source": "entertainment",
                 "npc_ids": [npc_id],
-                "texts": (text,),
+                "texts": texts,
             })
 
         for npc_id, entry in current_entries.items():
@@ -2919,7 +3047,15 @@ class CampingPlazaEngine:
                     "priority": "normal",
                     "source": "no_dining",
                     "npc_ids": [npc_id],
-                    "texts": (f"{label}路过篝火厨房时停了停，随后还是回了自己的营位。",),
+                    "texts": (
+                        f"{label}路过篝火厨房时停了停，随后还是回了自己的营位。",
+                        f"{label}在篝火厨房前看了一会儿，最后还是回了营位。",
+                        f"{label}走到餐台附近看了看菜牌，没点餐就回了营位。",
+                        f"{label}在餐饮区门口张望了一下，转身回去了。",
+                        f"{label}没进篝火厨房，径直回了自己的营位。",
+                        f"{label}经过篝火厨房时停了停，还是先回营位了。",
+                        f"{label}在餐台前站了一会儿，又走开了。",
+                    ),
                 })
             npc = self._find_npc(npc_id)
             if npc is not None and npc.greenery_entry_bonus_applied and self.facilities["greenery"].level > 0:
@@ -2927,7 +3063,14 @@ class CampingPlazaEngine:
                     "priority": "normal",
                     "source": "greenery",
                     "npc_ids": [npc_id],
-                    "texts": (f"{label}进营地时在入口的绿植旁停了一会儿。",),
+                    "texts": (
+                        f"{label}进营地时在入口的绿植旁停了一会儿。",
+                        f"{label}路过绿植时停下来，多看了一会儿。",
+                        f"{label}在营地的绿植边坐了一会儿才起身。",
+                        f"{label}经过绿化区时放慢了脚步，看了两眼。",
+                        f"{label}在入口的绿植旁站了一会儿，才继续往里走。",
+                        f"{label}在绿化带旁歇了歇脚。",
+                    ),
                 })
 
         converted_npcs = [
@@ -2939,11 +3082,19 @@ class CampingPlazaEngine:
         ]
         for npc in converted_npcs:
             tent_id = self._tent_id_from_location(npc.location)
+            label = self._format_guest_moment_label(npc.id, snapshot)
             candidates.append({
                 "priority": "high",
                 "source": "day_to_overnight",
                 "npc_ids": [npc.id],
-                "texts": (f"{self._format_guest_moment_label(npc.id, snapshot)}决定多留一晚，正往{tent_id}号帐篷方向收拾东西。",),
+                "texts": (
+                    f"{label}决定多留一晚，正往{tent_id}号帐篷方向收拾东西。",
+                    f"{label}决定多留一晚，正往{tent_id}号帐篷搬行李。",
+                    f"{label}临时改了主意要住一晚，已经在往{tent_id}号帐篷走了。",
+                    f"{label}想多待一天，正把东西往{tent_id}号帐篷里放。",
+                    f"{label}决定住下来，慢悠悠地往{tent_id}号帐篷溜达过去。",
+                    f"{label}收拾好东西，往{tent_id}号帐篷的方向走去，看起来是打算多住一晚。",
+                ),
             })
 
         if any(
@@ -2955,7 +3106,14 @@ class CampingPlazaEngine:
                 "priority": "high",
                 "source": "temporary_conflict",
                 "npc_ids": [],
-                "texts": ("刚处理完争执的两组客人各自散开，又回到了原本的活动里。",),
+                "texts": (
+                    "刚处理完争执的两组客人各自散开，又回到了原本的活动里。",
+                    "争执平息后，两组客人各自走开，营地又恢复了安静。",
+                    "调解之后，那两组客人没再碰面，各忙各的去了。",
+                    "事情说开后，两组客人隔着一段距离各自活动，气氛缓和了不少。",
+                    "处理完争执，两组客人先后散去，看起来都平静了下来。",
+                    "小风波过后，两组客人没有再起冲突，各自继续自己的安排。",
+                ),
             })
         return candidates
 

@@ -168,7 +168,7 @@ class GuestMomentTests(unittest.TestCase):
             snapshot, self.engine.state.day, self.engine.state.turn
         )
         by_source = {item["source"]: item for item in candidates}
-        self.assertIn("高级娱乐", by_source["entertainment"]["texts"][0])
+        self.assertIn("便携 K 歌设备租赁", by_source["entertainment"]["texts"][0])
         shortage_text = by_source["dining_shortage"]["texts"][0]
         self.assertNotIn("temperament", shortage_text)
         self.assertNotIn("暴躁", shortage_text)
