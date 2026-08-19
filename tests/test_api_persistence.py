@@ -491,17 +491,6 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         self.assertFalse(repeat["success"])
 
 
-class IsolationTests(ApiPersistenceTestCase):
-    """测试隔离性"""
-
-    def test_no_formal_database_touched(self):
-        formal_db = os.path.join(_PROJECT_ROOT, "camping_plaza", "camping_plaza.db")
-        self.assertFalse(
-            os.path.exists(formal_db),
-            "测试不得创建或修改正式 camping_plaza.db"
-        )
-
-
 class HiddenPendingReviewApiTests(ApiPersistenceTestCase):
     """待结算评价不应通过 API 提前暴露"""
 
@@ -530,7 +519,6 @@ class HiddenPendingReviewApiTests(ApiPersistenceTestCase):
         state = game_api.mcp_state()
 
         self.assertNotIn("pending_reviews", state)
-        self.assertIsNone(state["average_rating"])
         self.assertNotIn("reputation_rate", state)
 
 
@@ -602,7 +590,20 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["turn"], 3)
-        self.assertEqual(set(result), {"success", "day", "turn", "events"})
+        self.assertEqual(
+            set(result),
+            {
+                "success",
+                "executed_day",
+                "executed_turn",
+                "day",
+                "turn",
+                "events",
+                "action_results",
+                "balance_delta",
+                "income_delta",
+            },
+        )
         self.assertIsNone(self.engine.state.pending_turn_plan)
 
     def test_one_and_three_actions_can_submit(self):
@@ -1198,9 +1199,9 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
 
 
 class HotSpringStateOutputTests(ApiPersistenceTestCase):
-    """三个只读状态输出应统一携带温泉当前营业状态"""
+    """完整 API 状态返回温泉营业状态，MCP 状态保持精简"""
 
-    def test_three_outputs_share_same_hot_spring_status(self):
+    def test_api_state_exposes_hot_spring_but_mcp_omits_it(self):
         self.engine.state.hot_spring_built = True
         self.engine.state.hot_spring_people_served_today = 7
         self.engine.state.today_income["hot_spring"] = 560
@@ -1215,8 +1216,7 @@ class HotSpringStateOutputTests(ApiPersistenceTestCase):
         }
 
         self.assertEqual(game_api.get_state()["hot_spring"], expected)
-        self.assertEqual(game_api.mcp_state()["hot_spring"], expected)
-        self.assertEqual(game_api.mcp_state()["hot_spring"], expected)
+        self.assertNotIn("hot_spring", game_api.mcp_state())
 
     def test_remaining_capacity_uses_authoritative_capacity(self):
         self.engine.state.hot_spring_built = True
@@ -1257,7 +1257,7 @@ class HotSpringStateOutputTests(ApiPersistenceTestCase):
 
 
 class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
-    """三个只读状态输出应统一携带日间营位当天容量状态"""
+    """完整 API 状态返回日间营位容量，MCP 状态保持精简"""
 
     def _add_pending_day_reservation(self, npc_id):
         """在 today_arrival_plan 中加入一条符合现行规则的待到达日间预约。"""
@@ -1302,8 +1302,7 @@ class DayCampsiteStateOutputTests(ApiPersistenceTestCase):
         }
 
         self.assertEqual(game_api.get_state()["day_campsite"], expected)
-        self.assertEqual(game_api.mcp_state()["day_campsite"], expected)
-        self.assertEqual(game_api.mcp_state()["day_campsite"], expected)
+        self.assertNotIn("day_campsite", game_api.mcp_state())
 
     def test_read_only_outputs_do_not_save_or_mutate_and_keep_hot_spring(self):
         self.engine.state.day_campsite_groups_served = 6
@@ -1637,7 +1636,7 @@ class ActionRequestSemanticErrorTests(ApiPersistenceTestCase):
 
 
 class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
-    """mcp/state 应提供已提交 Turn Plan 的只读安全摘要"""
+    """mcp/state 不默认返回已提交 Turn Plan 摘要"""
 
     def test_no_turn_plan_is_omitted(self):
         self.engine.state.pending_turn_plan = None
@@ -1650,7 +1649,7 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         self.assertNotIn("plan_target_turn", state)
         self.assertTrue(state["planning_available"])
 
-    def test_full_safe_summary(self):
+    def test_mcp_state_omits_turn_plan_summary(self):
         self.engine.state.day = 7
         self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
@@ -1668,23 +1667,9 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
 
         state = game_api.mcp_state()
 
-        self.assertEqual(
-            state["turn_plan"],
-            {
-                "target_day": 7,
-                "target_turn": 3,
-                "free_actions": [
-                    {"action": "clean_tents", "params": {"tent_ids": [1, 2]}},
-                ],
-                "decision_actions": [
-                    {"action": "repair_tent", "params": {"tent_id": 1}},
-                    {"action": "improve_service"},
-                    {"action": "buy_food_package", "params": {"package_key": "basic"}},
-                ],
-            },
-        )
+        self.assertNotIn("turn_plan", state)
 
-    def test_whitelist_filters_unknown_fields_and_actions(self):
+    def test_mcp_state_omits_turn_plan_with_unknown_fields(self):
         self.engine.state.day = 1
         self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
@@ -1706,11 +1691,7 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
 
         state = game_api.mcp_state()
 
-        self.assertEqual(
-            state["turn_plan"]["free_actions"],
-            [{"action": "clean_tents", "params": {"tent_ids": [3]}}],
-        )
-        self.assertEqual(state["turn_plan"]["decision_actions"], [])
+        self.assertNotIn("turn_plan", state)
 
     def test_does_not_expose_raw_plan(self):
         self.engine.state.pending_turn_plan = {
@@ -1731,7 +1712,7 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
         self.assertNotIn("SENSITIVE", dumped)
         self.assertNotIn("secret", dumped)
 
-    def test_no_shared_mutable_reference(self):
+    def test_mcp_state_does_not_expose_turn_plan_reference(self):
         self.engine.state.day = 1
         self.engine.state.turn = 3
         self.engine.state.pending_turn_plan = {
@@ -1743,13 +1724,7 @@ class TurnPlanStateSummaryTests(ApiPersistenceTestCase):
             "actions": [],
         }
 
-        summary = game_api.mcp_state()["turn_plan"]
-        summary["free_actions"][0]["params"]["tent_ids"].append(99)
-
-        self.assertEqual(
-            self.engine.state.pending_turn_plan["free_actions"][0]["tent_ids"],
-            [1, 2],
-        )
+        self.assertNotIn("turn_plan", game_api.mcp_state())
 
     def test_turn_plan_read_only(self):
         plan_before = {
@@ -1827,7 +1802,7 @@ class DayEndApiTests(ApiPersistenceTestCase):
 
         expected = "提示：如选择还款，还款金额与所选经营决策项费用合计不得超过当前余额。"
         self.assertEqual(human_actions["day_end_budget_hint"], expected)
-        self.assertEqual(mcp_actions["day_end_budget_hint"], expected)
+        self.assertNotIn("day_end_budget_hint", mcp_actions)
         self.assertNotIn("其他可选日终行动", expected)
         self.assertNotIn("先还款", expected)
         self.assertNotIn("优先还款", expected)

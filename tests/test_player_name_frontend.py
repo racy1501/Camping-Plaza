@@ -23,7 +23,7 @@ class PlayerNameFrontendTests(unittest.TestCase):
         self.assertIn("showPlayerMarker(state.player_name)", overview)
         self.assertNotIn("textContent = '小克'", overview)
         self.assertNotIn('title="小克 待命"', index)
-        self.assertIn('id="playerLabel">玩家 待命</span>', index)
+        self.assertIn('id="playerLabel">玩家</span>', index)
 
     def test_onboarding_form_uses_saved_state_and_name_endpoint(self):
         overview = _OVERVIEW.read_text(encoding="utf-8")

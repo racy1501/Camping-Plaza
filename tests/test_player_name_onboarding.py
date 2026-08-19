@@ -66,7 +66,7 @@ class PlayerNameOnboardingTests(unittest.TestCase):
         catalog = actions.json()
         self.assertEqual([item["action"] for item in catalog["available_actions"]], ["set_player_name"])
         self.assertEqual(catalog["available_actions"][0]["endpoint"], "/api/player/name")
-        self.assertEqual(catalog["available_queries"], [])
+        self.assertNotIn("available_queries", catalog)
 
         blocked = self.client.post("/api/turn/advance", json={"session_id": session_id})
         self.assertEqual(blocked.status_code, 400)

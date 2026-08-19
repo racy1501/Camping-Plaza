@@ -4750,8 +4750,8 @@ class EventHistoryTests(unittest.TestCase):
         ]
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["guest_ids"], [401, 402])
-        self.assertIn("基础娱乐", logs[0]["text"])
-        self.assertIn("高级娱乐", logs[0]["text"])
+        self.assertIn("桌游箱租赁", logs[0]["text"])
+        self.assertIn("便携 K 歌设备租赁", logs[0]["text"])
         self.assertIn("收费+40", logs[0]["text"])
         self.assertIn("收费+90", logs[0]["text"])
         self.assertIn("满意度+2", logs[0]["text"])
