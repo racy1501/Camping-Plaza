@@ -160,6 +160,60 @@ class SaveStateCalledTests(ApiPersistenceTestCase):
             game_api.advance_turn()
             save_mock.assert_called_once()
 
+
+class PublicOperationResponseTests(ApiPersistenceTestCase):
+    def _add_active_guest_with_hidden_state(self):
+        self.engine.npc_pool.append(NPCGroup(
+            id=901,
+            group_size=2,
+            visit_type="day",
+            location="campsite",
+            campsite_slot=1,
+            total_satisfaction=72,
+            economic_level=2,
+            spending_habit=2,
+            temperament=2,
+        ))
+
+    def _assert_hidden_guest_state_absent(self, result):
+        hidden_fields = {
+            "satisfaction", "total_satisfaction", "economic_level",
+            "spending_habit", "temperament", "probability",
+            "next_breakdown_turn",
+        }
+
+        def walk(value):
+            if isinstance(value, dict):
+                self.assertTrue(hidden_fields.isdisjoint(value))
+                for item in value.values():
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(result)
+
+    def test_advance_turn_hides_guest_internal_state_and_keeps_events(self):
+        self._add_active_guest_with_hidden_state()
+
+        result = game_api.advance_turn()
+
+        self.assertEqual(result["turn"], 2)
+        self.assertTrue(result["events"])
+        self.assertIn("经营轮次 2/5", result["events"][0])
+        self.assertIn("npcs", result)
+        self._assert_hidden_guest_state_absent(result)
+
+    def test_legacy_action_advance_turn_uses_the_same_public_filter(self):
+        self._add_active_guest_with_hidden_state()
+
+        result = self._action("advance_turn")
+
+        self.assertEqual(result["turn"], 2)
+        self.assertIn("events", result)
+        self._assert_hidden_guest_state_absent(result)
+
+
 class GrowthProjectActionTests(ApiPersistenceTestCase):
     def _qualify_hot_spring(self):
         self.engine.state.turn = 6

@@ -918,6 +918,44 @@ def _require_onboarding_complete(eng: CampingPlazaEngine) -> None:
     if eng.state.player_name is None and engine is None:
         _raise_action_request_error("onboarding_required", "请先设置玩家名称。")
 
+
+_INTERNAL_AI_OPERATION_FIELDS = {
+    "satisfaction",
+    "total_satisfaction",
+    "economic_level",
+    "spending_habit",
+    "temperament",
+    "probability",
+    "success_rate",
+    "next_breakdown_turn",
+    "npc_id",
+    "npc_a_id",
+    "npc_b_id",
+    "affected_npc_ids",
+    "planned_actions",
+    "planned_turn",
+    "arrival_status",
+    "day_to_overnight_intent",
+    "verbal_result",
+    "gift_result",
+    "npc_a_delta",
+    "npc_b_delta",
+}
+
+
+def _sanitize_ai_operation_response(value):
+    """移除正常操作响应中的内部客组与后台结算字段。"""
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_ai_operation_response(item)
+            for key, item in value.items()
+            if key not in _INTERNAL_AI_OPERATION_FIELDS
+        }
+    if isinstance(value, list):
+        return [_sanitize_ai_operation_response(item) for item in value]
+    return value
+
+
 @app.post("/api/turn/advance")
 def advance_turn(req: Optional[SessionRequest] = None):
     """推进回合"""
@@ -931,7 +969,7 @@ def advance_turn(req: Optional[SessionRequest] = None):
     result["events"] = [_get_operating_decision_message(eng), *result["events"]]
     # 写操作后统一保存（含故障阻塞早退补足决策点等分支）
     eng.save_state()
-    return result
+    return _sanitize_ai_operation_response(result)
 
 
 def _format_mcp_event(eng: CampingPlazaEngine, event: dict) -> str:
@@ -1018,7 +1056,7 @@ def submit_turn_plan(req: TurnPlanRequest):
         if plan_result.get("error_code") == "temporary_conflict_pending":
             response["error_code"] = "temporary_conflict_pending"
             response["next_action"] = _build_temporary_conflict_action(eng)
-        return response
+        return _sanitize_ai_operation_response(response)
 
     executed_day = eng.state.day
     executed_turn = eng.state.turn
@@ -1068,7 +1106,7 @@ def submit_turn_plan(req: TurnPlanRequest):
         "balance_delta": eng.state.balance - balance_before,
         "income_delta": income_delta,
     }
-    return response
+    return _sanitize_ai_operation_response(response)
 
 
 @app.post("/api/day/end")
@@ -1101,7 +1139,7 @@ def submit_day_end(req: DayEndRequest):
         result["next_action"] = "start_next_day"
         result["next_endpoint"] = "/api/day/start"
     eng.save_state()
-    return result
+    return _sanitize_ai_operation_response(result)
 
 
 @app.post("/api/day/start")
@@ -1113,7 +1151,7 @@ def start_next_day(req: Optional[SessionRequest] = None):
     if result.get("success"):
         result["events"] = [_get_operating_decision_message(eng), *result["events"]]
     eng.save_state()
-    return result
+    return _sanitize_ai_operation_response(result)
 
 
 @app.post("/api/action")
@@ -1185,7 +1223,7 @@ def do_action(req: ActionRequest):
             _raise_action_request_error("invalid_action_param", "project_id 不能为空")
         result = eng.purchase_growth_project(project_id)
         if not result.get("success"):
-            return result
+            return _sanitize_ai_operation_response(result)
 
     elif req.action == "advance_turn":
         result = eng.advance_turn()
@@ -1209,7 +1247,7 @@ def do_action(req: ActionRequest):
     # 写操作完成后统一保存（不按 success 过滤：失败操作也可能改变状态，
     # 如容量不足写入抱怨事件、故障阻塞补足决策点等）
     eng.save_state()
-    return result
+    return _sanitize_ai_operation_response(result)
 
 
 def _is_valid_player_name(name: str) -> bool:
