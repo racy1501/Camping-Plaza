@@ -3885,11 +3885,10 @@ class McpLockingStateTests(unittest.TestCase):
     def tearDown(self):
         game_api.engine = self.original_engine
 
-    def test_mcp_state_includes_unlocked_flags(self):
+    def test_mcp_state_omits_tents_by_default(self):
         state = game_api.mcp_state()
 
-        self.assertTrue(state["tents"][1]["unlocked"])
-        self.assertFalse(state["tents"][2]["unlocked"])
+        self.assertNotIn("tents", state)
 
     def test_mcp_state_exposes_next_turn_checkout_tents_only_for_turn2_window(self):
         self.engine.state.turn = 2
