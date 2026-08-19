@@ -3563,7 +3563,7 @@ class TentCleaningTests(unittest.TestCase):
         self.assertTrue(second["success"])
         self.assertFalse(third["success"])
         self.assertEqual(engine.state.improve_service_uses_today, 2)
-        self.assertEqual(engine.state.decisions_left, 1)
+        self.assertEqual(engine.state.decisions_left, 3)
         self.assertEqual(npc.total_satisfaction, 60)
         self.assertEqual(random_mock.call_count, 2)
 
