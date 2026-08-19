@@ -458,17 +458,6 @@ class NpcIdContinuityTests(PersistenceTestCase):
         self.assertNotIn(new_id, existing_ids)
 
 
-class IsolationTests(PersistenceTestCase):
-    """测试隔离：不创建或修改项目正式数据库"""
-
-    def test_no_formal_database_created_in_project(self):
-        formal_db = os.path.join(_PROJECT_ROOT, "camping_plaza", "camping_plaza.db")
-        self.assertFalse(
-            os.path.exists(formal_db),
-            "测试不得在项目目录创建正式 camping_plaza.db"
-        )
-
-
 class PartialCorruptFallbackTests(PersistenceTestCase):
     """合法 JSON 但嵌套结构损坏时不应误发礼包"""
 

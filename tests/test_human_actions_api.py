@@ -278,8 +278,9 @@ class PlanSubmittedTests(HumanActionsApiTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["turn"], 3)
-        self.assertEqual(result["action_failures"][0]["action"], "repair_tent")
-        self.assertTrue(result["action_failures"][0]["message"])
+        self.assertEqual(result["action_results"][0]["action"], "repair_tent")
+        self.assertFalse(result["action_results"][0]["success"])
+        self.assertTrue(result["action_results"][0]["message"])
         self.assertNotIn("plan_execution", result)
 
     def test_submitted_plan_does_not_leave_ready_to_advance_candidates(self):
