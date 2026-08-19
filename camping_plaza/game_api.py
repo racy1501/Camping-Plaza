@@ -840,9 +840,11 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
 
 
 def _get_operating_decision_message(eng: CampingPlazaEngine) -> str:
+    if eng.state.turn == 6:
+        return "日终管理阶段"
+
     message = (
-        "今日经营决策点："
-        f"{eng.state.decisions_left} / {CampingPlazaEngine.DAILY_DECISION_LIMIT}"
+        f"经营轮次 {eng.state.turn}/5｜剩余决策点 {eng.state.decisions_left}"
     )
     if eng.state.turn == 1:
         message += "｜全天营业轮次共享｜当日未使用点数不结转。"
@@ -1336,6 +1338,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
         if state["turn"] == 1:
             actions.append({
                 "action": "advance_turn",
+                "endpoint": "/api/turn/advance",
                 "description": "完成晨间结算并进入营业",
             })
         elif planning_available:
@@ -1359,6 +1362,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
         if plan_submitted:
             actions.append({
                 "action": "advance_turn",
+                "endpoint": "/api/turn/advance",
                 "description": "执行已提交的本轮计划并推进回合"
             })
     else:

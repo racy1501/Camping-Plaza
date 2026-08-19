@@ -120,6 +120,7 @@ class McpActionCatalogTests(unittest.TestCase):
         }
         actions = game_api.mcp_available_actions()["available_actions"]
         self.assertEqual([item["action"] for item in actions], ["advance_turn"])
+        self.assertEqual(actions[0]["endpoint"], "/api/turn/advance")
 
     def test_human_and_mcp_candidate_availability_matches(self):
         for turn in (2, 3, 4, 5):

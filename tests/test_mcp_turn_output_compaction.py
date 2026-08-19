@@ -66,7 +66,7 @@ class McpTurnOutputCompactionTests(unittest.TestCase):
         self.assertEqual(state["decisions_left"], 5)
         self.assertEqual(
             state["player_message"],
-            "今日经营决策点：5 / 5",
+            "经营轮次 3/5｜剩余决策点 5",
         )
         self.assertIn("food_stock", state)
 

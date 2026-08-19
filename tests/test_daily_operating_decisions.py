@@ -90,14 +90,17 @@ class DailyOperatingDecisionsTests(unittest.TestCase):
         self.assertFalse(too_many["success"])
         self.assertEqual(other.state.decisions_left, 5)
 
-    def test_mcp_player_message_is_current_and_only_turn_one_has_rule_text(self):
+    def test_mcp_player_message_shows_turn_progress_and_only_turn_one_has_rule_text(self):
         food_hint = "客人用餐会消耗食材，未使用的食材会在营业结束后作废。"
 
         # Day 1 Turn 1：首次进入经营状态，决策点规则后追加食材提示。
         morning = game_api.mcp_state()
+        morning_actions = game_api.mcp_available_actions()["available_actions"]
+        self.assertEqual(morning_actions[0]["action"], "advance_turn")
+        self.assertEqual(morning_actions[0]["endpoint"], "/api/turn/advance")
         self.assertEqual(
             morning["player_message"],
-            "今日经营决策点：5 / 5｜全天营业轮次共享｜当日未使用点数不结转。"
+            "经营轮次 1/5｜剩余决策点 5｜全天营业轮次共享｜当日未使用点数不结转。"
             "客人用餐会消耗食材，未使用的食材会在营业结束后作废。",
         )
 
@@ -105,9 +108,9 @@ class DailyOperatingDecisionsTests(unittest.TestCase):
         self.engine.state.decisions_left = 3
         state = game_api.mcp_state()
         actions = game_api.mcp_available_actions()
-        self.assertEqual(state["player_message"], "今日经营决策点：3 / 5")
+        self.assertEqual(state["player_message"], "经营轮次 2/5｜剩余决策点 3")
         self.assertNotIn(food_hint, state["player_message"])
-        self.assertEqual(actions["player_message"], "今日经营决策点：3 / 5")
+        self.assertEqual(actions["player_message"], "经营轮次 2/5｜剩余决策点 3")
         self.assertNotIn(food_hint, actions["player_message"])
         self.assertEqual(actions["available_actions"][0]["max_decision_actions"], 3)
 
@@ -116,7 +119,7 @@ class DailyOperatingDecisionsTests(unittest.TestCase):
         )
         self.assertEqual(
             result["events"][0],
-            {"type": "operating_decisions", "text": "今日经营决策点：3 / 5"},
+            {"type": "operating_decisions", "text": "经营轮次 3/5｜剩余决策点 3"},
         )
 
         # Day 2 Turn 1：仍显示原有决策点规则，但不再重复食材提示。
@@ -126,9 +129,13 @@ class DailyOperatingDecisionsTests(unittest.TestCase):
         day_two_morning = game_api.mcp_state()
         self.assertEqual(
             day_two_morning["player_message"],
-            "今日经营决策点：5 / 5｜全天营业轮次共享｜当日未使用点数不结转。",
+            "经营轮次 1/5｜剩余决策点 5｜全天营业轮次共享｜当日未使用点数不结转。",
         )
         self.assertNotIn(food_hint, day_two_morning["player_message"])
+
+        self.engine.state.turn = 6
+        self.assertEqual(game_api.mcp_state()["player_message"], "日终管理阶段")
+        self.assertNotIn("6/5", game_api.mcp_available_actions()["player_message"])
 
     def test_snapshot_preserves_current_remaining_decisions(self):
         self.engine.state.turn = 4
