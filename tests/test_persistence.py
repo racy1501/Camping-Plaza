@@ -781,6 +781,12 @@ class BrokenTentPenaltyPersistenceTests(PersistenceTestCase):
 
     def test_broken_tent_penalty_roundtrip(self):
         engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.tents[1].breakdown_repair_state = {
+            "deadline_day": 2,
+            "deadline_turn": 3,
+            "timely": True,
+            "complaint_pending": False,
+        }
         npc = NPCGroup(
             id=engine._next_npc_id(),
             group_size=2,
@@ -803,6 +809,10 @@ class BrokenTentPenaltyPersistenceTests(PersistenceTestCase):
         self.assertTrue(restored_npc.had_food_shortage)
         self.assertTrue(restored_npc.had_tent_problem)
         self.assertTrue(restored_npc.received_service_boost)
+        self.assertEqual(
+            restored.tents[1].breakdown_repair_state,
+            engine.tents[1].breakdown_repair_state,
+        )
 
 
 if __name__ == "__main__":

@@ -1786,7 +1786,7 @@ class RepairStateRecoveryTests(unittest.TestCase):
         self.assertEqual(engine.state.decisions_left, decisions_before)
 
     def test_occupied_tent_breakdown_deducts_satisfaction(self):
-        """已入住帐篷损坏时住客满意度 -2，不被赶走"""
+        """已入住帐篷损坏时住客满意度 -10，不被赶走"""
         engine = make_engine()
         engine.state.turn = 1
         engine.state.decisions_left = 3
@@ -1808,8 +1808,8 @@ class RepairStateRecoveryTests(unittest.TestCase):
 
         self.assertEqual(tent.status, "broken")
         self.assertEqual(tent.occupied_by, occupant.id)
-        self.assertEqual(occupant.total_satisfaction, 68)
-        self.assertEqual(occupant.broken_tent_penalty, 2)
+        self.assertEqual(occupant.total_satisfaction, 60)
+        self.assertEqual(occupant.broken_tent_penalty, 10)
         self.assertEqual(
             breakdown_result["next_actions"],
             [{"action": "repair_tent", "params": {"tent_id": 1}}],
@@ -1834,8 +1834,8 @@ class RepairStateRecoveryTests(unittest.TestCase):
         engine._handle_breakdowns({"events": [], "next_actions": []})
         engine._handle_breakdowns({"events": [], "next_actions": []})
 
-        self.assertEqual(occupant.total_satisfaction, 68)
-        self.assertEqual(occupant.broken_tent_penalty, 2)
+        self.assertEqual(occupant.total_satisfaction, 60)
+        self.assertEqual(occupant.broken_tent_penalty, 10)
 
     def test_broken_penalty_caps_at_actual_satisfaction(self):
         """满意度仅剩 1 时只扣 1 并记录 1"""
@@ -1878,7 +1878,9 @@ class RepairStateRecoveryTests(unittest.TestCase):
         occupant.location = "tent_1"
 
         engine._handle_breakdowns({"events": [], "next_actions": []})
-        self.assertEqual(occupant.broken_tent_penalty, 2)
+        self.assertEqual(occupant.broken_tent_penalty, 10)
+
+        engine.state.turn = 2
 
         result = engine.repair_tent(1)
 
@@ -1914,8 +1916,8 @@ class RepairStateRecoveryTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(engine.state.balance, balance_before)
         self.assertEqual(tent.status, "broken")
-        self.assertEqual(occupant.broken_tent_penalty, 2)
-        self.assertEqual(occupant.total_satisfaction, 68)
+        self.assertEqual(occupant.broken_tent_penalty, 10)
+        self.assertEqual(occupant.total_satisfaction, 60)
         self.assertEqual(engine.state.decisions_left, 3)
 
     def test_turn_plan_repair_charges_but_spares_decision(self):
@@ -1938,6 +1940,7 @@ class RepairStateRecoveryTests(unittest.TestCase):
         occupant.location = "tent_1"
 
         engine._handle_breakdowns({"events": [], "next_actions": []})
+        engine.state.turn = 2
 
         result = engine.repair_tent(1, consume_decision=False)
 
@@ -3927,7 +3930,7 @@ class BrokenTentCheckinTests(unittest.TestCase):
     """Phase 2A: 允许新客入住 broken 帐篷"""
 
     def test_checkin_broken_keeps_status_and_penalizes(self):
-        """入住 broken 帐篷保持 status="broken"，扣 2 分"""
+        """入住 broken 帐篷保持 status="broken"，扣 10 分"""
         engine = make_engine()
         engine.tents[1].status = "broken"
         engine.tents[1].occupied_by = None
@@ -3943,9 +3946,9 @@ class BrokenTentCheckinTests(unittest.TestCase):
 
         self.assertEqual(engine.tents[1].status, "broken")
         self.assertEqual(engine.tents[1].occupied_by, npc.id)
-        # 60 + 2 绿化 - 2 broken = 60
-        self.assertEqual(npc.total_satisfaction, 60)
-        self.assertEqual(npc.broken_tent_penalty, 2)
+        # 60 + 2 绿化 - 10 broken = 52
+        self.assertEqual(npc.total_satisfaction, 52)
+        self.assertEqual(npc.broken_tent_penalty, 10)
         self.assertTrue(npc.had_tent_problem)
 
     def test_checkin_normal_tent_unaffected(self):
@@ -3979,12 +3982,18 @@ class BrokenTentCheckinTests(unittest.TestCase):
         engine.npc_pool.append(npc)
 
         engine._checkin_npc(npc, 1, {"events": []})
+        engine.tents[1].breakdown_repair_state = {
+            "deadline_day": engine.state.day,
+            "deadline_turn": engine.state.turn,
+            "timely": True,
+            "complaint_pending": False,
+        }
         before_repair = npc.total_satisfaction
         result = engine.repair_tent(1)
 
         self.assertTrue(result["success"])
         self.assertEqual(npc.broken_tent_penalty, 0)
-        self.assertEqual(npc.total_satisfaction, before_repair + 2)
+        self.assertEqual(npc.total_satisfaction, before_repair + 10)
         self.assertTrue(npc.had_tent_problem)
 
     def test_find_available_or_broken_prefers_available(self):
@@ -4097,6 +4106,8 @@ class BrokenTentCheckinTests(unittest.TestCase):
             engine.tents[1].occupied_by == npc_id
             or engine.tents[2].occupied_by == npc_id,
         )
+        guest = next(npc for npc in engine.npc_pool if npc.id == npc_id)
+        self.assertEqual(guest.broken_tent_penalty, 10)
 
     def test_checkin_broken_penalty_not_applied_twice(self):
         """入住 broken 帐篷时 penalty 标记防止重复扣分"""
@@ -4113,17 +4124,17 @@ class BrokenTentCheckinTests(unittest.TestCase):
 
         # 第一次入住：扣分生效
         engine._checkin_npc(npc, 1, {"events": []})
-        self.assertEqual(npc.broken_tent_penalty, 2)
+        self.assertEqual(npc.broken_tent_penalty, 10)
         satisfaction_after = npc.total_satisfaction
 
         # 模拟不通过 _checkin_npc 再次扣分（helper 幂等）
         engine._apply_broken_penalty(npc)
 
         self.assertEqual(npc.total_satisfaction, satisfaction_after)
-        self.assertEqual(npc.broken_tent_penalty, 2)
+        self.assertEqual(npc.broken_tent_penalty, 10)
 
     def test_day_to_overnight_uses_broken_tent(self):
-        """日转夜客可用 broken 帐篷，broken 保持、扣 2 分、occupied_by 正确"""
+        """日转夜客可用 broken 帐篷，broken 保持、扣 10 分、occupied_by 正确"""
         engine = make_engine()
         engine.state.turn = 4
         npc_id = engine._next_npc_id()
@@ -4150,8 +4161,8 @@ class BrokenTentCheckinTests(unittest.TestCase):
 
         self.assertEqual(engine.tents[1].status, "broken")
         self.assertEqual(engine.tents[1].occupied_by, npc_id)
-        self.assertEqual(day_npc.broken_tent_penalty, 2)
-        self.assertEqual(day_npc.total_satisfaction, 58)  # 60 - 2
+        self.assertEqual(day_npc.broken_tent_penalty, 10)
+        self.assertEqual(day_npc.total_satisfaction, 50)  # 60 - 10
 
     def test_day_to_overnight_prefers_available_over_broken(self):
         """日转夜有 available 帐篷时优先 available"""
@@ -4254,6 +4265,130 @@ class BrokenTentCheckinTests(unittest.TestCase):
             engine.state.today_arrival_plan[0]["arrival_status"],
             "arrived",
         )
+
+class BreakdownRepairWindowTests(unittest.TestCase):
+    def _add_occupant(self, engine, satisfaction=70):
+        guest = NPCGroup(
+            id=engine._next_npc_id(),
+            group_size=2,
+            visit_type="overnight",
+            total_satisfaction=satisfaction,
+        )
+        engine.npc_pool.append(guest)
+        engine.tents[1].status = "occupied"
+        engine.tents[1].occupied_by = guest.id
+        guest.location = "tent_1"
+        return guest
+
+    def _break_tent_now(self, engine):
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+    def test_broken_empty_reserved_tent_keeps_plan_and_penalizes_arrival(self):
+        engine = make_engine()
+        engine.state.turn = 1
+        self._break_tent_now(engine)
+        npc_id = engine._next_npc_id()
+        entry = {
+            "npc_id": npc_id,
+            "group_size": 2,
+            "visit_type": "overnight",
+            "arrival_turn": 2,
+            "planned_day": engine.state.day,
+            "arrival_status": "pending",
+            "source": "reservation",
+            "tent_id": 1,
+            "total_satisfaction": 60,
+            "economic_level": 1,
+            "spending_habit": 1,
+            "temperament": 0,
+            "paid": True,
+        }
+        engine.state.today_arrival_plan = [entry]
+        engine.state.today_arrival_plan_day = engine.state.day
+        engine.state.turn = 2
+
+        engine._process_planned_arrivals({"events": []})
+
+        guest = next(npc for npc in engine.npc_pool if npc.id == npc_id)
+        self.assertEqual(entry["arrival_status"], "arrived")
+        self.assertEqual(entry["tent_id"], 1)
+        self.assertEqual(engine.tents[1].occupied_by, npc_id)
+        self.assertEqual(guest.broken_tent_penalty, 10)
+
+    def test_first_business_repair_restores_this_breakdown_penalty(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        guest = self._add_occupant(engine)
+        self._break_tent_now(engine)
+        self.assertEqual(guest.total_satisfaction, 60)
+
+        engine.state.turn = 3
+        self.assertTrue(engine.submit_turn_plan(
+            [], [{"action": "repair_tent", "tent_id": 1}]
+        )["success"])
+        result = engine.advance_turn()
+
+        self.assertTrue(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(guest.total_satisfaction, 70)
+        self.assertEqual(guest.broken_tent_penalty, 0)
+
+    def test_skipped_first_repair_window_complains_once_and_cannot_restore(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        guest = self._add_occupant(engine)
+        self._break_tent_now(engine)
+
+        engine.state.turn = 3
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        missed_result = engine.advance_turn()
+        self.assertEqual(guest.total_satisfaction, 60)
+        self.assertEqual(
+            sum("仍在投诉此前故障" in event for event in missed_result["events"]),
+            1,
+        )
+
+        self.assertTrue(engine.submit_turn_plan(
+            [], [{"action": "repair_tent", "tent_id": 1}]
+        )["success"])
+        engine.advance_turn()
+        self.assertEqual(guest.total_satisfaction, 60)
+        self.assertEqual(guest.broken_tent_penalty, 10)
+
+    def test_turn6_repair_of_old_breakdown_does_not_restore_penalty(self):
+        engine = make_engine()
+        engine.state.turn = 4
+        guest = self._add_occupant(engine)
+        self._break_tent_now(engine)
+
+        engine.state.turn = 5
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        engine.advance_turn()
+        self.assertEqual(engine.state.turn, 6)
+
+        result = engine.submit_day_end_actions([
+            {"action": "repair_tent", "params": {"tent_id": 1}},
+        ])
+        self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(guest.total_satisfaction, 60)
+        self.assertEqual(guest.broken_tent_penalty, 10)
+
+    def test_turn6_repair_of_new_breakdown_restores_penalty(self):
+        engine = make_engine()
+        engine.state.turn = 5
+        guest = self._add_occupant(engine)
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+        engine.advance_turn()
+        self.assertEqual(engine.state.turn, 6)
+
+        result = engine.submit_day_end_actions([
+            {"action": "repair_tent", "params": {"tent_id": 1}},
+        ])
+
+        self.assertTrue(result["results"][0]["success"])
+        self.assertEqual(guest.total_satisfaction, 70)
+        self.assertEqual(guest.broken_tent_penalty, 0)
 
 
 class OvernightLocationAtTurn6Tests(unittest.TestCase):
@@ -5098,7 +5233,7 @@ class TemperamentFailureReactionTests(unittest.TestCase):
         self.assertEqual(engine.state.balance, balance)
         self.assertEqual(engine.state.today_income["accommodation"], 0)
 
-    def test_breakdown_reaction_does_not_change_existing_penalty_logic(self):
+    def test_breakdown_notice_uses_player_facing_language(self):
         engine = make_engine()
         guest = NPCGroup(
             id=1, group_size=1, visit_type="overnight", location="tent_1",
@@ -5111,8 +5246,9 @@ class TemperamentFailureReactionTests(unittest.TestCase):
         satisfaction = guest.total_satisfaction
         result = {"events": [], "next_actions": []}
         engine._handle_breakdowns(result)
-        self.assertIn("失望", result["events"][0])
-        self.assertEqual(guest.total_satisfaction, satisfaction - 2)
+        self.assertIn("住客明显不满", result["events"][0])
+        self.assertNotIn("-10", result["events"][0])
+        self.assertEqual(guest.total_satisfaction, satisfaction - 10)
         self.assertEqual(engine.tents[1].status, "broken")
 
 

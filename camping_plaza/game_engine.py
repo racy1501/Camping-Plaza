@@ -32,6 +32,8 @@ class Tent:
     needs_cleaning: bool = False
     occupied_by: Optional[int] = None  # NPC组ID
     next_breakdown_turn: int = 0
+    # 本次故障的及时维修窗口；仅保存故障链路本身，不参与客组计划生成。
+    breakdown_repair_state: Optional[dict] = None
 
     CAPACITY_MAP = {1: 2, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 
@@ -187,6 +189,7 @@ class CampingPlazaEngine:
     TENT_PRICES = {1: 160, 2: 160, 3: 230, 4: 310, 5: 400, 6: 500}
     CAMPSITE_FEE = 70
     REPAIR_COST = 100
+    TENT_BREAKDOWN_SATISFACTION_PENALTY = 10
     DINING_BASE_PRICE = 30
     DINING_PLANNED_ACTION_PROBABILITIES = {0: 0.40, 1: 0.55, 2: 0.70}
     PAID_ENTERTAINMENT_PLANNED_ACTION_PROBABILITIES = {0: 0.30, 1: 0.50, 2: 0.70}
@@ -3173,6 +3176,7 @@ class CampingPlazaEngine:
                 return result
 
             self._process_business_turn(result)
+            self._expire_breakdown_repair_windows()
             self._apply_temporary_conflict_event(result)
             self._process_dining(result)
             self._process_entertainment(result)
@@ -3208,6 +3212,7 @@ class CampingPlazaEngine:
                 self._settle_daily_operating_costs()
             # 推进到下一回合
             self.state.turn += 1
+            self._emit_pending_breakdown_complaints(result)
             self._restore_active_npc_base_locations()
             self._settle_current_turn_arrivals()
             self._record_current_turn_dining_shortage_preview()
@@ -3920,17 +3925,69 @@ class CampingPlazaEngine:
                         None,
                     )
                     self._apply_broken_penalty(occupant)
-                reaction = (
-                    self._get_temperament_service_reaction(occupant, "tent_broken")
-                    if occupant is not None else ""
-                )
-                result["events"].append(
-                    f"⚠️ {tent_id}号帐篷出现故障，需要维修{reaction}"
-                )
+                tent.breakdown_repair_state = {
+                    "deadline_day": self.state.day,
+                    "deadline_turn": 6 if self.state.turn == 5 else self.state.turn + 1,
+                    "timely": True,
+                    "complaint_pending": False,
+                }
+                if occupant is not None:
+                    result["events"].append(
+                        f"⚠️ {tent_id}号帐篷突发故障，住客明显不满。"
+                        "请尽快安排维修，拖延处理可能影响离店评价。"
+                    )
+                else:
+                    result["events"].append(
+                        f"⚠️ {tent_id}号帐篷突发故障，请尽快安排维修；"
+                        "后续入住体验可能受影响。"
+                    )
                 result["next_actions"].append({
                     "action": "repair_tent",
                     "params": {"tent_id": tent_id},
                 })
+
+    def _is_timely_breakdown_repair(self, tent: Tent) -> bool:
+        """仅在本次故障的第一个可维修窗口内允许挽回体验扣分。"""
+        state = tent.breakdown_repair_state
+        return bool(
+            isinstance(state, dict)
+            and state.get("timely")
+            and state.get("deadline_day") == self.state.day
+            and state.get("deadline_turn") == self.state.turn
+        )
+
+    def _expire_breakdown_repair_windows(self) -> None:
+        """当前维修窗口结束后，将未及时处理的故障标记为不可挽回。"""
+        for tent in self._get_unlocked_tents():
+            state = tent.breakdown_repair_state
+            if not isinstance(state, dict) or not state.get("timely"):
+                continue
+            if (
+                state.get("deadline_day") == self.state.day
+                and state.get("deadline_turn") == self.state.turn
+            ):
+                state["timely"] = False
+                state["complaint_pending"] = tent.occupied_by is not None
+
+    def _emit_pending_breakdown_complaints(self, result: dict) -> None:
+        """错过及时维修窗口后，下一轮只提示一次仍在场住客的投诉。"""
+        for tent in self._get_unlocked_tents():
+            state = tent.breakdown_repair_state
+            if (
+                not isinstance(state, dict)
+                or not state.get("complaint_pending")
+            ):
+                continue
+            state["complaint_pending"] = False
+            occupant = next(
+                (npc for npc in self.npc_pool
+                 if npc.id == tent.occupied_by and not npc.has_left),
+                None,
+            )
+            if occupant is not None:
+                result["events"].append(
+                    f"{tent.id}号帐篷住客仍在投诉此前故障，离店评价可能受影响。"
+                )
 
     def clean_tents(self, tent_ids: Optional[list[int]] = None) -> dict:
         """AI主动清洁帐篷。不消耗决策点，支持批量清洁。
@@ -4332,6 +4389,7 @@ class CampingPlazaEngine:
 
         self._finalize_post_reservation(result)
 
+        self._expire_breakdown_repair_windows()
         self.state.day_end_completed = True
         result["day_end_completed"] = True
         self._append_result_events_to_history(
@@ -4350,6 +4408,7 @@ class CampingPlazaEngine:
 
         result = {"events": [], "success": False}
         self._new_day(result)
+        self._emit_pending_breakdown_complaints(result)
         self.state.day_end_completed = False
         notifications = self._consume_pending_achievements()
         if notifications:
@@ -4403,7 +4462,7 @@ class CampingPlazaEngine:
         """对住客应用 broken 临时扣分，同一次故障只扣一次并记录实际扣除值。"""
         if npc is None or npc.broken_tent_penalty != 0:
             return
-        actual = min(2, npc.total_satisfaction)
+        actual = min(self.TENT_BREAKDOWN_SATISFACTION_PENALTY, npc.total_satisfaction)
         if actual > 0:
             npc.total_satisfaction -= actual
             npc.broken_tent_penalty = actual
@@ -4429,6 +4488,8 @@ class CampingPlazaEngine:
         if self.state.balance < self.REPAIR_COST:
             return {"success": False, "message": "金币不足"}
 
+        timely_repair = self._is_timely_breakdown_repair(tent)
+
         self.state.balance -= self.REPAIR_COST
         self.state.today_expenses["repair"] = self.state.today_expenses.get("repair", 0) + self.REPAIR_COST
 
@@ -4445,13 +4506,14 @@ class CampingPlazaEngine:
         if consume_decision:
             self.state.decisions_left -= 1
 
-        if tent.occupied_by:
+        if tent.occupied_by and timely_repair:
             occupant = next(
                 (n for n in self.npc_pool
                  if n.id == tent.occupied_by and not n.has_left),
                 None,
             )
             self._restore_broken_penalty(occupant)
+        tent.breakdown_repair_state = None
 
         return {"success": True, "message": f"{tent_id}号帐篷已修好"}
 
