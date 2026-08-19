@@ -5404,7 +5404,6 @@ class CampingPlazaEngine:
                     "arrival_turn": n.arrival_turn,
                     "location": n.location,
                     "campsite_slot": n.campsite_slot,
-                    "total_satisfaction": n.total_satisfaction,
                     "has_left": n.has_left,
                     "review_left": n.review_left,
                     "review_rating": n.review_rating,

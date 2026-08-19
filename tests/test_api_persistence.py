@@ -2083,13 +2083,13 @@ class CampsiteSlotStateOutputTests(ApiPersistenceTestCase):
             "arrival_turn": 0,
             "location": "campsite",
             "campsite_slot": 6,
-            "total_satisfaction": 60,
             "has_left": False,
             "review_left": False,
             "review_rating": 0,
             "is_reserved": False,
             "paid": False,
         }])
+        self.assertNotIn("total_satisfaction", state["active_npcs"][0])
 
 
 class WriteRequestValidationTests(ApiPersistenceTestCase):
