@@ -493,14 +493,17 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
             continue
         tent_id = int(tid)
         enabled = balance >= CampingPlazaEngine.REPAIR_COST
-        decision_candidates.append({
+        candidate = {
             "action": "repair_tent", "kind": "decision",
             "enabled": enabled,
             "reason": "" if enabled else "金币不足",
             "params": {"tent_id": tent_id}, "repeatable": False,
             "price": CampingPlazaEngine.REPAIR_COST,
             "cost_decision_points": 1,
-        })
+        }
+        if eng._is_timely_breakdown_repair(eng.tents[tent_id]):
+            candidate["description"] = "当前处于及时维修窗口。"
+        decision_candidates.append(candidate)
 
     improve_remaining = max(0, 2 - eng.state.improve_service_uses_today)
     decision_candidates.append({

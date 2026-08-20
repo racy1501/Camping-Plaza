@@ -4284,6 +4284,28 @@ class BreakdownRepairWindowTests(unittest.TestCase):
         engine.tents[1].next_breakdown_turn = engine._absolute_turn()
         engine._handle_breakdowns({"events": [], "next_actions": []})
 
+    def test_breakdown_events_distinguish_occupied_and_empty_tents(self):
+        occupied_engine = make_engine()
+        occupied_engine.state.turn = 2
+        self._add_occupant(occupied_engine)
+        occupied_result = {"events": [], "next_actions": []}
+        occupied_engine.tents[1].next_breakdown_turn = occupied_engine._absolute_turn()
+        occupied_engine._handle_breakdowns(occupied_result)
+        self.assertEqual(
+            occupied_result["events"],
+            ["1号帐篷突发故障，住客明显不满。及时维修可以挽回。"],
+        )
+
+        empty_engine = make_engine()
+        empty_engine.state.turn = 2
+        empty_result = {"events": [], "next_actions": []}
+        empty_engine.tents[1].next_breakdown_turn = empty_engine._absolute_turn()
+        empty_engine._handle_breakdowns(empty_result)
+        self.assertEqual(
+            empty_result["events"],
+            ["1号帐篷突发故障。及时维修可以避免影响后续住客。"],
+        )
+
     def test_broken_empty_reserved_tent_keeps_plan_and_penalizes_arrival(self):
         engine = make_engine()
         engine.state.turn = 1
@@ -4330,6 +4352,10 @@ class BreakdownRepairWindowTests(unittest.TestCase):
         result = engine.advance_turn()
 
         self.assertTrue(result["plan_execution"]["actions"][0]["success"])
+        self.assertEqual(
+            result["plan_execution"]["actions"][0]["message"],
+            "1号帐篷已及时修复，住客的不满得到解决。",
+        )
         self.assertEqual(guest.total_satisfaction, 70)
         self.assertEqual(guest.broken_tent_penalty, 0)
 
@@ -4344,7 +4370,8 @@ class BreakdownRepairWindowTests(unittest.TestCase):
         missed_result = engine.advance_turn()
         self.assertEqual(guest.total_satisfaction, 60)
         self.assertEqual(
-            sum("仍在投诉此前故障" in event for event in missed_result["events"]),
+            sum("1号帐篷未能及时维修，住客提出投诉。" == event
+                for event in missed_result["events"]),
             1,
         )
 
@@ -4354,6 +4381,38 @@ class BreakdownRepairWindowTests(unittest.TestCase):
         engine.advance_turn()
         self.assertEqual(guest.total_satisfaction, 60)
         self.assertEqual(guest.broken_tent_penalty, 10)
+
+    def test_no_decisions_left_explains_why_timely_repair_is_unavailable(self):
+        engine = make_engine()
+        engine.state.turn = 3
+        self._add_occupant(engine)
+        engine.state.decisions_left = 0
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        self.assertTrue(engine.submit_turn_plan([], [])["success"])
+
+        result = engine.advance_turn()
+
+        self.assertEqual(engine.state.turn, 4)
+        self.assertIn(
+            "今日决策点已用尽，1号帐篷无法及时维修，住客的不满未能挽回。",
+            result["events"],
+        )
+
+    def test_late_repair_feedback_does_not_claim_to_restore_guest_experience(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        self._add_occupant(engine)
+        self._break_tent_now(engine)
+        engine.state.turn = 3
+        engine.tents[1].breakdown_repair_state["timely"] = False
+
+        result = engine.repair_tent(1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result["message"],
+            "1号帐篷已修复，但由于处理较晚，住客依旧不满。",
+        )
 
     def test_turn6_repair_of_old_breakdown_does_not_restore_penalty(self):
         engine = make_engine()

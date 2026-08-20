@@ -201,6 +201,23 @@ class Turn2PlanningTests(HumanActionsApiTestCase):
             self.assertEqual(c["category"], "repair")
             self.assertFalse(c["repeatable"])
 
+    def test_timely_repair_candidate_explains_current_window(self):
+        self.engine.tents[1].status = "broken"
+        self.engine.tents[1].breakdown_repair_state = {
+            "deadline_day": self.engine.state.day,
+            "deadline_turn": self.engine.state.turn,
+            "timely": True,
+            "complaint_pending": False,
+        }
+
+        actions = self._actions()
+        repair = next(
+            c for c in actions["decision_action_candidates"]
+            if c["action"] == "repair_tent" and c["params"]["tent_id"] == 1
+        )
+
+        self.assertEqual(repair["description"], "当前处于及时维修窗口。")
+
     def test_insufficient_balance_disables_candidates(self):
         self.engine.state.balance = 50
         self.engine.tents[1].status = "broken"

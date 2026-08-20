@@ -3212,6 +3212,7 @@ class CampingPlazaEngine:
                 self._settle_daily_operating_costs()
             # 推进到下一回合
             self.state.turn += 1
+            self._emit_breakdown_repair_window_feedback(result)
             self._emit_pending_breakdown_complaints(result)
             self._restore_active_npc_base_locations()
             self._settle_current_turn_arrivals()
@@ -3933,13 +3934,11 @@ class CampingPlazaEngine:
                 }
                 if occupant is not None:
                     result["events"].append(
-                        f"⚠️ {tent_id}号帐篷突发故障，住客明显不满。"
-                        "请尽快安排维修，拖延处理可能影响离店评价。"
+                        f"{tent_id}号帐篷突发故障，住客明显不满。及时维修可以挽回。"
                     )
                 else:
                     result["events"].append(
-                        f"⚠️ {tent_id}号帐篷突发故障，请尽快安排维修；"
-                        "后续入住体验可能受影响。"
+                        f"{tent_id}号帐篷突发故障。及时维修可以避免影响后续住客。"
                     )
                 result["next_actions"].append({
                     "action": "repair_tent",
@@ -3969,6 +3968,17 @@ class CampingPlazaEngine:
                 state["timely"] = False
                 state["complaint_pending"] = tent.occupied_by is not None
 
+    def _emit_breakdown_repair_window_feedback(self, result: dict) -> None:
+        """首个维修轮次开始时，说明及时维修是否仍可执行。"""
+        if self.state.turn > 5 or self.state.decisions_left > 0:
+            return
+        for tent in self._get_unlocked_tents():
+            if self._is_timely_breakdown_repair(tent):
+                result["events"].append(
+                    f"今日决策点已用尽，{tent.id}号帐篷无法及时维修，"
+                    "住客的不满未能挽回。"
+                )
+
     def _emit_pending_breakdown_complaints(self, result: dict) -> None:
         """错过及时维修窗口后，下一轮只提示一次仍在场住客的投诉。"""
         for tent in self._get_unlocked_tents():
@@ -3986,7 +3996,7 @@ class CampingPlazaEngine:
             )
             if occupant is not None:
                 result["events"].append(
-                    f"{tent.id}号帐篷住客仍在投诉此前故障，离店评价可能受影响。"
+                    f"{tent.id}号帐篷未能及时维修，住客提出投诉。"
                 )
 
     def clean_tents(self, tent_ids: Optional[list[int]] = None) -> dict:
@@ -4515,7 +4525,11 @@ class CampingPlazaEngine:
             self._restore_broken_penalty(occupant)
         tent.breakdown_repair_state = None
 
-        return {"success": True, "message": f"{tent_id}号帐篷已修好"}
+        if timely_repair:
+            message = f"{tent_id}号帐篷已及时修复，住客的不满得到解决。"
+        else:
+            message = f"{tent_id}号帐篷已修复，但由于处理较晚，住客依旧不满。"
+        return {"success": True, "message": message}
 
     def improve_service(self, *, consume_decision: bool = True) -> dict:
         """提升服务"""
