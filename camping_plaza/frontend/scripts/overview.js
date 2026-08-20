@@ -65,6 +65,7 @@
     let playerAnchorId = 'entrance';
     let onboardingSubmitting = false;
     const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
+    const ACHIEVEMENT_SEEN_KEY_PREFIX = 'seenAchievementCount_';
     let sessionId = '';
 
     function sessionUrl(path, id = sessionId) {
@@ -151,6 +152,7 @@
         els.reputation = document.getElementById('reputation');
         els.achievementCatalogButton = document.getElementById('achievementCatalogButton');
         els.achievementUnlockedCount = document.getElementById('achievementUnlockedCount');
+        els.achievementNewBadge = document.getElementById('achievementNewBadge');
         els.achievementModal = document.getElementById('achievementModal');
         els.achievementModalClose = document.getElementById('achievementModalClose');
         els.achievementGrid = document.getElementById('achievementGrid');
@@ -1126,9 +1128,56 @@
         return label;
     }
 
+    function achievementSeenKey(sessionId) {
+        return ACHIEVEMENT_SEEN_KEY_PREFIX + sessionId;
+    }
+
+    function readAchievementSeenCount(sessionId) {
+        const raw = window.localStorage.getItem(achievementSeenKey(sessionId));
+        const value = Number.parseInt(raw, 10);
+        return Number.isFinite(value) ? value : null;
+    }
+
+    function writeAchievementSeenCount(sessionId, count) {
+        window.localStorage.setItem(achievementSeenKey(sessionId), String(count));
+    }
+
+    function updateAchievementNewBadge(sessionId, currentCount) {
+        if (!els.achievementNewBadge) return;
+        if (!sessionId || !Number.isFinite(currentCount)) {
+            // 尚无有效 session 或数据未就绪：不显示角标，也不写全局 fallback 键
+            els.achievementNewBadge.classList.add('hidden');
+            return;
+        }
+        const seen = readAchievementSeenCount(sessionId);
+        if (seen === null) {
+            // 该 session 首次出现：以当前已解锁数建立已读基线，不显示角标
+            writeAchievementSeenCount(sessionId, currentCount);
+            els.achievementNewBadge.classList.add('hidden');
+            return;
+        }
+        if (currentCount > seen) {
+            els.achievementNewBadge.classList.remove('hidden');
+            return;
+        }
+        if (currentCount < seen) {
+            // 已解锁数回退：该 session 可能发生 restart / reset，重置基线
+            writeAchievementSeenCount(sessionId, currentCount);
+        }
+        els.achievementNewBadge.classList.add('hidden');
+    }
+
+    function markAchievementsSeen(sessionId, currentCount) {
+        if (sessionId && Number.isFinite(currentCount)) {
+            writeAchievementSeenCount(sessionId, currentCount);
+        }
+        if (els.achievementNewBadge) els.achievementNewBadge.classList.add('hidden');
+    }
+
     function updateAchievementUnlockedCount(count) {
         if (!els.achievementUnlockedCount || !Number.isFinite(count)) return;
         els.achievementUnlockedCount.textContent = `已解锁 ${count}`;
+        updateAchievementNewBadge(sessionId, count);
     }
 
     function closeAchievementCatalog() {
@@ -1171,6 +1220,7 @@
             if (!res.ok) throw new Error(payload.message || `请求失败 (${res.status})`);
             updateAchievementUnlockedCount(payload.unlocked_count);
             renderAchievementCatalog(payload);
+            markAchievementsSeen(sessionId, payload.unlocked_count);
             if (els.achievementModal) els.achievementModal.classList.remove('hidden');
         } catch (err) {
             setActionMessage('无法读取成就图鉴：' + err.message, 'action-error');

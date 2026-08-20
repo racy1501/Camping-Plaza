@@ -224,6 +224,25 @@ button:disabled {
     text-align: left;
     font: inherit;
     cursor: pointer;
+    position: relative;
+}
+
+.achievement-new-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--sage-dark);
+    color: #ffffff;
+    font-size: 10px;
+    line-height: 1.7;
+    letter-spacing: 0.08em;
+    pointer-events: none;
+}
+
+.achievement-new-badge.hidden {
+    display: none;
 }
 
 .achievement-card:hover {
