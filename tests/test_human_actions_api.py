@@ -122,6 +122,16 @@ class Turn2PlanningTests(HumanActionsApiTestCase):
             self.assertEqual(c["price"], package["price"])
             self.assertEqual(c["portions"], package["portions"])
             self.assertIn(package["name"], c["label"])
+            self.assertEqual(c["description"], "仅供今日营业，Turn 5结束后剩余食材作废。")
+
+        post = next(
+            c for c in actions["decision_action_candidates"]
+            if c["action"] == "make_post"
+        )
+        self.assertEqual(
+            post["description"],
+            "帖子有可能给营地带来次日预约，仍受次日接待容量限制。",
+        )
 
     def test_improve_service_candidate_enabled_until_daily_limit(self):
         actions = self._actions()
@@ -344,6 +354,7 @@ class Turn6Tests(HumanActionsApiTestCase):
         medium = candidates[("buy_food_package", (("package_key", "medium"),))]
         self.assertFalse(medium["enabled"])
         self.assertEqual(medium["reason"], "金币不足")
+        self.assertEqual(medium["description"], "为明日备货。")
 
         self.engine.tents[1].status = "available"
         self.engine.facilities["greenery"].greenery_satisfaction = 0.0

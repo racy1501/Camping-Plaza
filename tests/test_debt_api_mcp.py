@@ -62,6 +62,8 @@ class DebtApiMcpTests(unittest.TestCase):
         self.assertIn("buy_food_package", actions)
         self.assertIn("manage_greenery", actions)
         self.assertIn("purchase_growth_project", actions)
+        food = next(candidate for candidate in mcp if candidate["action"] == "buy_food_package")
+        self.assertEqual(food["description"], "为明日备货。")
 
     def test_repayment_candidate_is_a_day_end_action_with_shared_conditions(self):
         human_repay = next(

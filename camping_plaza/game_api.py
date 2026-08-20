@@ -256,6 +256,7 @@ def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
                 "portions": package["portions"],
                 "enabled": enabled,
                 "reason": "" if enabled else "金币不足",
+                "description": "为明日备货。",
             })
 
     for project in eng.get_growth_project_catalog():
@@ -529,6 +530,7 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
         "enabled": post_remaining > 0,
         "reason": "" if post_remaining else "今天已经发布过帖子",
         "params": {}, "repeatable": False,
+        "description": "帖子有可能给营地带来次日预约，仍受次日接待容量限制。",
         "remaining_today": post_remaining, "daily_limit": 1,
         "cost_decision_points": 1,
     })
@@ -550,6 +552,7 @@ def _build_neutral_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
             "action": "buy_food_package", "kind": "decision",
             "enabled": enabled, "reason": "" if enabled else "金币不足",
             "params": {"package_key": package_key}, "repeatable": True,
+            "description": "仅供今日营业，Turn 5结束后剩余食材作废。",
             "price": package["price"], "portions": package["portions"],
             "max_quantity": 3, "cost_decision_points": 1,
         })
@@ -807,6 +810,8 @@ def _build_turn_action_candidates(eng: CampingPlazaEngine) -> dict:
                 "params": dict(source.get("params") or {}),
                 "cost_decision_points": 0 if source["kind"] == "free" else 1,
             }
+            if source.get("description"):
+                item["description"] = source["description"]
             if not source["enabled"] and source.get("reason"):
                 item["reason"] = source["reason"]
             for field in (

@@ -35,6 +35,17 @@ class McpActionCatalogTests(unittest.TestCase):
             self.assertTrue(decision[name]["enabled"])
             self.assertEqual(decision[name]["cost_decision_points"], 1)
             self.assertEqual(decision[name]["params"], {})
+        self.assertEqual(
+            decision["make_post"]["description"],
+            "帖子有可能给营地带来次日预约，仍受次日接待容量限制。",
+        )
+        food = next(
+            item for item in decision.values()
+            if item["action"] == "buy_food_package"
+        )
+        self.assertEqual(
+            food["description"], "仅供今日营业，Turn 5结束后剩余食材作废。"
+        )
 
     def test_turn_plan_action_name_and_endpoint_match_execution_semantics(self):
         self.engine.state.turn = 2
