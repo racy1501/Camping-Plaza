@@ -4306,6 +4306,39 @@ class BreakdownRepairWindowTests(unittest.TestCase):
             ["1号帐篷突发故障。及时维修可以避免影响后续住客。"],
         )
 
+    def test_two_new_breakdowns_unlock_bad_luck_achievement_once(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.tents[2].is_unlocked = True
+        for tent_id in (1, 2):
+            engine.tents[tent_id].next_breakdown_turn = engine._absolute_turn()
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        self.assertIn("bad_luck_breakdowns", engine.state.unlocked_achievement_ids)
+        self.assertEqual(
+            engine.state.pending_achievement_ids.count("bad_luck_breakdowns"), 1
+        )
+        for tent_id in (1, 2):
+            engine.tents[tent_id].status = "available"
+            engine.tents[tent_id].next_breakdown_turn = engine._absolute_turn()
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+        self.assertEqual(
+            engine.state.pending_achievement_ids.count("bad_luck_breakdowns"), 1
+        )
+
+    def test_existing_broken_tent_does_not_count_as_new_breakdown(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        engine.tents[2].is_unlocked = True
+        engine.tents[1].next_breakdown_turn = engine._absolute_turn()
+        engine.tents[2].status = "broken"
+
+        engine._handle_breakdowns({"events": [], "next_actions": []})
+
+        self.assertNotIn("bad_luck_breakdowns", engine.state.unlocked_achievement_ids)
+        self.assertNotIn("bad_luck_breakdowns", engine.state.pending_achievement_ids)
+
     def test_broken_empty_reserved_tent_keeps_plan_and_penalizes_arrival(self):
         engine = make_engine()
         engine.state.turn = 1

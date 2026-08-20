@@ -46,6 +46,7 @@ class AchievementCatalogEngineTests(unittest.TestCase):
         normal = [
             item for item in catalog
             if item["id"] not in self.engine.DEBT_RESULT_ACHIEVEMENT_IDS
+            and item["id"] != "bad_luck_breakdowns"
         ]
         self.assertEqual(
             [(item["id"], item["title"], item["description"]) for item in normal],
@@ -62,13 +63,33 @@ class AchievementCatalogEngineTests(unittest.TestCase):
     def test_locked_normal_entries_show_hint_without_locked_title(self):
         catalog = self.engine.get_achievement_catalog()["achievements"]
         for achievement_id, definition in self.engine.ACHIEVEMENT_CATALOG.items():
-            if achievement_id in self.engine.DEBT_RESULT_ACHIEVEMENT_IDS:
+            if (
+                achievement_id in self.engine.DEBT_RESULT_ACHIEVEMENT_IDS
+                or achievement_id == "bad_luck_breakdowns"
+            ):
                 continue
             achievement = next(item for item in catalog if item["id"] == achievement_id)
             self.assertEqual(achievement["status"], "locked")
             self.assertEqual(achievement["title"], definition["title"])
             self.assertEqual(achievement["description"], definition["hint"])
             self.assertNotIn("locked_title", definition)
+
+    def test_bad_luck_breakdown_achievement_uses_its_special_hidden_display(self):
+        before = self._achievement("bad_luck_breakdowns")
+        self.assertEqual(before["status"], "hidden")
+        self.assertEqual(before["title"], "今天是不是有点太衰了？")
+        self.assertEqual(before["description"], "有些成就，还是别拿到比较好。")
+        self.assertNotIn("坏事成双", before["title"])
+        self.assertNotIn("同一个经营轮次", before["description"])
+
+        self.engine._unlock_achievement("bad_luck_breakdowns")
+        after = self._achievement("bad_luck_breakdowns")
+        self.assertEqual(after["status"], "unlocked")
+        self.assertEqual(after["title"], "坏事成双")
+        self.assertEqual(
+            after["description"],
+            "同一个经营轮次内，新发生至少 2 顶帐篷故障。",
+        )
 
     def test_debt_result_cards_are_hidden_then_revealed_as_two_outcomes(self):
         debt_ids = {

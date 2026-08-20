@@ -289,6 +289,12 @@ class CampingPlazaEngine:
             "hint": "客人离开时多留下的一点心意。",
             "condition": "首次收到客人小费。",
         },
+        "bad_luck_breakdowns": {
+            "title": "坏事成双",
+            "hidden_title": "今天是不是有点太衰了？",
+            "hidden_hint": "有些成就，还是别拿到比较好。",
+            "condition": "同一个经营轮次内，新发生至少 2 顶帐篷故障。",
+        },
         "tent_2_purchased": {
             "title": "地盘 +1",
             "hint": "开启新空间。",
@@ -356,6 +362,7 @@ class CampingPlazaEngine:
         "first_overnight_group": "今晚住这儿",
         "first_day_to_overnight": "不着急走",
         "first_tip": "还有小费！",
+        "bad_luck_breakdowns": "坏事成双",
         "tent_2_purchased": "地盘 +1",
         "all_tents_unlocked": "都住得下",
         "dining_lv1": "先吃饭吧",
@@ -878,6 +885,7 @@ class CampingPlazaEngine:
         debt_result_revealed = self.state.day > self.state.repayment_deadline_day
         achievements = []
         for achievement_id, definition in self.ACHIEVEMENT_CATALOG.items():
+            title = definition["title"]
             if achievement_id in self.DEBT_RESULT_ACHIEVEMENT_IDS:
                 if not debt_result_revealed:
                     achievements.append({
@@ -889,6 +897,13 @@ class CampingPlazaEngine:
                     continue
                 status = "unlocked" if achievement_id in unlocked_ids else "alternative"
                 description = definition["condition"]
+            elif (
+                achievement_id not in unlocked_ids
+                and "hidden_title" in definition
+            ):
+                status = "hidden"
+                description = definition["hidden_hint"]
+                title = definition["hidden_title"]
             elif achievement_id in unlocked_ids:
                 status = "unlocked"
                 description = definition["condition"]
@@ -897,7 +912,7 @@ class CampingPlazaEngine:
                 description = definition["hint"]
             achievements.append({
                 "id": achievement_id,
-                "title": definition["title"],
+                "title": title,
                 "status": status,
                 "description": description,
             })
@@ -3910,6 +3925,7 @@ class CampingPlazaEngine:
     def _handle_breakdowns(self, result: dict):
         """处理帐篷故障"""
         current_turn = self._absolute_turn()
+        new_breakdown_count = 0
         for tent_id, tent in self.tents.items():
             if not self._is_tent_unlocked(tent):
                 continue
@@ -3917,6 +3933,7 @@ class CampingPlazaEngine:
                     and current_turn >= tent.next_breakdown_turn
                     and tent.next_breakdown_turn > 0):
                 tent.status = "broken"
+                new_breakdown_count += 1
                 occupant = None
                 # 修复：保留 occupied_by，不移动住客
                 if tent.occupied_by is not None:
@@ -3944,6 +3961,8 @@ class CampingPlazaEngine:
                     "action": "repair_tent",
                     "params": {"tent_id": tent_id},
                 })
+        if new_breakdown_count >= 2:
+            self._unlock_achievement("bad_luck_breakdowns")
 
     def _is_timely_breakdown_repair(self, tent: Tent) -> bool:
         """仅在本次故障的第一个可维修窗口内允许挽回体验扣分。"""
