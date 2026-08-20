@@ -315,6 +315,7 @@ class TemporaryConflictEventTests(unittest.TestCase):
             self.engine._build_arrival_plan_entry(guests[0], 3, "natural_day"),
             self.engine._build_arrival_plan_entry(guests[1], 4, "natural_overnight"),
         ]
+        self.engine.state.today_conflict_event = {"status": "no_event"}
         self.engine.advance_turn()
         self.assertEqual(self.engine.state.turn, 2)
         self.assertTrue(self.engine.submit_turn_plan([], [])["success"])
