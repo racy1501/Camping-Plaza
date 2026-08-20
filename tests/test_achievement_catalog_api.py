@@ -91,6 +91,15 @@ class AchievementCatalogEngineTests(unittest.TestCase):
             "同一个经营轮次内，新发生至少 2 顶帐篷故障。",
         )
 
+    def test_hidden_achievements_are_grouped_after_normal_achievements(self):
+        ids = [item["id"] for item in self.engine.get_achievement_catalog()["achievements"]]
+        self.assertEqual(
+            ids[-3:],
+            ["bad_luck_breakdowns", "debt_paid_by_deadline", "debt_unpaid_by_deadline"],
+        )
+        definition_ids = list(self.engine.ACHIEVEMENT_DEFINITIONS)
+        self.assertEqual(definition_ids[-3:], ids[-3:])
+
     def test_debt_result_cards_are_hidden_then_revealed_as_two_outcomes(self):
         debt_ids = {
             "debt_paid_by_deadline",

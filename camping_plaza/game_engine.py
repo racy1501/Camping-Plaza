@@ -289,12 +289,6 @@ class CampingPlazaEngine:
             "hint": "客人离开时多留下的一点心意。",
             "condition": "首次收到客人小费。",
         },
-        "bad_luck_breakdowns": {
-            "title": "坏事成双",
-            "hidden_title": "今天是不是有点太衰了？",
-            "hidden_hint": "有些成就，还是别拿到比较好。",
-            "condition": "同一个经营轮次内，新发生至少 2 顶帐篷故障。",
-        },
         "tent_2_purchased": {
             "title": "地盘 +1",
             "hint": "开启新空间。",
@@ -345,6 +339,12 @@ class CampingPlazaEngine:
             "hint": "营地真正热闹起来以后。",
             "condition": "累计成功接待 150 组客人。",
         },
+        "bad_luck_breakdowns": {
+            "title": "坏事成双",
+            "hidden_title": "今天是不是有点太衰了？",
+            "hidden_hint": "有些成就，还是别拿到比较好。",
+            "condition": "同一个经营轮次内，新发生至少 2 顶帐篷故障。",
+        },
         "debt_paid_by_deadline": {
             "title": "一身轻",
             "hint": "",
@@ -362,7 +362,6 @@ class CampingPlazaEngine:
         "first_overnight_group": "今晚住这儿",
         "first_day_to_overnight": "不着急走",
         "first_tip": "还有小费！",
-        "bad_luck_breakdowns": "坏事成双",
         "tent_2_purchased": "地盘 +1",
         "all_tents_unlocked": "都住得下",
         "dining_lv1": "先吃饭吧",
@@ -373,6 +372,7 @@ class CampingPlazaEngine:
         "served_groups_50": "客人来了",
         "served_groups_100": "越来越热闹",
         "served_groups_150": "生意兴隆",
+        "bad_luck_breakdowns": "坏事成双",
         "debt_paid_by_deadline": "一身轻",
         "debt_unpaid_by_deadline": "没关系",
     }
