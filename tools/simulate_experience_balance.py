@@ -212,11 +212,11 @@ def phase2d_grid(args):
   runs=[simulate_phase2c(args.seed+i,args.days,f'k={k}',.25,k) for i in range(args.runs)]
   stats,bins=phase2d_probability_stats(runs);base=[phase2d_shock(k,anchor,4.0) for anchor in (1,20,45)];low=[phase2d_shock(k,anchor,3.5) for anchor in (1,20,45)]
   diffs=[]
-  for b,l in zip(base,low):diffs.append({'d1_guests':b[0]['total']-l[0]['total'],'d1_income':b[0]['income']-l[0]['income'],'d3_guests':sum(x['total'] for x in b)-sum(x['total'] for x in l),'d3_income':sum(x['income'] for x in b)-sum(x['income'] for x in l)})
+  for b,l in zip(base,low):diffs.append({'d1_guests':b[0]['total']-l[0]['total'],'d1_reservations':b[0]['reservation']-l[0]['reservation'],'d1_income':b[0]['income']-l[0]['income'],'d3_guests':sum(x['total'] for x in b)-sum(x['total'] for x in l),'d3_reservations':sum(x['reservation'] for x in b)-sum(x['reservation'] for x in l),'d3_income':sum(x['income'] for x in b)-sum(x['income'] for x in l)})
   rows.append({'k':k,'prob':stats,'bins':bins,'middle':diffs[1],'late':diffs[2]})
- print('PHASE2D_GRID k p35 p40 p45 middle_d1_guests middle_d1_income middle_d3_guests middle_d3_income late_d1_guests late_d1_income late_d3_guests late_d3_income')
+ print('PHASE2D_GRID k p35 p40 p45 middle_d1_arrivals middle_d1_reservations middle_d1_income middle_d3_arrivals middle_d3_reservations middle_d3_income late_d1_arrivals late_d1_reservations late_d1_income late_d3_arrivals late_d3_reservations late_d3_income')
  for x in rows:
-  k=x['k'];p=lambda r:clamp(.15+(r-3)*k,.05,.30);m=x['middle'];l=x['late'];print(k,f'{p(3.5):.3f}',f'{p(4):.3f}',f'{p(4.5):.3f}',m['d1_guests'],m['d1_income'],m['d3_guests'],m['d3_income'],l['d1_guests'],l['d1_income'],l['d3_guests'],l['d3_income'])
+  k=x['k'];p=lambda r:clamp(.15+(r-3)*k,.05,.30);m=x['middle'];l=x['late'];print(k,f'{p(3.5):.3f}',f'{p(4):.3f}',f'{p(4.5):.3f}',m['d1_guests'],m['d1_reservations'],m['d1_income'],m['d3_guests'],m['d3_reservations'],m['d3_income'],l['d1_guests'],l['d1_reservations'],l['d1_income'],l['d3_guests'],l['d3_reservations'],l['d3_income'])
  return rows
 def main():
  p=argparse.ArgumentParser();p.add_argument('--seed',type=int,default=20260824);p.add_argument('--runs',type=int,default=500);p.add_argument('--days',type=int,default=20);p.add_argument('--strategy',default='balanced',choices=('growth_priority','balanced','quality_priority'));p.add_argument('--phase2c',action='store_true');p.add_argument('--phase2c-candidates');p.add_argument('--phase2d-grid',action='store_true');a=p.parse_args()
