@@ -48,6 +48,9 @@ class NPCGroup:
     location: str = "gate"  # gate, campsite, tent_1-6, dining, entertainment, leaving
     campsite_slot: Optional[int] = None
     total_satisfaction: int = 60
+    # 本次到访中实际生效的满意度变化账本；不把初始值或存档恢复计入体验。
+    positive_experience_total: float = 0.0
+    negative_experience_total: float = 0.0
     has_left: bool = False
     review_left: bool = False
     review_rating: int = 0
@@ -1228,7 +1231,7 @@ class CampingPlazaEngine:
         for key, delta_key in (("npc_a_id", "npc_a_delta"), ("npc_b_id", "npc_b_delta")):
             npc = npc_by_id.get(event[key])
             if npc is not None:
-                npc.total_satisfaction = max(0, npc.total_satisfaction + outcome[delta_key])
+                self.apply_satisfaction_delta(npc, outcome[delta_key])
         labels = [self._visible_guest_label(event["npc_a_id"]), self._visible_guest_label(event["npc_b_id"])]
         affected_labels = [
             label for label, delta_key in zip(labels, ("npc_a_delta", "npc_b_delta"))
@@ -1817,6 +1820,9 @@ class CampingPlazaEngine:
             for ndata in payload["npc_pool"]:
                 normalized_ndata = dict(ndata)
                 normalized_ndata.setdefault("last_dining_day", 0)
+                # v1 线上快照没有体验账本字段：它们不是历史事件，安全地从 0 开始。
+                normalized_ndata.setdefault("positive_experience_total", 0.0)
+                normalized_ndata.setdefault("negative_experience_total", 0.0)
                 normalized_ndata.setdefault("growth_served_recorded", False)
                 normalized_ndata.setdefault("growth_dining_recorded", False)
                 normalized_ndata.setdefault("growth_paid_entertainment_recorded", False)
@@ -3425,12 +3431,8 @@ class CampingPlazaEngine:
         """客组首次成功入场时结算一次绿化加成"""
         if npc.greenery_entry_bonus_applied:
             return
-        npc.total_satisfaction = round(
-            min(
-                100.0,
-                npc.total_satisfaction + self.facilities["greenery"].greenery_satisfaction,
-            ),
-            1,
+        self.apply_satisfaction_delta(
+            npc, self.facilities["greenery"].greenery_satisfaction
         )
         npc.greenery_entry_bonus_applied = True
 
@@ -3543,9 +3545,7 @@ class CampingPlazaEngine:
         self.state.food_stock -= npc.group_size
         self.state.balance += spend
         self.state.today_income["dining"] += spend
-        npc.total_satisfaction = min(
-            100, npc.total_satisfaction + menu["satisfaction_gain"]
-        )
+        self.apply_satisfaction_delta(npc, menu["satisfaction_gain"])
         self._mark_dining_consumed(npc)
         self._record_successful_dining_once(npc)
         action["status"] = "completed"
@@ -3659,15 +3659,19 @@ class CampingPlazaEngine:
                 income_before = self.state.today_income["hot_spring"]
                 people_before = self.state.hot_spring_people_served_today
                 location_before = npc.location
-                satisfaction_before = npc.total_satisfaction
+                satisfaction_before = (
+                    npc.total_satisfaction,
+                    npc.positive_experience_total,
+                    npc.negative_experience_total,
+                )
                 try:
                     spend = self.HOT_SPRING_PRICE_PER_PERSON * npc.group_size
                     npc.location = "hot_spring"
                     self.state.balance += spend
                     self.state.today_income["hot_spring"] += spend
                     self.state.hot_spring_people_served_today += npc.group_size
-                    npc.total_satisfaction = min(
-                        100, npc.total_satisfaction + self.HOT_SPRING_SATISFACTION_GAIN
+                    self.apply_satisfaction_delta(
+                        npc, self.HOT_SPRING_SATISFACTION_GAIN
                     )
                     action["status"] = "completed"
                     action["result"] = "success"
@@ -3690,7 +3694,11 @@ class CampingPlazaEngine:
                     self.state.today_income["hot_spring"] = income_before
                     self.state.hot_spring_people_served_today = people_before
                     npc.location = location_before
-                    npc.total_satisfaction = satisfaction_before
+                    (
+                        npc.total_satisfaction,
+                        npc.positive_experience_total,
+                        npc.negative_experience_total,
+                    ) = satisfaction_before
                     action.clear()
                     action.update(action_before)
                     action["status"] = "failed"
@@ -3741,9 +3749,7 @@ class CampingPlazaEngine:
                     npc.location = "entertainment"
                     self.state.balance += spend
                     self.state.today_income["entertainment"] += spend
-                    npc.total_satisfaction = min(
-                        100, npc.total_satisfaction + tier["satisfaction_gain"]
-                    )
+                    self.apply_satisfaction_delta(npc, tier["satisfaction_gain"])
                     action["status"] = "completed"
                     action["result"] = "success"
                     action["charged_amount"] = spend
@@ -3757,7 +3763,7 @@ class CampingPlazaEngine:
                     continue
 
                 npc.location = "entertainment"
-                npc.total_satisfaction = min(100, npc.total_satisfaction + 1)
+                self.apply_satisfaction_delta(npc, 1)
                 action["status"] = "completed"
                 action["result"] = "success"
                 action["charged_amount"] = 0
@@ -4487,13 +4493,31 @@ class CampingPlazaEngine:
     # 经营操作
     # -------------------------------------------------------------------------
 
+    def apply_satisfaction_delta(self, npc: NPCGroup, delta: float) -> float:
+        """应用一次真实体验变化，并记录实际生效的正、负满意度累计值。"""
+        if delta == 0:
+            return 0.0
+        before = float(npc.total_satisfaction)
+        after = round(min(100.0, max(0.0, before + float(delta))), 1)
+        actual_delta = round(after - before, 1)
+        npc.total_satisfaction = after
+        if actual_delta > 0:
+            npc.positive_experience_total = round(
+                npc.positive_experience_total + actual_delta, 1
+            )
+        elif actual_delta < 0:
+            npc.negative_experience_total = round(
+                npc.negative_experience_total + abs(actual_delta), 1
+            )
+        return actual_delta
+
     def _apply_broken_penalty(self, npc: NPCGroup) -> None:
         """对住客应用 broken 临时扣分，同一次故障只扣一次并记录实际扣除值。"""
         if npc is None or npc.broken_tent_penalty != 0:
             return
         actual = min(self.TENT_BREAKDOWN_SATISFACTION_PENALTY, npc.total_satisfaction)
         if actual > 0:
-            npc.total_satisfaction -= actual
+            self.apply_satisfaction_delta(npc, -actual)
             npc.broken_tent_penalty = actual
             npc.had_tent_problem = True
 
@@ -4501,7 +4525,7 @@ class CampingPlazaEngine:
         """维修成功后恢复已记录的 broken 临时扣分并清零。"""
         if npc is None or npc.broken_tent_penalty <= 0:
             return
-        npc.total_satisfaction = min(100, npc.total_satisfaction + npc.broken_tent_penalty)
+        self.apply_satisfaction_delta(npc, npc.broken_tent_penalty)
         npc.broken_tent_penalty = 0
 
     def repair_tent(self, tent_id: int, *, consume_decision: bool = True) -> dict:
@@ -4568,7 +4592,7 @@ class CampingPlazaEngine:
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.3:
                 targets.append(self._npc_replay_target(npc))
-                npc.total_satisfaction = min(100, npc.total_satisfaction + 5)
+                self.apply_satisfaction_delta(npc, 5)
                 npc.received_service_boost = True
                 affected.append(npc.id)
 
@@ -4596,7 +4620,7 @@ class CampingPlazaEngine:
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.7:
                 targets.append(self._npc_replay_target(npc))
-                npc.total_satisfaction = min(100, npc.total_satisfaction + 2)
+                self.apply_satisfaction_delta(npc, 2)
                 affected.append(npc.id)
         if consume_decision:
             self.state.decisions_left -= 1
