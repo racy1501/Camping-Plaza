@@ -30,12 +30,6 @@ from game_engine import CampingPlazaEngine  # noqa: E402
 STRATEGIES = ("growth_priority", "balanced", "quality_priority")
 REPAYMENT_BEHAVIORS = ("eager_repayment", "deadline_aware")
 CHECKPOINT_DAYS = (15, 17, 20, 25, 30)
-RATING_SCENARIOS = {
-    "baseline": (74, 88),
-    "historical_control": (75, 90),
-    "combined_stronger": (73, 87),
-}
-FORMAL_RATING_THRESHOLDS = (74, 88)
 REAL_DAY17 = {
     "gold": 5050,
     "average_rating": 3.2826,
@@ -317,6 +311,43 @@ def repayment_decision(
     }
 
 
+def formal_repayment_amount(
+    engine: CampingPlazaEngine, strategy: str, available: int,
+    repayment_behavior: str,
+) -> int:
+    """为正式 debt_remaining 计算模拟行动，不创建第二套债务账本。"""
+    if repayment_behavior == "eager_repayment":
+        reserve = {"growth_priority": 300, "balanced": 700, "quality_priority": 1200}[strategy]
+        return min(engine.state.debt_remaining, max(0, available - reserve))
+    if repayment_behavior != "deadline_aware":
+        raise ValueError(f"unknown repayment_behavior: {repayment_behavior}")
+
+    deadline = engine.state.repayment_deadline_day
+    elapsed_ratio = (engine.state.day - 1) / max(1, deadline - 1)
+    urgency_stage = "low" if elapsed_ratio < 1 / 3 else "medium" if elapsed_ratio < 2 / 3 else "high"
+    operating_reserve = {"growth_priority": 300, "balanced": 700, "quality_priority": 1200}[strategy]
+    profiles = {
+        "growth_priority": {"low": (1.25, 1.00, 0.15), "medium": (0.60, 0.80, 0.45), "high": (0.15, 0.00, 0.90)},
+        "balanced": {"low": (0.75, 1.00, 0.20), "medium": (0.45, 0.50, 0.55), "high": (0.10, 0.00, 0.90)},
+        "quality_priority": {"low": (0.55, 1.00, 0.15), "medium": (0.35, 0.50, 0.45), "high": (0.10, 0.00, 0.80)},
+    }
+    investment_factor, buffer_factor, surplus_fraction = profiles[strategy][urgency_stage]
+    target = next_growth_target(engine)
+    target_price = int(target["price"]) if target is not None else 0
+    protected_cash = (
+        operating_reserve
+        + math.ceil(target_price * investment_factor)
+        + math.ceil(operating_reserve * buffer_factor)
+    )
+    amount = 0 if urgency_stage == "low" else int(max(0, available - protected_cash) * surplus_fraction)
+    if urgency_stage in {"medium", "high"}:
+        required_daily_payment = math.ceil(
+            engine.state.debt_remaining / max(1, deadline - engine.state.day + 1)
+        )
+        amount = max(amount, min(max(0, available - operating_reserve), required_daily_payment))
+    return min(amount, engine.state.debt_remaining, available)
+
+
 def quantiles(values: list[float]) -> dict[str, float | None]:
     if not values:
         return {"p10": None, "median": None, "p90": None}
@@ -388,8 +419,10 @@ def turn_actions(engine: CampingPlazaEngine, strategy: str) -> tuple[list[dict],
 def day_end_actions(
     engine: CampingPlazaEngine, strategy: str,
     economic_config: dict[str, int | str] | None = None,
+    repayment_unlock_day: int = 1,
+    repayment_behavior: str = "deadline_aware",
 ) -> list[dict]:
-    """用正式 catalog 判断可购项目，并确定三种策略的项目/维护顺序。"""
+    """用正式 catalog 判断日终动作；默认使用正式债务状态。"""
     actions: list[dict] = []
     available = engine.state.balance
     balance_buffer = {"growth_priority": 0, "balanced": 250, "quality_priority": 500}[strategy]
@@ -428,6 +461,12 @@ def day_end_actions(
         if available >= engine.REPAIR_COST:
             actions.append({"action": "repair_tent", "params": {"tent_id": tent_id}})
             available -= engine.REPAIR_COST
+    if economic_config is None and engine.state.day >= repayment_unlock_day:
+        repayment = formal_repayment_amount(
+            engine, strategy, available, repayment_behavior,
+        )
+        if repayment:
+            actions.append({"action": "repay_debt", "params": {"amount": repayment}})
     return actions
 
 
@@ -476,6 +515,7 @@ def day_snapshot(
         "formal_daily_expense": expense, "overlay_daily_expense": overlay_expense,
         "debt_remaining": debt_remaining,
         "cumulative_service_groups": state.total_served_groups,
+        "completed_growth_nodes": engine.get_growth_progress()["completed_growth_nodes"],
         "dining_success": state.successful_dining_groups,
         "entertainment_success": state.successful_paid_entertainment_groups,
         "greenery_satisfaction": engine.facilities["greenery"].greenery_satisfaction,
@@ -488,31 +528,16 @@ def day_snapshot(
     }
 
 
-def rating_function(four_star_threshold: int, five_star_threshold: int):
-    def calculate_rating(satisfaction: float) -> int:
-        if satisfaction >= five_star_threshold:
-            return 5
-        if satisfaction >= four_star_threshold:
-            return 4
-        if satisfaction >= 60:
-            return 3
-        if satisfaction >= 45:
-            return 2
-        return 1
-    return calculate_rating
-
-
 def simulate_run(
     days: int, seed: int, strategy: str,
-    rating_thresholds: tuple[int, int] = FORMAL_RATING_THRESHOLDS,
     economic_config: dict[str, int | str] | None = None,
     repayment_behavior: str = "deadline_aware",
+    repayment_unlock_day: int = 1,
 ) -> dict[str, Any]:
     random.seed(seed)
     SIM_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
     temp_dir = tempfile.mkdtemp(prefix="run-", dir=SIM_TEMP_ROOT)
     engine = None
-    original_rating = None
     try:
         engine = CampingPlazaEngine(str(Path(temp_dir) / "run.sqlite"))
         overlay = None
@@ -523,8 +548,6 @@ def simulate_run(
             overlay = EconomicOverlay(normalized_config)
             apply_hot_spring_timing_overlay(engine, str(normalized_config["hot_spring_timing"]))
             install_economic_overlay_hooks(engine, overlay)
-        original_rating = engine._calculate_rating
-        engine._calculate_rating = rating_function(*rating_thresholds)  # type: ignore[method-assign]
         final_satisfaction: Counter[int] = Counter()
         review_stars: Counter[int] = Counter()
         tent_failures = 0
@@ -547,6 +570,8 @@ def simulate_run(
         engine._handle_breakdowns = capture_breakdowns  # type: ignore[method-assign]
         daily: list[dict[str, Any]] = []
         purchases: dict[str, int | None] = {project: None for project in PROJECT_IDS}
+        qualification_days: dict[str, int | None] = {project: None for project in PROJECT_IDS}
+        formal_repayment_trace: list[dict[str, int | bool]] = []
         economic_trace: list[dict[str, Any]] = []
         hot_spring_eligible_day: int | None = None
         tent_repairs = 0
@@ -556,7 +581,7 @@ def simulate_run(
             while engine.state.turn <= 5:
                 event = engine.get_current_temporary_conflict_event()
                 if event is not None:
-                    engine.resolve_current_temporary_conflict("mediate")
+                    engine.resolve_current_temporary_conflict("verbal")
                 if engine.state.turn in (2, 3, 4, 5):
                     free, actions = turn_actions(engine, strategy)
                     submitted = engine.submit_turn_plan(free, actions)
@@ -570,10 +595,26 @@ def simulate_run(
                     str((economic_config or {}).get("scenario", "custom")),
                 )
             catalog_before = engine.get_growth_project_catalog()
+            for project in catalog_before:
+                project_id = project["project_id"]
+                if (
+                    qualification_days[project_id] is None
+                    and project["prerequisite_met"]
+                    and project["operation_requirement_met"]
+                ):
+                    qualification_days[project_id] = engine.state.day
             hot = next(x for x in catalog_before if x["project_id"] == "hot_spring")
             if hot_spring_eligible_day is None and hot["prerequisite_met"] and hot["operation_requirement_met"]:
                 hot_spring_eligible_day = engine.state.day
-            result = engine.submit_day_end_actions(day_end_actions(engine, strategy, economic_config))
+            balance_before_day_end = engine.state.balance
+            debt_before_day_end = engine.state.debt_remaining
+            result = engine.submit_day_end_actions(day_end_actions(
+                engine,
+                strategy,
+                economic_config,
+                repayment_unlock_day,
+                repayment_behavior,
+            ))
             if not result.get("success"):
                 raise RuntimeError(f"day end rejected: {result}")
             for item in result.get("results", []):
@@ -583,6 +624,13 @@ def simulate_run(
                     project = (item.get("params") or {}).get("project_id")
                     if project in purchases and purchases[project] is None:
                         purchases[project] = engine.state.day
+            formal_repayment_trace.append({
+                "day": engine.state.day,
+                "balance_before_day_end": balance_before_day_end,
+                "debt_before_day_end": debt_before_day_end,
+                "can_pay_off_before_day_end": balance_before_day_end >= debt_before_day_end,
+                "repaid_today": debt_before_day_end - engine.state.debt_remaining,
+            })
             if overlay is not None:
                 repayment = overlay.repay_after_day_end(engine, strategy, repayment_behavior)
                 economic_trace.append({"day": engine.state.day, **repayment})
@@ -635,16 +683,25 @@ def simulate_run(
                 "cumulative_hot_spring_operating_cost": overlay.cumulative_hot_spring_operating_cost,
                 "cumulative_debt_repayment": overlay.cumulative_debt_repayment,
             }
+        milestones = {
+            threshold: next(
+                (row["day"] for row in daily if row["cumulative_service_groups"] >= threshold),
+                None,
+            )
+            for threshold in (50, 100, 150)
+        }
         return {"seed": seed, "strategy": strategy, "daily": daily, "purchases": purchases,
+                "qualification_days": qualification_days,
+                "formal_repayment_trace": formal_repayment_trace,
+                "milestones": milestones,
                 "hot_spring_eligible_day": hot_spring_eligible_day,
                 "first_rating_days": first_rating_days, "pressure": pressure,
                 "completed_all_growth": completed_all, "last_purchase_day": last_purchase_day,
                 "economic_config": dict(economic_config) if economic_config is not None else None,
-                "repayment_behavior": repayment_behavior if overlay is not None else None,
+                "repayment_behavior": repayment_behavior,
+                "repayment_unlock_day": repayment_unlock_day,
                 "debt": debt_summary, "economic_trace": economic_trace}
     finally:
-        if engine is not None and original_rating is not None:
-            engine._calculate_rating = original_rating  # type: ignore[method-assign]
         # Windows sandbox may retain a transient file handle. It must not change
         # simulation results or cause a successful run to be reported as failed.
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -727,39 +784,12 @@ def summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "pressure": pressure_summary, "completion": completion, "debt": debt_summary}
 
 
-def scenario_delta(summary: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
-    day = 30
-    current = summary["daily"].get(day, {})
-    reference = baseline["daily"].get(day, {})
-    def delta(metric: str) -> float | None:
-        a = current.get(metric, {}).get("median")
-        b = reference.get(metric, {}).get("median")
-        return None if a is None or b is None else a - b
-    current_stars = summary["checkpoints"].get(day, {}).get("star_proportions", {})
-    base_stars = baseline["checkpoints"].get(day, {}).get("star_proportions", {})
-    return {
-        "average_rating": delta("average_rating"),
-        "five_star_proportion": current_stars.get("5", 0) - base_stars.get("5", 0),
-        "daytime_demand": delta("daytime_natural_demand"),
-        "overnight_demand": delta("overnight_natural_demand"),
-        "gold": delta("gold"),
-        "cumulative_service_groups": delta("cumulative_service_groups"),
-        "last_growth_purchase_day": (summary["completion"]["last_purchase_day"].get("median") or 0)
-            - (baseline["completion"]["last_purchase_day"].get("median") or 0),
-    }
-
-
 def write_report(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".csv":
         rows = []
         blocks = []
-        if payload.get("mode") == "rating_sensitivity":
-            for scenario, scenario_block in payload["scenarios"].items():
-                for strategy, block in scenario_block["strategies"].items():
-                    blocks.append((f"{scenario}:{strategy}", block))
-        else:
-            blocks = list(payload["strategies"].items())
+        blocks = list(payload["strategies"].items())
         for strategy, block in blocks:
             for run in block["runs"]:
                 for row in run["daily"]:
@@ -778,47 +808,30 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260813)
     parser.add_argument("--strategy", choices=STRATEGIES, action="append", help="omit to run all strategies")
     parser.add_argument("--repayment-behavior", choices=REPAYMENT_BEHAVIORS, default="deadline_aware")
-    parser.add_argument("--rating-sensitivity", action="store_true", help="run the five rating-threshold scenarios")
+    parser.add_argument("--repayment-unlock-day", type=int, default=1)
     parser.add_argument("--economic-scenario", choices=tuple(REPRESENTATIVE_ECONOMIC_SCENARIOS), help="run representative debt/cost overlay scenario; D is the no-overlay control")
     parser.add_argument("--output", type=Path, help="write JSON, or CSV when suffix is .csv")
     args = parser.parse_args()
-    if args.days < 1 or args.runs < 1:
-        parser.error("--days and --runs must be positive")
+    if args.days < 1 or args.runs < 1 or args.repayment_unlock_day < 1:
+        parser.error("--days, --runs, and --repayment-unlock-day must be positive")
     selected = args.strategy or list(STRATEGIES)
     economic_config = REPRESENTATIVE_ECONOMIC_SCENARIOS.get(args.economic_scenario) if args.economic_scenario else None
-    def run_strategy(index: int, strategy: str, thresholds: tuple[int, int]) -> dict[str, Any]:
-        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy, thresholds, economic_config, args.repayment_behavior) for run_index in range(args.runs)]
+    def run_strategy(index: int, strategy: str) -> dict[str, Any]:
+        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy, economic_config, args.repayment_behavior, args.repayment_unlock_day) for run_index in range(args.runs)]
         return {"runs": runs, "summary": summarize_runs(runs)}
 
-    if args.rating_sensitivity:
-        payload = {"mode": "rating_sensitivity", "days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "economic_scenario": args.economic_scenario, "economic_config": economic_config, "scenarios": {}}
-        for scenario, thresholds in RATING_SCENARIOS.items():
-            strategies = {strategy: run_strategy(index, strategy, thresholds) for index, strategy in enumerate(selected)}
-            payload["scenarios"][scenario] = {"thresholds": thresholds, "strategies": strategies}
-        baseline = payload["scenarios"]["baseline"]["strategies"]
-        for scenario_block in payload["scenarios"].values():
-            for strategy, block in scenario_block["strategies"].items():
-                block["delta_vs_baseline_day30"] = scenario_delta(block["summary"], baseline[strategy]["summary"])
-    else:
-        payload = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "economic_scenario": args.economic_scenario, "economic_config": economic_config, "repayment_behavior": args.repayment_behavior, "strategies": {}}
-        for index, strategy in enumerate(selected):
-            payload["strategies"][strategy] = run_strategy(index, strategy, FORMAL_RATING_THRESHOLDS)
+    payload = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "economic_scenario": args.economic_scenario, "economic_config": economic_config, "repayment_behavior": args.repayment_behavior, "repayment_unlock_day": args.repayment_unlock_day, "strategies": {}}
+    for index, strategy in enumerate(selected):
+        payload["strategies"][strategy] = run_strategy(index, strategy)
     print(f"Balance Simulator v1 | days={args.days} runs={args.runs} seed={args.seed} economic={args.economic_scenario or 'off'}")
     if 17 <= args.days:
         print("Day 17 benchmark: gold=5050 rating=3.2826 reviews=46 served=109 tents=1-4 dining=1 entertainment=2 greenery=2")
-    if args.rating_sensitivity:
-        for scenario, scenario_block in payload["scenarios"].items():
-            print(f"[{scenario}] thresholds={scenario_block['thresholds']}")
-            for strategy, block in scenario_block["strategies"].items():
-                end = block["summary"]["daily"][args.days]
-                print(f"{strategy} Day {args.days}: rating={end['average_rating']} 5star={block['summary']['checkpoints'].get(args.days, {}).get('star_proportions', {}).get('5', 0):.3f} gold={end['gold']} delta={block['delta_vs_baseline_day30']}")
-    else:
-        for strategy, block in payload["strategies"].items():
-            if 17 <= args.days:
-                summary = block["summary"]["daily"][17]
-                print(f"{strategy}: gold {summary['gold']} | rating {summary['average_rating']} | served {summary['cumulative_service_groups']}")
-            end = block["summary"]["daily"][args.days]
-            print(f"{strategy} Day {args.days}: gold={end['gold']} rating={end['average_rating']} net={end['daily_net']} day_demand={end['daytime_natural_demand']} overnight_demand={end['overnight_natural_demand']}")
+    for strategy, block in payload["strategies"].items():
+        if 17 <= args.days:
+            summary = block["summary"]["daily"][17]
+            print(f"{strategy}: gold {summary['gold']} | rating {summary['average_rating']} | served {summary['cumulative_service_groups']}")
+        end = block["summary"]["daily"][args.days]
+        print(f"{strategy} Day {args.days}: gold={end['gold']} rating={end['average_rating']} net={end['daily_net']} day_demand={end['daytime_natural_demand']} overnight_demand={end['overnight_natural_demand']}")
     if args.output:
         write_report(args.output, payload)
         print(f"report written: {args.output}")
