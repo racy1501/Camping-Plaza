@@ -180,8 +180,49 @@ def run_phase2c(args):
  shock_rows=phase2c_shock({{1:'early',20:'middle',45:'late'}[day]:value for day,value in states.items()}) if states else []
  print_phase2c(results,shock_rows)
  return results
+def phase2d_drive_day(engine, reservations):
+ while engine.state.turn<=5:
+  if engine.get_current_temporary_conflict_event():assert engine.resolve_current_temporary_conflict('verbal')['success']
+  if engine.state.turn in (2,3,4,5):
+   free,actions=turn_actions(engine,'balanced');assert engine.submit_turn_plan(free,actions)['success']
+  engine.advance_turn()
+ result=engine.submit_day_end_actions(day_end_actions(engine,'balanced'));assert result['success'];phase2c_repay(engine)
+ arrived=[x for x in engine.state.today_arrival_plan if x.get('arrival_status')=='arrived'];profile=engine.state.daily_demand_profile or {};generated,p=reservations.get(engine.state.day,(0,.15))
+ return {'day':engine.state.day,'natural_day':profile.get('natural_day_group_demand',0),'natural_overnight':profile.get('natural_overnight_group_demand',0),'reservation':generated,'total':len(arrived),'income':sum(engine.state.today_income.values()),'probability':p}
+def phase2d_shock(k,anchor,target):
+ """从同一 baseline 状态出发，实例级强制 rating，真实推进后三天。"""
+ random.seed(910000+anchor);engine=CampingPlazaEngine(':memory:');reservations={};install_phase2c_overlay(engine,.25,0,reservations)
+ while engine.state.day<=anchor:
+  phase2d_drive_day(engine,reservations)
+  if engine.state.day==anchor:break
+  assert engine.start_next_day()['success']
+ install_phase2c_overlay(engine,.25,k,reservations);engine.get_average_rating=lambda:target
+ rows=[]
+ for _ in range(3):
+  assert engine.start_next_day()['success'];rows.append(phase2d_drive_day(engine,reservations))
+ return rows
+def phase2d_probability_stats(runs):
+ values=[x['reservation_probability'] for r in runs for x in r['daily']]
+ stats=qstats(values);stats['p25']=sorted(values)[round((len(values)-1)*.25)];stats['p75']=sorted(values)[round((len(values)-1)*.75)]
+ bins=Counter('<3.0' if x['rating'] is not None and x['rating']<3 else '3.0-3.49' if x['rating'] is not None and x['rating']<3.5 else '3.5-3.99' if x['rating'] is not None and x['rating']<4 else '4.0-4.49' if x['rating'] is not None and x['rating']<4.5 else '>=4.5' for r in runs for x in r['daily'])
+ return stats,bins
+def phase2d_grid(args):
+ slopes=[round(x*.005,3) for x in range(21)];rows=[]
+ for k in slopes:
+  runs=[simulate_phase2c(args.seed+i,args.days,f'k={k}',.25,k) for i in range(args.runs)]
+  stats,bins=phase2d_probability_stats(runs);base=[phase2d_shock(k,anchor,4.0) for anchor in (1,20,45)];low=[phase2d_shock(k,anchor,3.5) for anchor in (1,20,45)]
+  diffs=[]
+  for b,l in zip(base,low):diffs.append({'d1_guests':b[0]['total']-l[0]['total'],'d1_income':b[0]['income']-l[0]['income'],'d3_guests':sum(x['total'] for x in b)-sum(x['total'] for x in l),'d3_income':sum(x['income'] for x in b)-sum(x['income'] for x in l)})
+  rows.append({'k':k,'prob':stats,'bins':bins,'middle':diffs[1],'late':diffs[2]})
+ print('PHASE2D_GRID k p35 p40 p45 middle_d1_guests middle_d1_income middle_d3_guests middle_d3_income late_d1_guests late_d1_income late_d3_guests late_d3_income')
+ for x in rows:
+  k=x['k'];p=lambda r:clamp(.15+(r-3)*k,.05,.30);m=x['middle'];l=x['late'];print(k,f'{p(3.5):.3f}',f'{p(4):.3f}',f'{p(4.5):.3f}',m['d1_guests'],m['d1_income'],m['d3_guests'],m['d3_income'],l['d1_guests'],l['d1_income'],l['d3_guests'],l['d3_income'])
+ return rows
 def main():
- p=argparse.ArgumentParser();p.add_argument('--seed',type=int,default=20260824);p.add_argument('--runs',type=int,default=500);p.add_argument('--days',type=int,default=20);p.add_argument('--strategy',default='balanced',choices=('growth_priority','balanced','quality_priority'));p.add_argument('--phase2c',action='store_true');p.add_argument('--phase2c-candidates');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--seed',type=int,default=20260824);p.add_argument('--runs',type=int,default=500);p.add_argument('--days',type=int,default=20);p.add_argument('--strategy',default='balanced',choices=('growth_priority','balanced','quality_priority'));p.add_argument('--phase2c',action='store_true');p.add_argument('--phase2c-candidates');p.add_argument('--phase2d-grid',action='store_true');a=p.parse_args()
+ if a.phase2d_grid:
+  if a.days<45:raise ValueError('Phase 2D grid requires --days >= 45')
+  phase2d_grid(a);return
  if a.phase2c:
   if a.days<45:raise ValueError('Phase 2C requires --days >= 45')
   run_phase2c(a);return
