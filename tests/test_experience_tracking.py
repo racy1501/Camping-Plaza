@@ -84,6 +84,20 @@ class ExperienceTrackingTests(unittest.TestCase):
         ]
         self.assertEqual(direct_assignments, ["npc.total_satisfaction = after"])
 
+    def test_review_score_applies_negative_experience_without_mutating_total(self):
+        self.npc.total_satisfaction = 80
+        self.npc.negative_experience_total = 10
+        self.assertEqual(self.engine._get_review_score(self.npc), 70)
+        self.assertEqual(self.npc.total_satisfaction, 80)
+
+    def test_current_rating_uses_latest_twenty_reviews_without_deleting_history(self):
+        self.engine.state.review_history = [{"rating": 1} for _ in range(5)] + [{"rating": 5} for _ in range(20)]
+        self.assertEqual(self.engine.get_average_rating(), 5.0)
+        self.assertEqual(len(self.engine.state.review_history), 25)
+        self.engine.state.review_history = [{"rating": 4} for _ in range(19)]
+        self.assertEqual(self.engine.get_average_rating(), 4.0)
+        self.assertEqual(self.engine.TEMPORARY_CONFLICT_EVENT_PROBABILITY, 0.25)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1126,8 +1126,7 @@ class DailyDemandHelperTests(unittest.TestCase):
 
     def test_management_quality_uses_equal_weighted_four_terms(self):
         engine = make_engine()
-        engine.state.total_reviews = 5
-        engine.state.total_rating_sum = 20
+        engine.state.review_history = [{"rating": 4} for _ in range(5)]
         engine.facilities["dining"].level = 2
         engine.facilities["entertainment"].level = 1
         engine.facilities["greenery"].greenery_satisfaction = 5.0
@@ -1141,25 +1140,23 @@ class DailyDemandHelperTests(unittest.TestCase):
         self.assertIsNone(engine.get_average_rating())
         self.assertAlmostEqual(engine._get_average_rating_ratio(), 0.6)
 
-        engine._apply_review_rating(5)
+        engine.state.review_history.append({"rating": 5})
         self.assertEqual(engine.get_average_rating(), 5.0)
         self.assertAlmostEqual(engine._get_average_rating_ratio(), 1.0)
 
-        engine._apply_review_rating(4)
+        engine.state.review_history.append({"rating": 4})
         self.assertEqual(engine.get_average_rating(), 4.5)
         self.assertAlmostEqual(engine._get_average_rating_ratio(), 0.9)
 
-        for _ in range(9):
-            engine._apply_review_rating(1)
-        self.assertEqual(engine.state.total_reviews, 11)
+        engine.state.review_history.extend({"rating": 1} for _ in range(9))
+        self.assertEqual(len(engine.state.review_history), 11)
         self.assertAlmostEqual(engine.get_average_rating(), 18 / 11)
         self.assertAlmostEqual(engine._get_average_rating_ratio(), (18 / 11) / 5)
 
-        for _ in range(89):
-            engine._apply_review_rating(5)
-        self.assertEqual(engine.state.total_reviews, 100)
-        self.assertAlmostEqual(engine.get_average_rating(), 463 / 100)
-        self.assertAlmostEqual(engine._get_average_rating_ratio(), 463 / 500)
+        engine.state.review_history.extend({"rating": 5} for _ in range(89))
+        self.assertEqual(len(engine.state.review_history), 100)
+        self.assertAlmostEqual(engine.get_average_rating(), 5.0)
+        self.assertAlmostEqual(engine._get_average_rating_ratio(), 1.0)
 
     def test_development_degree_changes_with_unlocked_tent_count(self):
         engine = make_engine()

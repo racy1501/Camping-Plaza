@@ -201,7 +201,7 @@ class CampingPlazaEngine:
     HOT_SPRING_PRICE_PER_PERSON = 80
     HOT_SPRING_SATISFACTION_GAIN = 6
     HOT_SPRING_DAILY_CAPACITY = 20
-    TEMPORARY_CONFLICT_EVENT_PROBABILITY = 0.70
+    TEMPORARY_CONFLICT_EVENT_PROBABILITY = 0.25
     TEMPORARY_CONFLICT_SAME_TEMPERAMENT_MULTIPLIER = 0.95
     TEMPORARY_CONFLICT_DIFFERENT_TEMPERAMENT_MULTIPLIER = 1.05
     TEMPORARY_CONFLICT_SATISFACTION_PENALTY = 2
@@ -816,10 +816,11 @@ class CampingPlazaEngine:
         ) / 4
 
     def get_average_rating(self) -> Optional[float]:
-        """返回已结算评价的真实平均星级；尚无评价时返回 None。"""
-        if self.state.total_reviews <= 0:
+        """返回最近 20 条已结算评价的当前平均星级；尚无评价时返回 None。"""
+        ratings = [int(review["rating"]) for review in self.state.review_history]
+        if not ratings:
             return None
-        return self.state.total_rating_sum / self.state.total_reviews
+        return sum(ratings[-20:]) / min(len(ratings), 20)
 
     def get_debt_summary(self) -> dict:
         """返回启动负债的当前派生摘要。"""
@@ -4923,7 +4924,7 @@ class CampingPlazaEngine:
 
         npc.review_attempted = True
         if random.random() < 0.5:
-            rating = self._calculate_rating(npc.total_satisfaction)
+            rating = self._calculate_rating(self._get_review_score(npc))
             npc.review_rating = rating
             npc.review_left = True
             self.state.pending_reviews.append({
@@ -4952,9 +4953,6 @@ class CampingPlazaEngine:
             ratings.append(rating)
             self.state.review_history.append(dict(review))
 
-        if len(self.state.review_history) > self.EVENT_HISTORY_LIMIT:
-            del self.state.review_history[:-self.EVENT_HISTORY_LIMIT]
-
         self.state.pending_reviews = [
             review for review in self.state.pending_reviews
             if review.get("created_day", self.state.day) >= self.state.day
@@ -4965,7 +4963,11 @@ class CampingPlazaEngine:
         self.state.total_reviews += 1
         self.state.total_rating_sum += rating
 
-    def _calculate_rating(self, satisfaction: int) -> int:
+    def _get_review_score(self, npc: NPCGroup) -> float:
+        """评价只额外读取已记录的负向体验，不改写客组最终满意度。"""
+        return npc.total_satisfaction - npc.negative_experience_total
+
+    def _calculate_rating(self, satisfaction: float) -> int:
         if satisfaction >= 84:
             return 5
         elif satisfaction >= 72:
