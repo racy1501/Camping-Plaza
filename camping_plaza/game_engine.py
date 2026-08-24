@@ -1274,6 +1274,9 @@ class CampingPlazaEngine:
             return {"success": False, "message": "当前没有可处理的临时事件"}
         if choice not in {"verbal", "gift"}:
             return {"success": False, "message": "无效的临时事件处理方式"}
+        if not isinstance(event.get(f"{choice}_result"), dict):
+            self.state.today_conflict_event = {"status": "no_event"}
+            return {"success": False, "message": "临时事件数据已失效，本场事件已安全结束"}
         cost = self.TEMPORARY_CONFLICT_GIFT_COST if choice == "gift" else 0
         if self.state.balance < cost:
             return {"success": False, "message": "余额不足，无法准备水果或小礼物"}
@@ -1798,6 +1801,14 @@ class CampingPlazaEngine:
                     normalized_item["data"] = {}
                 normalized_history.append(normalized_item)
             restored_state.event_history = normalized_history
+            pending_conflict = restored_state.today_conflict_event
+            if (
+                isinstance(pending_conflict, dict)
+                and pending_conflict.get("status") == "scheduled"
+                and ("mediate_result" in pending_conflict or "ignore_result" in pending_conflict)
+                and not {"verbal_result", "gift_result"}.issubset(pending_conflict)
+            ):
+                restored_state.today_conflict_event = {"status": "no_event"}
             restored_state.event_sequence = max(
                 int(restored_state.event_sequence or 0),
                 max(
