@@ -581,6 +581,7 @@ def simulate_run(
         telemetry: dict[str, list[dict[str, Any]]] = {
             "turns": [], "day_end": [], "conflicts": [],
         }
+        active_trace: dict[str, Any] | None = None
         tent_failures = 0
         original_review = engine._try_leave_review
         def capture_review(npc: Any, result: dict) -> None:
@@ -610,6 +611,69 @@ def simulate_run(
                 for tid, tent in engine.tents.items()
             )
         engine._handle_breakdowns = capture_breakdowns  # type: ignore[method-assign]
+        original_arrival_processor = engine._process_planned_arrivals
+
+        def capture_planned_arrivals(result: dict) -> None:
+            before = {
+                entry.get("npc_id"): entry.get("arrival_status")
+                for entry in engine.state.today_arrival_plan
+                if entry.get("planned_day") == engine.state.day
+                and entry.get("arrival_turn") == engine.state.turn
+            }
+            original_arrival_processor(result)
+            if (
+                active_trace is not None
+                and engine.state.turn == active_trace["turn"]
+            ):
+                active_trace["arrival_ids_processed_during_checkin"] = [
+                    entry["npc_id"]
+                    for entry in engine.state.today_arrival_plan
+                    if entry.get("planned_day") == engine.state.day
+                    and entry.get("arrival_turn") == engine.state.turn
+                    and before.get(entry.get("npc_id")) == "pending"
+                    and entry.get("arrival_status") == "arrived"
+                ]
+
+        engine._process_planned_arrivals = capture_planned_arrivals  # type: ignore[method-assign]
+        original_checkin = engine._process_checkin
+
+        def capture_checkin(result: dict) -> None:
+            if (
+                active_trace is not None
+                and engine.state.turn == active_trace["turn"]
+            ):
+                active_trace.setdefault("execution_order", []).append("checkin")
+            original_checkin(result)
+
+        engine._process_checkin = capture_checkin  # type: ignore[method-assign]
+        original_clean_campsite = engine.clean_campsite
+
+        def capture_clean_campsite(*, consume_decision: bool = True) -> dict:
+            trace = active_trace
+            if trace is not None:
+                trace.setdefault("execution_order", []).append("clean_campsite")
+                trace["clean_candidate_ids"] = [
+                    npc.id for npc in engine.npc_pool if not npc.has_left
+                ]
+                trace["arrival_ids_before_clean"] = [
+                    npc.id
+                    for npc in engine.npc_pool
+                    if not npc.has_left and npc.arrival_turn == engine.state.turn
+                ]
+            action_result = original_clean_campsite(consume_decision=consume_decision)
+            if trace is not None:
+                trace["clean_success"] = bool(action_result.get("success"))
+                trace["clean_judged_ids"] = (
+                    list(trace.get("clean_candidate_ids", []))
+                    if action_result.get("success")
+                    else []
+                )
+                trace["clean_affected_ids"] = list(
+                    action_result.get("affected_npc_ids", [])
+                )
+            return action_result
+
+        engine.clean_campsite = capture_clean_campsite  # type: ignore[method-assign]
         daily: list[dict[str, Any]] = []
         purchases: dict[str, int | None] = {project: None for project in PROJECT_IDS}
         qualification_days: dict[str, int | None] = {project: None for project in PROJECT_IDS}
@@ -647,7 +711,9 @@ def simulate_run(
                             "food_risk_before": (
                                 engine.state.food_stock < planned_food_need(engine)
                             ),
+                            "execution_order": ["plan_submitted"],
                         })
+                    active_trace = telemetry["turns"][-1] if capture_telemetry else None
                 advanced = engine.advance_turn()
                 if capture_telemetry and engine.state.turn in (3, 4, 5, 6):
                     executed_turn = engine.state.turn - 1
@@ -667,6 +733,7 @@ def simulate_run(
                                     + execution.get("actions", [])
                                 )
                             ]
+                active_trace = None
             if overlay is not None:
                 overlay.settle_turn6_auto_costs(
                     engine,
