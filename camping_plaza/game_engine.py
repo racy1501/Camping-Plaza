@@ -4987,14 +4987,14 @@ class CampingPlazaEngine:
         """评价只额外读取已记录的负向体验，不改写客组最终满意度。"""
         return npc.total_satisfaction - npc.negative_experience_total
 
-    def _calculate_rating(self, satisfaction: float) -> int:
-        if satisfaction >= 84:
+    def _calculate_rating(self, review_score: float) -> int:
+        if review_score >= 76:
             return 5
-        elif satisfaction >= 72:
+        elif review_score >= 64:
             return 4
-        elif satisfaction >= 64:
+        elif review_score >= 56:
             return 3
-        elif satisfaction >= 56:
+        elif review_score >= 48:
             return 2
         else:
             return 1

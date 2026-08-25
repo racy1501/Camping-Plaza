@@ -2108,14 +2108,14 @@ class DelayedReviewSettlementTests(unittest.TestCase):
     def test_rating_threshold_boundaries(self):
         engine = make_engine()
         expected = {
-            55: 1,
-            56: 2,
-            63: 2,
-            64: 3,
-            71: 3,
-            72: 4,
-            83: 4,
-            84: 5,
+            47: 1,
+            48: 2,
+            55: 2,
+            56: 3,
+            63: 3,
+            64: 4,
+            75: 4,
+            76: 5,
         }
         for satisfaction, rating in expected.items():
             with self.subTest(satisfaction=satisfaction):
@@ -2139,7 +2139,7 @@ class DelayedReviewSettlementTests(unittest.TestCase):
 
         self.assertTrue(npc.review_left)
         self.assertTrue(npc.review_attempted)
-        self.assertEqual(npc.review_rating, 4)
+        self.assertEqual(npc.review_rating, 5)
         self.assertEqual(engine.state.total_reviews, 0)
         self.assertEqual(engine.state.total_rating_sum, 0)
         self.assertIsNone(engine.get_average_rating())
@@ -2452,7 +2452,7 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         self.assertIsNone(engine.get_average_rating())
         self.assertEqual(len(engine.state.pending_reviews), 1)
         self.assertEqual(engine.state.pending_reviews[0]["created_day"], 2)
-        self.assertEqual(engine.state.pending_reviews[0]["rating"], 4)
+        self.assertEqual(engine.state.pending_reviews[0]["rating"], 5)
 
 
 class CheckoutTurnTests(unittest.TestCase):
