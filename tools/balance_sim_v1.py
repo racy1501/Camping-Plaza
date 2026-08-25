@@ -369,7 +369,8 @@ def unlocked_tent_count(engine: CampingPlazaEngine) -> int:
     return sum(1 for tent in engine.tents.values() if tent.is_unlocked)
 
 
-def planned_food_need(engine: CampingPlazaEngine) -> int:
+def audit_pending_food_need(engine: CampingPlazaEngine) -> int:
+    """事后审计当天尚未结算的餐饮计划，不能用于策略决策。"""
     return sum(
         entry["group_size"]
         for entry in engine.state.today_arrival_plan
@@ -380,8 +381,9 @@ def planned_food_need(engine: CampingPlazaEngine) -> int:
     )
 
 
-def food_package_for_gap(engine: CampingPlazaEngine, reserve: int) -> str | None:
-    gap = max(0, planned_food_need(engine) + reserve - engine.state.food_stock)
+def visible_food_package(engine: CampingPlazaEngine, target_stock: int) -> str | None:
+    """只按当前可见库存补货，不读取后续客人的计划消费。"""
+    gap = max(0, target_stock - engine.state.food_stock)
     if gap <= 0:
         return None
     for key in ("small", "medium", "large"):
@@ -389,6 +391,18 @@ def food_package_for_gap(engine: CampingPlazaEngine, reserve: int) -> str | None
         if package["portions"] >= gap and engine.state.balance >= package["price"]:
             return key
     return "large" if engine.state.balance >= engine.FOOD_PACKAGES["large"]["price"] else None
+
+
+def visible_turn_food_package(engine: CampingPlazaEngine, strategy: str) -> str | None:
+    """按当前公开库存执行各策略的安全库存倾向。"""
+    threshold, target_stock = {
+        "growth_priority": (0, 4),
+        "balanced": (3, 8),
+        "quality_priority": (6, 14),
+    }[strategy]
+    if engine.state.food_stock > threshold:
+        return None
+    return visible_food_package(engine, target_stock)
 
 
 def broken_tent_ids(engine: CampingPlazaEngine) -> list[int]:
@@ -399,8 +413,35 @@ def turn_actions(engine: CampingPlazaEngine, strategy: str) -> tuple[list[dict],
     """返回本 Turn 的 free_actions / decision actions；不重写任何正式结算逻辑。"""
     free = [{"action": "clean_tents", "tent_ids": list(engine.tents)}]
     actions: list[dict] = []
-    food_reserve = {"growth_priority": 0, "balanced": 2, "quality_priority": 4}[strategy]
-    food = food_package_for_gap(engine, food_reserve)
+
+    if strategy == "quality_priority":
+        # 质量策略只使用本 Turn 已可见的库存、故障和在场客组；保留至少一点，
+        # 让后续真实出现的断粮或故障仍有处理空间。
+        food = visible_turn_food_package(engine, strategy)
+        if food:
+            actions.append({"action": "buy_food_package", "package_key": food})
+        for tent_id in broken_tent_ids(engine):
+            if len(actions) >= 3 or engine.state.balance < engine.REPAIR_COST:
+                break
+            actions.append({"action": "repair_tent", "tent_id": tent_id})
+
+        active_guest_count = sum(not npc.has_left for npc in engine.npc_pool)
+        if (
+            active_guest_count
+            and len(actions) < 3
+            and engine.state.decisions_left - len(actions) >= 2
+        ):
+            if (
+                engine.state.improve_service_uses_today
+                <= engine.state.clean_campsite_uses_today
+                and engine.state.improve_service_uses_today < 2
+            ):
+                actions.append({"action": "improve_service"})
+            elif engine.state.clean_campsite_uses_today < 2:
+                actions.append({"action": "clean_campsite"})
+        return free, actions[:engine.state.decisions_left]
+
+    food = visible_turn_food_package(engine, strategy)
     if food:
         actions.append({"action": "buy_food_package", "package_key": food})
     for tent_id in broken_tent_ids(engine):
@@ -408,12 +449,7 @@ def turn_actions(engine: CampingPlazaEngine, strategy: str) -> tuple[list[dict],
             break
         if engine.state.balance >= engine.REPAIR_COST:
             actions.append({"action": "repair_tent", "tent_id": tent_id})
-    if strategy == "quality_priority":
-        if engine.state.turn in (2, 3, 4) and len(actions) < 3:
-            actions.append({"action": "clean_campsite"})
-        if engine.state.turn in (2, 3, 4) and len(actions) < 3:
-            actions.append({"action": "improve_service"})
-    elif strategy == "balanced":
+    if strategy == "balanced":
         if engine.state.turn in (3, 4) and len(actions) < 3:
             actions.append({"action": "clean_campsite"})
         if engine.state.turn == 4 and len(actions) < 3:
@@ -433,7 +469,7 @@ def day_end_actions(
     """用正式 catalog 判断日终动作；默认使用正式债务状态。"""
     actions: list[dict] = []
     available = engine.state.balance
-    balance_buffer = {"growth_priority": 0, "balanced": 250, "quality_priority": 500}[strategy]
+    balance_buffer = {"growth_priority": 0, "balanced": 250, "quality_priority": 300}[strategy]
     # Greenery maintenance is a prerequisite for its formal growth projects.
     # Expansion-oriented agents perform only the minimum needed to unlock it;
     # the other agents maintain it as part of normal operating quality.
@@ -444,6 +480,13 @@ def day_end_actions(
         if (needs_greenery_progress or (strategy != "growth_priority" and maintenance_due)) and available >= 50 + balance_buffer:
             actions.append({"action": "manage_greenery", "params": {"action": "maintain"}})
             available -= 50
+    if strategy == "quality_priority":
+        # 日终食材会成为下一营业日唯一可见的运营准备；先补回一整包食材的
+        # 安全库存，再决定是否投入成长项目，不预知次日客流或消费计划。
+        food = visible_food_package(engine, 14)
+        if food and engine.FOOD_PACKAGES[food]["price"] <= available:
+            actions.append({"action": "buy_food_package", "params": {"package_key": food}})
+            available -= engine.FOOD_PACKAGES[food]["price"]
     catalog = {item["project_id"]: item for item in engine.get_growth_project_catalog()}
     for project_id in PROJECT_IDS:
         item = catalog.get(project_id)
@@ -461,10 +504,13 @@ def day_end_actions(
         if greenery.level < 2 and available >= 50:
             actions.insert(0, {"action": "manage_greenery", "params": {"action": "maintain"}})
             available -= 50
-    food = food_package_for_gap(engine, {"growth_priority": 0, "balanced": 2, "quality_priority": 4}[strategy])
-    if food and engine.FOOD_PACKAGES[food]["price"] <= available:
-        actions.append({"action": "buy_food_package", "params": {"package_key": food}})
-        available -= engine.FOOD_PACKAGES[food]["price"]
+    if strategy != "quality_priority":
+        food = visible_food_package(
+            engine, {"growth_priority": 4, "balanced": 8}[strategy]
+        )
+        if food and engine.FOOD_PACKAGES[food]["price"] <= available:
+            actions.append({"action": "buy_food_package", "params": {"package_key": food}})
+            available -= engine.FOOD_PACKAGES[food]["price"]
     for tent_id in broken_tent_ids(engine):
         if available >= engine.REPAIR_COST:
             actions.append({"action": "repair_tent", "params": {"tent_id": tent_id}})
@@ -709,7 +755,7 @@ def simulate_run(
                             "planned_free_actions": [item["action"] for item in free],
                             "broken_before": broken_tent_ids(engine),
                             "food_risk_before": (
-                                engine.state.food_stock < planned_food_need(engine)
+                                engine.state.food_stock < audit_pending_food_need(engine)
                             ),
                             "execution_order": ["plan_submitted"],
                         })
