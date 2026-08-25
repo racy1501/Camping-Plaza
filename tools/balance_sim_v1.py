@@ -357,6 +357,14 @@ def quantiles(values: list[float]) -> dict[str, float | None]:
     return {"p10": pick(0.10), "median": pick(0.50), "p90": pick(0.90)}
 
 
+def review_average(ratings: list[int], window: int | None = None) -> float | None:
+    """按正式已结算评价计算滚动或全历史平均；仅供模拟报告使用。"""
+    if not ratings:
+        return None
+    selected = ratings[-window:] if window is not None else ratings
+    return sum(selected) / len(selected)
+
+
 def unlocked_tent_count(engine: CampingPlazaEngine) -> int:
     return sum(1 for tent in engine.tents.values() if tent.is_unlocked)
 
@@ -500,6 +508,12 @@ def day_snapshot(
     return {
         "day": state.day, "gold": state.balance,
         "average_rating": engine.get_average_rating(), "review_count": state.total_reviews,
+        "rating_recent_10": review_average(
+            [int(review["rating"]) for review in state.review_history], 10
+        ),
+        "rating_all_history": review_average(
+            [int(review["rating"]) for review in state.review_history]
+        ),
         "stars_1": review_stars[1], "stars_2": review_stars[2], "stars_3": review_stars[3], "stars_4": review_stars[4], "stars_5": review_stars[5],
         "daytime_natural_demand": profile.get("natural_day_group_demand", 0),
         "overnight_natural_demand": profile.get("natural_overnight_group_demand", 0),
@@ -533,6 +547,8 @@ def simulate_run(
     economic_config: dict[str, int | str] | None = None,
     repayment_behavior: str = "deadline_aware",
     repayment_unlock_day: int = 1,
+    review_five_star_threshold: int = 84,
+    capture_telemetry: bool = False,
 ) -> dict[str, Any]:
     random.seed(seed)
     SIM_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -540,6 +556,17 @@ def simulate_run(
     engine = None
     try:
         engine = CampingPlazaEngine(str(Path(temp_dir) / "run.sqlite"))
+        if review_five_star_threshold != 84:
+            original_calculate_rating = engine._calculate_rating
+
+            def calculate_rating_with_simulated_five_star_threshold(
+                satisfaction: float,
+            ) -> int:
+                if satisfaction >= review_five_star_threshold:
+                    return 5
+                return original_calculate_rating(satisfaction)
+
+            engine._calculate_rating = calculate_rating_with_simulated_five_star_threshold  # type: ignore[method-assign]
         overlay = None
         if economic_config is not None:
             if repayment_behavior not in REPAYMENT_BEHAVIORS:
@@ -550,6 +577,10 @@ def simulate_run(
             install_economic_overlay_hooks(engine, overlay)
         final_satisfaction: Counter[int] = Counter()
         review_stars: Counter[int] = Counter()
+        review_events: list[dict[str, Any]] = []
+        telemetry: dict[str, list[dict[str, Any]]] = {
+            "turns": [], "day_end": [], "conflicts": [],
+        }
         tent_failures = 0
         original_review = engine._try_leave_review
         def capture_review(npc: Any, result: dict) -> None:
@@ -557,6 +588,17 @@ def simulate_run(
             original_review(npc, result)
             if npc.review_left:
                 review_stars[int(npc.review_rating)] += 1
+                positive_tags, negative_tags = engine._get_review_comment_candidates(npc)
+                review_events.append({
+                    "created_day": engine.state.day,
+                    "rating": int(npc.review_rating),
+                    "score": engine._get_review_score(npc),
+                    "satisfaction": npc.total_satisfaction,
+                    "positive_total": npc.positive_experience_total,
+                    "negative_total": npc.negative_experience_total,
+                    "positive_tags": positive_tags,
+                    "negative_tags": negative_tags,
+                })
         engine._try_leave_review = capture_review  # type: ignore[method-assign]
         original_breakdowns = engine._handle_breakdowns
         def capture_breakdowns(result: dict) -> None:
@@ -581,13 +623,50 @@ def simulate_run(
             while engine.state.turn <= 5:
                 event = engine.get_current_temporary_conflict_event()
                 if event is not None:
-                    engine.resolve_current_temporary_conflict("verbal")
+                    conflict_result = engine.resolve_current_temporary_conflict("verbal")
+                    if capture_telemetry:
+                        telemetry["conflicts"].append({
+                            "day": engine.state.day,
+                            "turn": engine.state.turn,
+                            "success": conflict_result.get("success", False),
+                            "message": conflict_result.get("message", ""),
+                        })
                 if engine.state.turn in (2, 3, 4, 5):
                     free, actions = turn_actions(engine, strategy)
                     submitted = engine.submit_turn_plan(free, actions)
                     if not submitted.get("success"):
                         raise RuntimeError(f"turn plan rejected: {submitted}")
-                engine.advance_turn()
+                    if capture_telemetry:
+                        telemetry["turns"].append({
+                            "day": engine.state.day,
+                            "turn": engine.state.turn,
+                            "decisions_before": engine.state.decisions_left + len(actions),
+                            "planned_actions": [item["action"] for item in actions],
+                            "planned_free_actions": [item["action"] for item in free],
+                            "broken_before": broken_tent_ids(engine),
+                            "food_risk_before": (
+                                engine.state.food_stock < planned_food_need(engine)
+                            ),
+                        })
+                advanced = engine.advance_turn()
+                if capture_telemetry and engine.state.turn in (3, 4, 5, 6):
+                    executed_turn = engine.state.turn - 1
+                    if executed_turn in (2, 3, 4, 5) and telemetry["turns"]:
+                        trace = telemetry["turns"][-1]
+                        if trace["day"] == engine.state.day and trace["turn"] == executed_turn:
+                            execution = advanced.get("plan_execution", {})
+                            trace["executed_actions"] = [
+                                {
+                                    "action": item.get("action"),
+                                    "success": bool(item.get("success")),
+                                    "affected_count": len(item.get("affected_npc_ids", [])),
+                                    "message": item.get("message", ""),
+                                }
+                                for item in (
+                                    execution.get("free_actions", [])
+                                    + execution.get("actions", [])
+                                )
+                            ]
             if overlay is not None:
                 overlay.settle_turn6_auto_costs(
                     engine,
@@ -617,6 +696,19 @@ def simulate_run(
             ))
             if not result.get("success"):
                 raise RuntimeError(f"day end rejected: {result}")
+            if capture_telemetry:
+                telemetry["day_end"].append({
+                    "day": engine.state.day,
+                    "results": [
+                        {
+                            "action": item.get("action"),
+                            "success": bool(item.get("success")),
+                            "message": item.get("message", ""),
+                            "project_id": (item.get("params") or {}).get("project_id"),
+                        }
+                        for item in result.get("results", [])
+                    ],
+                })
             for item in result.get("results", []):
                 if item.get("success") and item.get("action") == "repair_tent":
                     tent_repairs += 1
@@ -700,6 +792,9 @@ def simulate_run(
                 "economic_config": dict(economic_config) if economic_config is not None else None,
                 "repayment_behavior": repayment_behavior,
                 "repayment_unlock_day": repayment_unlock_day,
+                "review_five_star_threshold": review_five_star_threshold,
+                "review_events": review_events,
+                "telemetry": telemetry if capture_telemetry else None,
                 "debt": debt_summary, "economic_trace": economic_trace}
     finally:
         # Windows sandbox may retain a transient file handle. It must not change
@@ -809,18 +904,21 @@ def main() -> int:
     parser.add_argument("--strategy", choices=STRATEGIES, action="append", help="omit to run all strategies")
     parser.add_argument("--repayment-behavior", choices=REPAYMENT_BEHAVIORS, default="deadline_aware")
     parser.add_argument("--repayment-unlock-day", type=int, default=1)
+    parser.add_argument("--review-five-star-threshold", type=int, default=84)
     parser.add_argument("--economic-scenario", choices=tuple(REPRESENTATIVE_ECONOMIC_SCENARIOS), help="run representative debt/cost overlay scenario; D is the no-overlay control")
     parser.add_argument("--output", type=Path, help="write JSON, or CSV when suffix is .csv")
     args = parser.parse_args()
     if args.days < 1 or args.runs < 1 or args.repayment_unlock_day < 1:
         parser.error("--days, --runs, and --repayment-unlock-day must be positive")
+    if not 72 <= args.review_five_star_threshold <= 100:
+        parser.error("--review-five-star-threshold must be between 72 and 100")
     selected = args.strategy or list(STRATEGIES)
     economic_config = REPRESENTATIVE_ECONOMIC_SCENARIOS.get(args.economic_scenario) if args.economic_scenario else None
     def run_strategy(index: int, strategy: str) -> dict[str, Any]:
-        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy, economic_config, args.repayment_behavior, args.repayment_unlock_day) for run_index in range(args.runs)]
+        runs = [simulate_run(args.days, args.seed + index * 1_000_000 + run_index, strategy, economic_config, args.repayment_behavior, args.repayment_unlock_day, args.review_five_star_threshold) for run_index in range(args.runs)]
         return {"runs": runs, "summary": summarize_runs(runs)}
 
-    payload = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "economic_scenario": args.economic_scenario, "economic_config": economic_config, "repayment_behavior": args.repayment_behavior, "repayment_unlock_day": args.repayment_unlock_day, "strategies": {}}
+    payload = {"days": args.days, "runs": args.runs, "seed": args.seed, "real_day17": REAL_DAY17, "economic_scenario": args.economic_scenario, "economic_config": economic_config, "repayment_behavior": args.repayment_behavior, "repayment_unlock_day": args.repayment_unlock_day, "review_five_star_threshold": args.review_five_star_threshold, "strategies": {}}
     for index, strategy in enumerate(selected):
         payload["strategies"][strategy] = run_strategy(index, strategy)
     print(f"Balance Simulator v1 | days={args.days} runs={args.runs} seed={args.seed} economic={args.economic_scenario or 'off'}")
