@@ -1196,6 +1196,49 @@ class TurnPlanTests(unittest.TestCase):
                 self.assertTrue(existing.received_service_boost)
                 self.assertEqual(result["plan_execution"]["actions"][0]["action"], "improve_service")
 
+    def test_turn2_cleanup_includes_newly_arrived_guest_after_checkin(self):
+        engine = self._engine_for_plan(2)
+        arriving_id = 410
+        existing_id = 411
+        self._add_day_arrival(engine, arriving_id, 2)
+        engine.npc_pool.append(NPCGroup(
+            id=existing_id,
+            group_size=2,
+            visit_type="day",
+            total_satisfaction=60,
+            location="campsite",
+        ))
+        observed_order = []
+        original_checkin = engine._process_checkin
+        original_clean = engine.clean_campsite
+
+        def observe_checkin(result):
+            observed_order.append("arrivals")
+            return original_checkin(result)
+
+        def observe_clean(*, consume_decision=True):
+            observed_order.append("clean_campsite")
+            return original_clean(consume_decision=consume_decision)
+
+        engine._process_checkin = observe_checkin
+        engine.clean_campsite = observe_clean
+        self.assertTrue(
+            engine.submit_turn_plan([], [{"action": "clean_campsite"}])["success"]
+        )
+
+        with mock.patch("game_engine.random.random", return_value=0.0):
+            result = engine.advance_turn()
+
+        arriving = next(npc for npc in engine.npc_pool if npc.id == arriving_id)
+        existing = next(npc for npc in engine.npc_pool if npc.id == existing_id)
+        self.assertEqual(observed_order, ["arrivals", "clean_campsite"])
+        self.assertEqual(arriving.total_satisfaction, 64)
+        self.assertEqual(existing.total_satisfaction, 62)
+        self.assertIn(
+            arriving_id,
+            result["plan_execution"]["actions"][0]["affected_npc_ids"],
+        )
+
     def test_other_plan_actions_stay_before_arrival_then_service(self):
         engine = self._engine_for_plan(2)
         self._add_day_arrival(engine, 301, 2)
