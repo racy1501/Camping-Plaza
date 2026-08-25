@@ -3497,6 +3497,9 @@ class CampingPlazaEngine:
                     action["status"] = "waiting_for_restock"
                     action["result"] = "insufficient_food"
                     npc.had_food_shortage = True
+                    if not action.get("food_shortage_penalty_applied", False):
+                        self.apply_satisfaction_delta(npc, -4)
+                        action["food_shortage_penalty_applied"] = True
                     reaction = self._get_temperament_service_reaction(
                         npc, "insufficient_food"
                     )
@@ -4603,10 +4606,13 @@ class CampingPlazaEngine:
         targets = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.3:
-                targets.append(self._npc_replay_target(npc))
-                self.apply_satisfaction_delta(npc, 5)
-                npc.received_service_boost = True
-                affected.append(npc.id)
+                if not self._guest_received_daily_satisfaction_effect(
+                    npc.id, "improve_service"
+                ):
+                    targets.append(self._npc_replay_target(npc))
+                    self.apply_satisfaction_delta(npc, 5)
+                    npc.received_service_boost = True
+                    affected.append(npc.id)
 
         if affected:
             labels = [self._visible_guest_label(npc_id) for npc_id in affected]
@@ -4620,6 +4626,17 @@ class CampingPlazaEngine:
     def _active_guest_ids(self) -> list[int]:
         return [npc.id for npc in self.npc_pool if not npc.has_left]
 
+    def _guest_received_daily_satisfaction_effect(
+        self, npc_id: int, event_type: str
+    ) -> bool:
+        """复用当天经营事件中的命中客组，不新增重复的客组状态。"""
+        return any(
+            event.get("day") == self.state.day
+            and event.get("event_type") == event_type
+            and npc_id in event.get("guest_ids", [])
+            for event in self.state.event_history
+        )
+
     def clean_campsite(self, *, consume_decision: bool = True) -> dict:
         if self.state.turn not in (2, 3, 4, 5):
             return {"success": False, "message": "清洁营地只能在营业回合进行"}
@@ -4631,9 +4648,12 @@ class CampingPlazaEngine:
         targets = []
         for npc in self.npc_pool:
             if not npc.has_left and random.random() < 0.7:
-                targets.append(self._npc_replay_target(npc))
-                self.apply_satisfaction_delta(npc, 2)
-                affected.append(npc.id)
+                if not self._guest_received_daily_satisfaction_effect(
+                    npc.id, "clean_campsite"
+                ):
+                    targets.append(self._npc_replay_target(npc))
+                    self.apply_satisfaction_delta(npc, 2)
+                    affected.append(npc.id)
         if consume_decision:
             self.state.decisions_left -= 1
         self.state.clean_campsite_uses_today += 1

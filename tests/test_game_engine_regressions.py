@@ -3328,7 +3328,9 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(engine.state.food_stock, 2)
         self.assertEqual(engine.state.balance, 777)
         self.assertEqual(engine.state.today_income["dining"], 0)
-        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(npc.total_satisfaction, 46)
+        self.assertEqual(npc.negative_experience_total, 4)
+        self.assertTrue(action["food_shortage_penalty_applied"])
         self.assertEqual(npc.last_dining_day, 0)
         self.assertEqual(action["status"], "waiting_for_restock")
         self.assertEqual(action["result"], "insufficient_food")
@@ -3347,7 +3349,8 @@ class DiningRulesTests(unittest.TestCase):
 
         self.assertEqual(engine.state.food_stock, 0)
         self.assertEqual(engine.state.today_income["dining"], 0)
-        self.assertEqual(npc.total_satisfaction, 80)
+        self.assertEqual(npc.total_satisfaction, 76)
+        self.assertEqual(npc.negative_experience_total, 4)
         self.assertEqual(npc.last_dining_day, 0)
         self.assertEqual(action["status"], "waiting_for_restock")
 
@@ -3382,7 +3385,8 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(npc_a.last_dining_day, engine.state.day)
         self.assertEqual(npc_b.last_dining_day, 0)
         self.assertEqual(npc_a.total_satisfaction, 62)
-        self.assertEqual(npc_b.total_satisfaction, 70)
+        self.assertEqual(npc_b.total_satisfaction, 66)
+        self.assertEqual(npc_b.negative_experience_total, 4)
         self.assertEqual(action_a["status"], "completed")
         self.assertEqual(action_b["status"], "waiting_for_restock")
         self.assertEqual(len(result["events"]), 2)
@@ -3412,11 +3416,35 @@ class DiningRulesTests(unittest.TestCase):
         self.assertEqual(engine.state.food_stock, 9)
         self.assertEqual(engine.state.balance, 777)
         self.assertEqual(engine.state.today_income["dining"], 0)
-        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(npc.total_satisfaction, 46)
+        self.assertEqual(npc.negative_experience_total, 4)
         self.assertEqual(npc.last_dining_day, 0)
         self.assertEqual(action["status"], "waiting_for_restock")
         self.assertEqual(action["result"], "insufficient_food")
         self.assertEqual(second_result["events"], [])
+
+    def test_restocked_dining_keeps_shortage_penalty_and_grants_meal_bonus(self):
+        engine, npc = self._make_dining_npc(group_size=2, total_satisfaction=60)
+        engine.state.food_stock = 1
+        action = self._attach_dining_action(engine, npc, menu_key="basic")
+
+        engine._process_dining({"events": []})
+        self.assertEqual((npc.total_satisfaction, npc.negative_experience_total), (56, 4))
+
+        engine.state.food_stock = 2
+        engine._retry_waiting_dining_after_restock({"events": []})
+
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(npc.total_satisfaction, 58)
+        self.assertEqual(npc.negative_experience_total, 4)
+
+    def test_breakdown_penalty_still_uses_existing_negative_experience_rule(self):
+        engine, npc = self._make_dining_npc(total_satisfaction=60)
+
+        engine._apply_broken_penalty(npc)
+
+        self.assertEqual(npc.total_satisfaction, 50)
+        self.assertEqual(npc.negative_experience_total, 10)
 
     def test_existing_dining_ineligibility_still_skips_without_consuming_food(self):
         engine, npc = self._make_dining_npc(group_size=2, total_satisfaction=66)
@@ -3613,7 +3641,7 @@ class TentCleaningTests(unittest.TestCase):
         self.assertEqual(npc.total_satisfaction, 60)
         self.assertEqual(random_mock.call_count, 2)
 
-    def test_improve_service_can_hit_same_npc_twice_and_new_day_resets_limit(self):
+    def test_improve_service_same_day_credit_is_capped_and_new_day_resets(self):
         engine = make_engine()
         engine.state.turn = 2
         npc = NPCGroup(id=engine._next_npc_id(), group_size=2, visit_type="day")
@@ -3623,13 +3651,36 @@ class TentCleaningTests(unittest.TestCase):
             self.assertTrue(engine.improve_service()["success"])
             self.assertTrue(engine.improve_service()["success"])
 
-        self.assertEqual(npc.total_satisfaction, 70)
+        self.assertEqual(npc.total_satisfaction, 65)
         self.assertTrue(npc.received_service_boost)
         self.assertEqual(engine.state.improve_service_uses_today, 2)
 
         engine._new_day()
 
         self.assertEqual(engine.state.improve_service_uses_today, 0)
+        engine.state.turn = 2
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            self.assertTrue(engine.improve_service()["success"])
+        self.assertEqual(npc.total_satisfaction, 70)
+
+    def test_clean_campsite_same_day_credit_is_capped_and_service_is_independent(self):
+        engine = make_engine()
+        engine.state.turn = 2
+        npc = NPCGroup(id=engine._next_npc_id(), group_size=2, visit_type="day")
+        engine.npc_pool.append(npc)
+
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            self.assertTrue(engine.clean_campsite(consume_decision=False)["success"])
+            self.assertTrue(engine.clean_campsite(consume_decision=False)["success"])
+            self.assertTrue(engine.improve_service(consume_decision=False)["success"])
+
+        self.assertEqual(npc.total_satisfaction, 67)
+
+        engine._new_day()
+        engine.state.turn = 2
+        with mock.patch("game_engine.random.random", return_value=0.1):
+            self.assertTrue(engine.clean_campsite(consume_decision=False)["success"])
+        self.assertEqual(npc.total_satisfaction, 69)
 
     def test_clean_tents_blocked_when_day_end_completed(self):
         """日终清单完成后不能再次清洁帐篷"""
