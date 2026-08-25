@@ -79,6 +79,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
         self.engine.state.day = 12
+        self.engine.state.campsite_star = 4
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["prerequisite_met"])
         self.assertTrue(project["operation_requirement_met"])
@@ -94,6 +95,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
         self.engine.state.total_served_groups = 75
+        self.engine.state.campsite_star = 4
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["operation_requirement_met"])
 
@@ -106,6 +108,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.engine.tents[4].is_unlocked = True
         self.engine.facilities["dining"].level = 1
         self.engine.facilities["entertainment"].level = 1
+        self.engine.state.campsite_star = 4
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["prerequisite_met"])
         self.assertTrue(project["operation_requirement_met"])

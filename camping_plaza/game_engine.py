@@ -113,6 +113,8 @@ class GameState:
     total_rating_sum: int = 0
     pending_reviews: list = field(default_factory=list)
     review_history: list = field(default_factory=list)
+    campsite_star: int = 1
+    historical_highest_rating: Optional[float] = None
     pending_turn_plan: Optional[dict] = None
 
     today_income: dict = field(default_factory=lambda: {
@@ -382,6 +384,17 @@ class CampingPlazaEngine:
     DEBT_RESULT_ACHIEVEMENT_IDS = frozenset({
         "debt_paid_by_deadline", "debt_unpaid_by_deadline",
     })
+    CAMPSITE_STAR_REQUIREMENTS = {
+        2: {"served_groups": 15, "growth_nodes": 1},
+        3: {"served_groups": 45, "growth_nodes": 5, "historical_rating": 4.1},
+        4: {"served_groups": 90, "growth_nodes": 9, "historical_rating": 4.3},
+        5: {
+            "served_groups": 150,
+            "growth_nodes": 10,
+            "historical_rating": 4.6,
+            "hot_spring_built": True,
+        },
+    }
     GROWTH_PROJECT_CATALOG = (
         {
             "project_id": "tent_2", "category": "tent", "display_name": "2号帐篷",
@@ -821,6 +834,85 @@ class CampingPlazaEngine:
         if not ratings:
             return None
         return sum(ratings[-20:]) / min(len(ratings), 20)
+
+    def get_campsite_star_progress(self) -> dict:
+        """只读返回营地星级与下一星级条件进度。"""
+        current_star = self.state.campsite_star
+        next_star = current_star + 1 if current_star < 5 else None
+        progress = {
+            "campsite_star": current_star,
+            "historical_highest_rating": self.state.historical_highest_rating,
+            "next_star": next_star,
+        }
+        if next_star is not None:
+            requirements = self.CAMPSITE_STAR_REQUIREMENTS[next_star]
+            growth_progress = self.get_growth_progress()
+            progress["next_star_requirements"] = dict(requirements)
+            progress["next_star_requirement_met"] = self._is_campsite_star_requirement_met(
+                next_star, growth_progress
+            )
+        return progress
+
+    def _is_campsite_star_requirement_met(
+        self, target_star: int, growth_progress: Optional[dict] = None
+    ) -> bool:
+        requirements = self.CAMPSITE_STAR_REQUIREMENTS[target_star]
+        growth_progress = growth_progress or self.get_growth_progress()
+        if self.state.total_served_groups < requirements["served_groups"]:
+            return False
+        if growth_progress["completed_growth_nodes"] < requirements["growth_nodes"]:
+            return False
+        required_rating = requirements.get("historical_rating")
+        if (
+            required_rating is not None
+            and (
+                self.state.historical_highest_rating is None
+                or self.state.historical_highest_rating < required_rating
+            )
+        ):
+            return False
+        return (
+            not requirements.get("hot_spring_built")
+            or self.state.hot_spring_built
+        )
+
+    def _update_campsite_star(self) -> bool:
+        """按顺序升级营地星级；已获得的星级绝不回退。"""
+        upgraded = False
+        while self.state.campsite_star < 5:
+            target_star = self.state.campsite_star + 1
+            if not self._is_campsite_star_requirement_met(target_star):
+                break
+            self.state.campsite_star = target_star
+            upgraded = True
+        return upgraded
+
+    def _migrate_legacy_campsite_star_state(self, raw_state: dict) -> None:
+        """仅为缺少星级字段的旧快照恢复可证明的最低营地星级。"""
+        if "total_served_groups" not in raw_state:
+            achievement_lower_bounds = {
+                "served_groups_50": 50,
+                "served_groups_100": 100,
+                "served_groups_150": 150,
+            }
+            self.state.total_served_groups = max(
+                (
+                    served_groups
+                    for achievement_id, served_groups in achievement_lower_bounds.items()
+                    if achievement_id in self.state.unlocked_achievement_ids
+                ),
+                default=0,
+            )
+
+        if "historical_highest_rating" not in raw_state:
+            try:
+                current_rating = self.get_average_rating()
+            except (KeyError, TypeError, ValueError):
+                current_rating = None
+            if current_rating is not None:
+                self.state.historical_highest_rating = current_rating
+
+        self._update_campsite_star()
 
     def get_debt_summary(self) -> dict:
         """返回启动负债的当前派生摘要。"""
@@ -1743,11 +1835,29 @@ class CampingPlazaEngine:
                 return "load_error"
 
             # 原子恢复：所有对象先在局部构造，全部成功后再一次性赋值给实例字段
+            raw_state = payload["state"]
+            legacy_campsite_star_state = not {
+                "campsite_star", "historical_highest_rating",
+            }.issubset(raw_state)
             state_fields = {f for f in GameState.__dataclass_fields__}
             restored_state = GameState()
-            for key, value in payload["state"].items():
+            for key, value in raw_state.items():
                 if key in state_fields:
                     setattr(restored_state, key, value)
+            try:
+                restored_state.campsite_star = min(
+                    5, max(1, int(restored_state.campsite_star))
+                )
+            except (TypeError, ValueError):
+                restored_state.campsite_star = 1
+            try:
+                historical_highest_rating = restored_state.historical_highest_rating
+                restored_state.historical_highest_rating = (
+                    min(5.0, max(1.0, float(historical_highest_rating)))
+                    if historical_highest_rating is not None else None
+                )
+            except (TypeError, ValueError):
+                restored_state.historical_highest_rating = None
             restored_state.today_expenses = {
                 category: int((restored_state.today_expenses or {}).get(category, 0) or 0)
                 for category in (
@@ -1847,6 +1957,8 @@ class CampingPlazaEngine:
             self.facilities = restored_facilities
             self.npc_pool = restored_npc_pool
             self._npc_id_counter = restored_npc_id_counter
+            if legacy_campsite_star_state:
+                self._migrate_legacy_campsite_star_state(raw_state)
             return "loaded"
         except Exception:
             return "load_error"
@@ -1886,6 +1998,7 @@ class CampingPlazaEngine:
         for threshold in (50, 100, 150):
             if self.state.total_served_groups >= threshold:
                 self._unlock_achievement(f"served_groups_{threshold}")
+        self._update_campsite_star()
         return True
 
     def _record_successful_dining_once(self, npc: NPCGroup) -> bool:
@@ -1945,6 +2058,8 @@ class CampingPlazaEngine:
                 self.state.successful_greenery_maintenance_count
             ),
             "hot_spring_built": self.state.hot_spring_built,
+            "campsite_star": self.state.campsite_star,
+            "historical_highest_rating": self.state.historical_highest_rating,
             "operating_day": self.state.day,
         }
 
@@ -2043,10 +2158,16 @@ class CampingPlazaEngine:
             elif category == "hot_spring":
                 completed = self.state.hot_spring_built
                 current_nodes = self.get_growth_progress()["completed_growth_nodes"]
-                prerequisite_met = current_nodes >= project["required_growth_nodes"]
+                campsite_star_met = self.state.campsite_star >= 4
+                prerequisite_met = (
+                    current_nodes >= project["required_growth_nodes"]
+                    and campsite_star_met
+                )
                 progress = {
                     "current_completed_growth_nodes": current_nodes,
                     "required_completed_growth_nodes": project["required_growth_nodes"],
+                    "current_campsite_star": self.state.campsite_star,
+                    "required_campsite_star": 4,
                 }
                 prerequisite_unmet_code = "growth_nodes_required"
             else:
@@ -2070,7 +2191,13 @@ class CampingPlazaEngine:
                 unmet_conditions.append("already_completed")
             else:
                 if not prerequisite_met:
-                    unmet_conditions.append(prerequisite_unmet_code)
+                    if category == "hot_spring":
+                        if current_nodes < project["required_growth_nodes"]:
+                            unmet_conditions.append(prerequisite_unmet_code)
+                        if self.state.campsite_star < 4:
+                            unmet_conditions.append("campsite_star_required")
+                    else:
+                        unmet_conditions.append(prerequisite_unmet_code)
                 if not operation_requirement_met:
                     unmet_conditions.append(operation_unmet_code)
                 if not affordable:
@@ -2166,6 +2293,7 @@ class CampingPlazaEngine:
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
+            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2197,6 +2325,7 @@ class CampingPlazaEngine:
                 }
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
+            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2242,6 +2371,7 @@ class CampingPlazaEngine:
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
+            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2275,6 +2405,7 @@ class CampingPlazaEngine:
 
         self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
         self._record_growth_project_achievements(project_id)
+        self._update_campsite_star()
         result = {
             "success": True,
             "project_id": project_id,
@@ -4977,6 +5108,16 @@ class CampingPlazaEngine:
             review for review in self.state.pending_reviews
             if review.get("created_day", self.state.day) >= self.state.day
         ]
+        current_rating = self.get_average_rating()
+        if (
+            current_rating is not None
+            and (
+                self.state.historical_highest_rating is None
+                or current_rating > self.state.historical_highest_rating
+            )
+        ):
+            self.state.historical_highest_rating = current_rating
+        self._update_campsite_star()
         result["events"].append(f"晨间更新了{len(ratings)}条评价。")
 
     def _apply_review_rating(self, rating: int):
@@ -5605,6 +5746,7 @@ class CampingPlazaEngine:
             "turn": self.state.turn,
             "balance": self.state.balance,
             "average_rating": self.get_average_rating(),
+            "campsite_star": self.get_campsite_star_progress(),
             "tents": safe_tents,
             "facilities": {k: asdict(v) for k, v in self.facilities.items()},
             "greenery": {

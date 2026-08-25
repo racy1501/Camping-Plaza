@@ -209,6 +209,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
         self.engine.state.total_served_groups = 150 if day < 25 else 0
+        self.engine.state.campsite_star = 4
 
     def test_hot_spring_purchase_is_atomic_repeat_safe_and_persistent(self):
         self._qualify_hot_spring()

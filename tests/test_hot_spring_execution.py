@@ -267,6 +267,7 @@ class HotSpringExecutionTests(unittest.TestCase):
             self.engine.tents[tent_id].is_unlocked = True
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
+        self.engine.state.campsite_star = 4
 
         purchase = self.engine.purchase_growth_project("hot_spring")
         self.assertTrue(purchase["success"])

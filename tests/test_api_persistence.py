@@ -223,6 +223,7 @@ class GrowthProjectActionTests(ApiPersistenceTestCase):
             self.engine.tents[tent_id].is_unlocked = True
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
+        self.engine.state.campsite_star = 4
 
     def test_purchase_growth_project_success_dispatches_and_saves_once(self):
         self._qualify_hot_spring()
@@ -321,6 +322,7 @@ class GrowthQueryTests(ApiPersistenceTestCase):
             self.engine.tents[tent_id].is_unlocked = True
         self.engine.facilities["dining"].level = 2
         self.engine.facilities["entertainment"].level = 2
+        self.engine.state.campsite_star = 4
 
     def _hot_spring_project(self, response):
         return next(
