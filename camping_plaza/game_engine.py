@@ -404,68 +404,67 @@ class CampingPlazaEngine:
         {
             "project_id": "tent_3", "category": "tent", "display_name": "3号帐篷",
             "price": 1100, "target_tent_id": 3, "sequence": 2,
-            "prerequisite_tent_id": 2, "operation": "served_or_day",
-            "required_served_groups": 15, "fallback_operating_day": 7,
+            "prerequisite_tent_id": 2, "operation": "campsite_star",
+            "required_campsite_star": 2,
         },
         {
             "project_id": "tent_4", "category": "tent", "display_name": "4号帐篷",
             "price": 1900, "target_tent_id": 4, "sequence": 3,
-            "prerequisite_tent_id": 3, "operation": "served_or_day",
-            "required_served_groups": 50, "fallback_operating_day": 12,
+            "prerequisite_tent_id": 3, "operation": "campsite_star",
+            "required_campsite_star": 3,
         },
         {
             "project_id": "tent_5", "category": "tent", "display_name": "5号帐篷",
             "price": 3200, "target_tent_id": 5, "sequence": 4,
-            "prerequisite_tent_id": 4, "operation": "served_or_day",
-            "required_served_groups": 90, "fallback_operating_day": 17,
+            "prerequisite_tent_id": 4, "operation": "campsite_star",
+            "required_campsite_star": 4,
         },
         {
             "project_id": "tent_6", "category": "tent", "display_name": "6号帐篷",
             "price": 4800, "target_tent_id": 6, "sequence": 5,
-            "prerequisite_tent_id": 5, "operation": "served_or_day",
-            "required_served_groups": 150, "fallback_operating_day": 23,
+            "prerequisite_tent_id": 5, "operation": "campsite_star",
+            "required_campsite_star": 5,
         },
         {
             "project_id": "dining_lv1", "category": "dining", "display_name": "餐饮 Lv1",
             "price": 700, "target_level": 1, "sequence": 6,
-            "required_level": 0, "operation": "successful_dining",
-            "required_successful_dining_groups": 8,
+            "required_level": 0, "operation": "campsite_star",
+            "required_campsite_star": 2,
         },
         {
             "project_id": "dining_lv2", "category": "dining", "display_name": "餐饮 Lv2",
             "price": 1800, "target_level": 2, "sequence": 7,
-            "required_level": 1, "operation": "successful_dining",
-            "required_successful_dining_groups": 36,
+            "required_level": 1, "operation": "campsite_star",
+            "required_campsite_star": 3,
         },
         {
             "project_id": "entertainment_lv1", "category": "entertainment",
             "display_name": "娱乐 Lv1", "price": 600, "target_level": 1,
-            "sequence": 8, "required_level": 0, "operation": "successful_paid_entertainment",
-            "required_successful_paid_entertainment_groups": 8,
+            "sequence": 8, "required_level": 0, "operation": "campsite_star",
+            "required_campsite_star": 2,
         },
         {
             "project_id": "entertainment_lv2", "category": "entertainment",
             "display_name": "娱乐 Lv2", "price": 1600, "target_level": 2,
-            "sequence": 9, "required_level": 1, "operation": "successful_paid_entertainment",
-            "required_successful_paid_entertainment_groups": 32,
+            "sequence": 9, "required_level": 1, "operation": "campsite_star",
+            "required_campsite_star": 3,
         },
         {
             "project_id": "greenery_lv1", "category": "greenery", "display_name": "绿化 Lv1",
             "price": 600, "target_level": 1, "sequence": 10,
-            "required_level": 0, "operation": "greenery_maintenance",
-            "required_successful_greenery_maintenance_count": 4,
+            "required_level": 0, "operation": "campsite_star",
+            "required_campsite_star": 2,
         },
         {
             "project_id": "greenery_lv2", "category": "greenery", "display_name": "绿化 Lv2",
             "price": 1600, "target_level": 2, "sequence": 11,
-            "required_level": 1, "operation": "greenery_maintenance",
-            "required_successful_greenery_maintenance_count": 12,
+            "required_level": 1, "operation": "campsite_star",
+            "required_campsite_star": 3,
         },
         {
             "project_id": "hot_spring", "category": "hot_spring", "display_name": "温泉",
             "price": 3000, "sequence": 12,
-            "operation": "hot_spring_operation", "required_served_groups": 75,
-            "fallback_operating_day": 12, "required_growth_nodes": 5,
+            "operation": "campsite_star", "required_campsite_star": 4,
         },
     )
     TURN_PLAN_ACTIONS = {
@@ -841,40 +840,70 @@ class CampingPlazaEngine:
         next_star = current_star + 1 if current_star < 5 else None
         progress = {
             "campsite_star": current_star,
+            "current_star": current_star,
             "historical_highest_rating": self.state.historical_highest_rating,
             "next_star": next_star,
+            "is_max_star": next_star is None,
         }
         if next_star is not None:
             requirements = self.CAMPSITE_STAR_REQUIREMENTS[next_star]
             growth_progress = self.get_growth_progress()
-            progress["next_star_requirements"] = dict(requirements)
-            progress["next_star_requirement_met"] = self._is_campsite_star_requirement_met(
+            conditions = self._get_campsite_star_condition_progress(
                 next_star, growth_progress
             )
+            progress["next_star_requirements"] = dict(requirements)
+            progress["conditions"] = conditions
+            progress["requirement_met"] = all(
+                condition["met"] for condition in conditions.values()
+            )
+            progress["next_star_requirement_met"] = progress["requirement_met"]
+        else:
+            progress["requirement_met"] = True
+            progress["next_star_requirement_met"] = None
         return progress
+
+    def _get_campsite_star_condition_progress(
+        self, target_star: int, growth_progress: Optional[dict] = None
+    ) -> dict:
+        """返回指定下一星级的逐项条件进度；条件集合来自正式星级要求。"""
+        requirements = self.CAMPSITE_STAR_REQUIREMENTS[target_star]
+        growth_progress = growth_progress or self.get_growth_progress()
+        conditions = {
+            "served_groups": {
+                "current": self.state.total_served_groups,
+                "required": requirements["served_groups"],
+                "met": self.state.total_served_groups >= requirements["served_groups"],
+            },
+            "growth_nodes": {
+                "current": growth_progress["completed_growth_nodes"],
+                "required": requirements["growth_nodes"],
+                "met": growth_progress["completed_growth_nodes"]
+                >= requirements["growth_nodes"],
+            },
+        }
+        if "historical_rating" in requirements:
+            current_rating = self.state.historical_highest_rating
+            required_rating = requirements["historical_rating"]
+            conditions["historical_rating"] = {
+                "current": current_rating,
+                "required": required_rating,
+                "met": current_rating is not None and current_rating >= required_rating,
+            }
+        if "hot_spring_built" in requirements:
+            conditions["hot_spring_built"] = {
+                "current": self.state.hot_spring_built,
+                "required": True,
+                "met": self.state.hot_spring_built,
+            }
+        return conditions
 
     def _is_campsite_star_requirement_met(
         self, target_star: int, growth_progress: Optional[dict] = None
     ) -> bool:
-        requirements = self.CAMPSITE_STAR_REQUIREMENTS[target_star]
-        growth_progress = growth_progress or self.get_growth_progress()
-        if self.state.total_served_groups < requirements["served_groups"]:
-            return False
-        if growth_progress["completed_growth_nodes"] < requirements["growth_nodes"]:
-            return False
-        required_rating = requirements.get("historical_rating")
-        if (
-            required_rating is not None
-            and (
-                self.state.historical_highest_rating is None
-                or self.state.historical_highest_rating < required_rating
-            )
-        ):
-            return False
-        return (
-            not requirements.get("hot_spring_built")
-            or self.state.hot_spring_built
+        conditions = self._get_campsite_star_condition_progress(
+            target_star, growth_progress
         )
+        return all(condition["met"] for condition in conditions.values())
 
     def _update_campsite_star(self) -> bool:
         """按顺序升级营地星级；已获得的星级绝不回退。"""
@@ -2076,6 +2105,16 @@ class CampingPlazaEngine:
                     "required_operating_day": required_day,
                 },
             )
+        if operation == "campsite_star":
+            required_star = project["required_campsite_star"]
+            return (
+                self.state.campsite_star >= required_star,
+                "campsite_star_required",
+                {
+                    "current_campsite_star": self.state.campsite_star,
+                    "required_campsite_star": required_star,
+                },
+            )
         if operation == "served_or_day":
             required_served = project["required_served_groups"]
             fallback_day = project["fallback_operating_day"]
@@ -2157,19 +2196,9 @@ class CampingPlazaEngine:
                 prerequisite_unmet_code = "previous_tent_required"
             elif category == "hot_spring":
                 completed = self.state.hot_spring_built
-                current_nodes = self.get_growth_progress()["completed_growth_nodes"]
-                campsite_star_met = self.state.campsite_star >= 4
-                prerequisite_met = (
-                    current_nodes >= project["required_growth_nodes"]
-                    and campsite_star_met
-                )
-                progress = {
-                    "current_completed_growth_nodes": current_nodes,
-                    "required_completed_growth_nodes": project["required_growth_nodes"],
-                    "current_campsite_star": self.state.campsite_star,
-                    "required_campsite_star": 4,
-                }
-                prerequisite_unmet_code = "growth_nodes_required"
+                prerequisite_met = True
+                progress = {}
+                prerequisite_unmet_code = ""
             else:
                 current_level = facility_levels[category]
                 completed = current_level >= project["target_level"]
@@ -2191,13 +2220,7 @@ class CampingPlazaEngine:
                 unmet_conditions.append("already_completed")
             else:
                 if not prerequisite_met:
-                    if category == "hot_spring":
-                        if current_nodes < project["required_growth_nodes"]:
-                            unmet_conditions.append(prerequisite_unmet_code)
-                        if self.state.campsite_star < 4:
-                            unmet_conditions.append("campsite_star_required")
-                    else:
-                        unmet_conditions.append(prerequisite_unmet_code)
+                    unmet_conditions.append(prerequisite_unmet_code)
                 if not operation_requirement_met:
                     unmet_conditions.append(operation_unmet_code)
                 if not affordable:

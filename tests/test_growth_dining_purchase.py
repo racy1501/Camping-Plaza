@@ -60,7 +60,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
 
     def test_dining_lv1_purchase_changes_only_level_and_balance(self):
         self._open_management_phase(balance=1000)
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
         hidden_before = self._dining_hidden_fields()
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
 
@@ -80,7 +80,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
     def test_dining_lv2_purchase_changes_only_level_and_balance(self):
         self._open_management_phase(balance=3000)
         self.engine.facilities["dining"].level = 1
-        self.engine.state.successful_dining_groups = 36
+        self.engine.state.campsite_star = 3
         hidden_before = self._dining_hidden_fields()
 
         result = self.engine.purchase_growth_project("dining_lv2")
@@ -95,7 +95,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
 
     def test_lv2_at_level_zero_fails_atomically(self):
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 36
+        self.engine.state.campsite_star = 3
         before = self._snapshot()
 
         result = self.engine.purchase_growth_project("dining_lv2")
@@ -104,25 +104,24 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
         self.assertIn("previous_level_required", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
-    def test_insufficient_successful_dining_fails_atomically(self):
+    def test_insufficient_campsite_star_fails_atomically(self):
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 7
         before = self._snapshot()
 
         result = self.engine.purchase_growth_project("dining_lv1")
 
         self.assertFalse(result["success"])
-        self.assertIn("successful_dining_required", result["unmet_conditions"])
+        self.assertIn("campsite_star_required", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
     def test_turn_and_balance_failures_are_atomic(self):
         cases = (
-            ("not_turn_6", lambda: setattr(self.engine.state, "successful_dining_groups", 8)),
+            ("not_turn_6", lambda: setattr(self.engine.state, "campsite_star", 2)),
             (
                 "day_end_completed",
                 lambda: (
                     self._open_management_phase(),
-                    setattr(self.engine.state, "successful_dining_groups", 8),
+                    setattr(self.engine.state, "campsite_star", 2),
                     setattr(self.engine.state, "day_end_completed", True),
                 ),
             ),
@@ -130,7 +129,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
                 "insufficient_balance",
                 lambda: (
                     self._open_management_phase(balance=699),
-                    setattr(self.engine.state, "successful_dining_groups", 8),
+                    setattr(self.engine.state, "campsite_star", 2),
                 ),
             ),
         )
@@ -146,7 +145,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
 
     def test_repeat_purchase_is_atomic(self):
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
         self.assertTrue(self.engine.purchase_growth_project("dining_lv1")["success"])
         before = self._snapshot()
 
@@ -158,7 +157,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
 
     def test_same_turn_can_purchase_both_dining_levels(self):
         self._open_management_phase(balance=5000)
-        self.engine.state.successful_dining_groups = 36
+        self.engine.state.campsite_star = 3
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
 
         self.assertTrue(self.engine.purchase_growth_project("dining_lv1")["success"])
@@ -172,7 +171,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
 
     def test_purchase_state_survives_snapshot_restore(self):
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
         self.assertTrue(self.engine.purchase_growth_project("dining_lv1")["success"])
         expected_balance = self.engine.state.balance
         expected_level = self.engine.facilities["dining"].level
@@ -199,7 +198,7 @@ class GrowthDiningPurchaseTests(unittest.TestCase):
                 self._level = value
 
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
         self.engine.facilities["dining"] = FailingDining()
         balance_before = self.engine.state.balance
 

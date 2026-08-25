@@ -449,7 +449,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         """购买餐饮 Lv1 后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
         initial_level = self.engine.facilities["dining"].level
         initial_balance = self.engine.state.balance
 
@@ -468,7 +468,7 @@ class DatabaseRecoveryTests(ApiPersistenceTestCase):
         """购买娱乐 Lv1 后恢复，等级和余额变化仍存在"""
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
-        self.engine.state.successful_paid_entertainment_groups = 8
+        self.engine.state.campsite_star = 2
         initial_level = self.engine.facilities["entertainment"].level
         initial_balance = self.engine.state.balance
 
@@ -660,6 +660,26 @@ class TurnPlanApiTests(ApiPersistenceTestCase):
                 "income_delta",
             },
         )
+
+
+class CampsiteStarProgressApiTests(ApiPersistenceTestCase):
+    def test_state_and_mcp_interfaces_share_star_progress(self):
+        self.engine.state.campsite_star = 2
+        self.engine.state.total_served_groups = 52
+        self.engine.state.historical_highest_rating = 4.0
+        self.engine.tents[2].is_unlocked = True
+        self.engine.tents[3].is_unlocked = True
+        self.engine.tents[4].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+
+        api_progress = game_api.get_state()["campsite_star"]
+        mcp_progress = game_api.mcp_state()["campsite_star"]
+        action_progress = game_api.mcp_available_actions()["campsite_star"]
+
+        self.assertEqual(api_progress, mcp_progress)
+        self.assertEqual(api_progress, action_progress)
+        self.assertEqual(api_progress["next_star"], 3)
+        self.assertFalse(api_progress["conditions"]["historical_rating"]["met"])
         self.assertIsNone(self.engine.state.pending_turn_plan)
 
     def test_one_and_three_actions_can_submit(self):
@@ -926,7 +946,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_dining_upgrade_reaches_lv2_and_then_stops_without_charge(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
-        self.engine.state.successful_dining_groups = 36
+        self.engine.state.campsite_star = 3
 
         # Turn 6 日终批处理：购买 dining_lv1 再购买 dining_lv2
         first = game_api.submit_day_end(
@@ -970,7 +990,7 @@ class McpTurnPlanTests(ApiPersistenceTestCase):
     def test_entertainment_upgrade_reaches_lv2_and_then_stops_without_charge(self):
         self.engine.state.turn = 6
         self.engine.state.balance = 99999
-        self.engine.state.successful_paid_entertainment_groups = 32
+        self.engine.state.campsite_star = 3
 
         # Turn 6 日终批处理：购买 entertainment_lv1 再购买 entertainment_lv2
         first = game_api.submit_day_end(
@@ -1466,9 +1486,9 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         ))
 
     def test_prerequisite_unmet_project_not_offered(self):
-        # tent_3 前置 tent_2 未解锁，验证前置未满足时不出现
+        # tent_3 同时需要2★和 tent_2，验证条件未满足时不出现
         self.engine.state.turn = 6
-        self.engine.state.day = 12  # tent_3 经营 fallback 满足，但前置 tent_2 未解锁
+        self.engine.state.campsite_star = 2
         self.engine.state.balance = 10000
 
         actions = game_api.mcp_available_actions()["available_actions"]
@@ -1480,7 +1500,7 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         ))
 
     def test_operation_requirement_unmet_project_not_offered(self):
-        # hot_spring 需要至少 5 个普通成长节点，默认未满足经营条件
+        # hot_spring 需要4★，默认未满足经营条件
         self.engine.state.turn = 6
         self.engine.state.balance = 10000
 
@@ -1544,7 +1564,7 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
         # purchase_growth_project 暴露，且不同时出现语义重复的 upgrade_facility
         self.engine.state.turn = 6
         self.engine.state.balance = 10000
-        self.engine.state.successful_dining_groups = 8  # dining_lv1 经营条件
+        self.engine.state.campsite_star = 2
 
         actions = game_api.mcp_available_actions()["available_actions"]
         purchases = self._growth_purchase_actions(actions)
@@ -1563,6 +1583,36 @@ class McpGrowthActionTests(ApiPersistenceTestCase):
             a["action"] != "upgrade_facility"
             for a in actions
         ))
+
+    def test_direct_growth_action_cannot_bypass_campsite_star(self):
+        self.engine.state.turn = 6
+        self.engine.state.balance = 10000
+
+        blocked = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(
+                    action="purchase_growth_project",
+                    params={"project_id": "dining_lv1"},
+                ),
+            ])
+        )
+        self.assertFalse(blocked["results"][0]["success"])
+        self.assertIn(
+            "campsite_star_required", blocked["results"][0]["unmet_conditions"]
+        )
+
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = False
+        self.engine.state.campsite_star = 2
+        purchased = game_api.submit_day_end(
+            game_api.DayEndRequest(day_end_actions=[
+                game_api.ActionRequest(
+                    action="purchase_growth_project",
+                    params={"project_id": "dining_lv1"},
+                ),
+            ])
+        )
+        self.assertTrue(purchased["results"][0]["success"])
 
     def test_generated_action_matches_execution_entry(self):
         self.engine.state.turn = 6

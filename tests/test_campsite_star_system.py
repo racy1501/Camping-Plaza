@@ -81,6 +81,47 @@ class CampsiteStarSystemTests(unittest.TestCase):
         self.assertIsNone(self.engine.state.historical_highest_rating)
         self.assertEqual(self.engine.get_campsite_star_progress()["next_star"], 2)
 
+    def test_next_star_exposes_each_condition_progress(self):
+        self._set_star_conditions(served=52, nodes=5, rating=4.0)
+
+        progress = self.engine.get_campsite_star_progress()
+
+        self.assertEqual(progress["current_star"], 1)
+        self.assertEqual(progress["next_star"], 2)
+        self.assertEqual(
+            set(progress["conditions"]), {"served_groups", "growth_nodes"}
+        )
+
+        self.engine.state.campsite_star = 2
+        progress = self.engine.get_campsite_star_progress()
+        self.assertEqual(progress["next_star"], 3)
+        self.assertEqual(
+            progress["conditions"],
+            {
+                "served_groups": {"current": 52, "required": 45, "met": True},
+                "growth_nodes": {"current": 5, "required": 5, "met": True},
+                "historical_rating": {"current": 4.0, "required": 4.1, "met": False},
+            },
+        )
+        self.assertFalse(progress["requirement_met"])
+
+    def test_star_progress_has_hot_spring_only_for_five_star(self):
+        self._set_star_conditions(served=90, nodes=9, rating=4.3)
+        self.engine.state.campsite_star = 4
+        progress = self.engine.get_campsite_star_progress()
+        self.assertEqual(
+            set(progress["conditions"]),
+            {"served_groups", "growth_nodes", "historical_rating", "hot_spring_built"},
+        )
+
+        self.engine.state.campsite_star = 5
+        max_progress = self.engine.get_campsite_star_progress()
+        self.assertEqual(max_progress["current_star"], 5)
+        self.assertIsNone(max_progress["next_star"])
+        self.assertTrue(max_progress["is_max_star"])
+        self.assertTrue(max_progress["requirement_met"])
+        self.assertNotIn("conditions", max_progress)
+
     def test_insufficient_conditions_do_not_upgrade(self):
         self._set_star_conditions(served=14, nodes=10, rating=5.0)
 
@@ -265,3 +306,25 @@ class CampsiteStarSystemTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertTrue(self.engine.tents[2].is_unlocked)
         self.assertEqual(self.engine.state.campsite_star, 1)
+
+    def test_existing_high_tier_projects_are_not_reverted_below_unlock_star(self):
+        self.engine.state.campsite_star = 1
+        self.engine.tents[6].is_unlocked = True
+        self.engine.facilities["dining"].level = 2
+        self.engine.facilities["entertainment"].level = 2
+        self.engine.facilities["greenery"].level = 2
+        self.assertTrue(self.engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        catalog = {
+            project["project_id"]: project
+            for project in restored.get_growth_project_catalog()
+        }
+
+        self.assertEqual(restored.state.campsite_star, 1)
+        self.assertTrue(restored.tents[6].is_unlocked)
+        self.assertEqual(restored.facilities["dining"].level, 2)
+        self.assertTrue(catalog["tent_6"]["completed"])
+        self.assertTrue(catalog["dining_lv2"]["completed"])
+        self.assertTrue(catalog["entertainment_lv2"]["completed"])
+        self.assertTrue(catalog["greenery_lv2"]["completed"])

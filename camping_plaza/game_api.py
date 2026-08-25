@@ -1317,6 +1317,7 @@ def mcp_state(session_id: Optional[str] = None):
         "day": state["day"],
         "turn": state["turn"],
         "balance": state["balance"],
+        "campsite_star": state["campsite_star"],
         "facilities": {
             k: v["level"] for k, v in state["facilities"].items()
         },
@@ -1440,6 +1441,7 @@ def mcp_available_actions(session_id: Optional[str] = None):
         "player_message": _get_operating_decision_message(eng),
         "decisions_left": eng.state.decisions_left,
         "food_stock": int(eng.state.food_stock),
+        "campsite_star": state["campsite_star"],
         "available_actions": actions,
     }
     if state["turn"] == 6 and not eng.state.day_end_completed:

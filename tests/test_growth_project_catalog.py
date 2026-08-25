@@ -66,48 +66,13 @@ class GrowthProjectCatalogTests(unittest.TestCase):
             list(range(1, 13)),
         )
 
-    def test_hot_spring_catalog_reports_both_qualification_paths(self):
+    def test_hot_spring_requires_four_star_only(self):
         self._open_management_phase()
-        project = self._catalog()["hot_spring"]
-        self.assertFalse(project["prerequisite_met"])
-        self.assertFalse(project["operation_requirement_met"])
-        self.assertIn("growth_nodes_required", project["unmet_conditions"])
-        self.assertIn("served_groups_or_days_required", project["unmet_conditions"])
-
-        for tent_id in range(2, 6):
-            self.engine.tents[tent_id].is_unlocked = True
-        self.engine.facilities["dining"].level = 2
-        self.engine.facilities["entertainment"].level = 2
-        self.engine.state.day = 12
-        self.engine.state.campsite_star = 4
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["prerequisite_met"])
-        self.assertTrue(project["operation_requirement_met"])
-        self.assertTrue(project["can_purchase_now"])
-        self.assertEqual(project["progress"]["current_completed_growth_nodes"], 8)
-        self.assertEqual(project["progress"]["required_completed_growth_nodes"], 5)
+        self.assertFalse(project["operation_requirement_met"])
+        self.assertIn("campsite_star_required", project["unmet_conditions"])
 
-    def test_hot_spring_served_groups_can_replace_day_fallback(self):
-        self._open_management_phase()
-        self.engine.state.day = 1
-        for tent_id in range(2, 6):
-            self.engine.tents[tent_id].is_unlocked = True
-        self.engine.facilities["dining"].level = 2
-        self.engine.facilities["entertainment"].level = 2
-        self.engine.state.total_served_groups = 75
-        self.engine.state.campsite_star = 4
-        project = self._catalog()["hot_spring"]
-        self.assertTrue(project["operation_requirement_met"])
-
-    def test_hot_spring_can_use_day_fallback_with_five_growth_nodes(self):
-        self._open_management_phase()
-        self.engine.state.day = 12
-        self.engine.state.total_served_groups = 0
-        self.engine.tents[2].is_unlocked = True
-        self.engine.tents[3].is_unlocked = True
-        self.engine.tents[4].is_unlocked = True
-        self.engine.facilities["dining"].level = 1
-        self.engine.facilities["entertainment"].level = 1
         self.engine.state.campsite_star = 4
         project = self._catalog()["hot_spring"]
         self.assertTrue(project["prerequisite_met"])
@@ -150,43 +115,34 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.assertFalse(project["management_phase_open"])
         self.assertFalse(project["can_purchase_now"])
 
-    def test_later_tents_require_previous_tent_but_allow_served_or_day_fallback(self):
+    def test_later_tents_require_their_star_and_previous_tent(self):
         self._open_management_phase()
-        self.engine.state.day = 7
         project = self._catalog()["tent_3"]
-        self.assertTrue(project["operation_requirement_met"])
+        self.assertFalse(project["operation_requirement_met"])
         self.assertFalse(project["prerequisite_met"])
+        self.assertIn("campsite_star_required", project["unmet_conditions"])
         self.assertIn("previous_tent_required", project["unmet_conditions"])
 
         self.engine.tents[2].is_unlocked = True
-        self.engine.state.day = 2
-        self.engine.state.total_served_groups = 15
+        self.engine.state.campsite_star = 2
         project = self._catalog()["tent_3"]
         self.assertTrue(project["can_purchase_now"])
-        self.assertEqual(project["progress"]["required_served_groups"], 15)
-        self.assertEqual(project["progress"]["fallback_operating_day"], 7)
+        self.assertEqual(project["progress"]["required_campsite_star"], 2)
 
-        requirements = {
-            "tent_4": (3, 50, 12),
-            "tent_5": (4, 90, 17),
-            "tent_6": (5, 150, 23),
-        }
-        for project_id, (previous_tent, served, fallback_day) in requirements.items():
+        requirements = {"tent_4": (3, 3), "tent_5": (4, 4), "tent_6": (5, 5)}
+        for project_id, (previous_tent, required_star) in requirements.items():
             self.engine.tents[previous_tent].is_unlocked = False
-            self.engine.state.total_served_groups = served
-            self.engine.state.day = 2
+            self.engine.state.campsite_star = required_star
             self.assertFalse(self._catalog()[project_id]["prerequisite_met"])
             self.engine.tents[previous_tent].is_unlocked = True
             self.assertTrue(self._catalog()[project_id]["operation_requirement_met"])
-            self.engine.state.total_served_groups = 0
-            self.engine.state.day = fallback_day
-            self.assertTrue(self._catalog()[project_id]["operation_requirement_met"])
 
-    def test_dining_levels_require_correct_level_and_successful_dining_counts(self):
+    def test_facility_levels_require_their_star_and_previous_level(self):
         self._open_management_phase()
-        self.engine.state.successful_dining_groups = 8
         project = self._catalog()["dining_lv1"]
-        self.assertTrue(project["can_purchase_now"])
+        self.assertFalse(project["can_purchase_now"])
+        self.engine.state.campsite_star = 2
+        self.assertTrue(self._catalog()["dining_lv1"]["can_purchase_now"])
         self.assertFalse(self._catalog()["dining_lv2"]["prerequisite_met"])
 
         self.engine.facilities["dining"].level = 1
@@ -195,28 +151,28 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.assertFalse(project["can_purchase_now"])
         self.assertIn("already_completed", project["unmet_conditions"])
 
-        self.engine.state.successful_dining_groups = 35
+        self.engine.state.campsite_star = 2
         project = self._catalog()["dining_lv2"]
         self.assertFalse(project["operation_requirement_met"])
-        self.engine.state.successful_dining_groups = 36
+        self.engine.state.campsite_star = 3
         self.assertTrue(self._catalog()["dining_lv2"]["can_purchase_now"])
 
-    def test_entertainment_and_greenery_levels_use_their_own_counters(self):
+    def test_entertainment_and_greenery_levels_use_their_star_requirements(self):
         self._open_management_phase()
-        self.engine.state.successful_paid_entertainment_groups = 8
+        self.engine.state.campsite_star = 2
         self.assertTrue(self._catalog()["entertainment_lv1"]["can_purchase_now"])
         self.engine.facilities["entertainment"].level = 1
-        self.engine.state.successful_paid_entertainment_groups = 31
+        self.engine.state.campsite_star = 2
         self.assertFalse(self._catalog()["entertainment_lv2"]["operation_requirement_met"])
-        self.engine.state.successful_paid_entertainment_groups = 32
+        self.engine.state.campsite_star = 3
         self.assertTrue(self._catalog()["entertainment_lv2"]["can_purchase_now"])
 
-        self.engine.state.successful_greenery_maintenance_count = 4
+        self.engine.state.campsite_star = 2
         self.assertTrue(self._catalog()["greenery_lv1"]["can_purchase_now"])
         self.engine.facilities["greenery"].level = 1
-        self.engine.state.successful_greenery_maintenance_count = 11
+        self.engine.state.campsite_star = 2
         self.assertFalse(self._catalog()["greenery_lv2"]["operation_requirement_met"])
-        self.engine.state.successful_greenery_maintenance_count = 12
+        self.engine.state.campsite_star = 3
         self.assertTrue(self._catalog()["greenery_lv2"]["can_purchase_now"])
 
     def test_insufficient_balance_and_non_turn_six_prevent_purchase(self):

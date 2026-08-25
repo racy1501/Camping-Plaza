@@ -55,6 +55,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         greenery = self.engine.facilities["greenery"]
         greenery.greenery_satisfaction = 2.0
         decay_before = greenery.greenery_decay_rate
+        self.engine.state.campsite_star = 2
         self.engine.state.successful_greenery_maintenance_count = 4
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
 
@@ -76,6 +77,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self._open_management_phase()
         greenery = self.engine.facilities["greenery"]
         greenery.greenery_satisfaction = 4.0
+        self.engine.state.campsite_star = 2
         self.engine.state.successful_greenery_maintenance_count = 4
 
         self.assertTrue(self.engine.purchase_growth_project("greenery_lv1")["success"])
@@ -89,6 +91,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         greenery.level = 1
         greenery.greenery_satisfaction = 5.0
         decay_before = greenery.greenery_decay_rate
+        self.engine.state.campsite_star = 3
         self.engine.state.successful_greenery_maintenance_count = 12
 
         result = self.engine.purchase_growth_project("greenery_lv2")
@@ -107,6 +110,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         greenery = self.engine.facilities["greenery"]
         greenery.greenery_satisfaction = 4.0
         self.engine.state.greenery_processed_today = True
+        self.engine.state.campsite_star = 2
         self.engine.state.successful_greenery_maintenance_count = 4
 
         self.assertTrue(self.engine.purchase_growth_project("greenery_lv1")["success"])
@@ -117,7 +121,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
 
     def test_lv2_at_level_zero_fails_atomically(self):
         self._open_management_phase()
-        self.engine.state.successful_greenery_maintenance_count = 12
+        self.engine.state.campsite_star = 3
         before = self._snapshot()
 
         result = self.engine.purchase_growth_project("greenery_lv2")
@@ -126,27 +130,26 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self.assertIn("previous_level_required", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
-    def test_insufficient_maintenance_count_fails_atomically(self):
+    def test_insufficient_campsite_star_fails_atomically(self):
         self._open_management_phase()
-        self.engine.state.successful_greenery_maintenance_count = 3
         before = self._snapshot()
 
         result = self.engine.purchase_growth_project("greenery_lv1")
 
         self.assertFalse(result["success"])
-        self.assertIn("greenery_maintenance_required", result["unmet_conditions"])
+        self.assertIn("campsite_star_required", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
     def test_turn_and_balance_failures_are_atomic(self):
         cases = (
             ("not_turn_6", lambda: setattr(
-                self.engine.state, "successful_greenery_maintenance_count", 4
+                self.engine.state, "campsite_star", 2
             )),
             (
                 "day_end_completed",
                 lambda: (
                     self._open_management_phase(),
-                    setattr(self.engine.state, "successful_greenery_maintenance_count", 4),
+                    setattr(self.engine.state, "campsite_star", 2),
                     setattr(self.engine.state, "day_end_completed", True),
                 ),
             ),
@@ -154,7 +157,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
                 "insufficient_balance",
                 lambda: (
                     self._open_management_phase(balance=599),
-                    setattr(self.engine.state, "successful_greenery_maintenance_count", 4),
+                    setattr(self.engine.state, "campsite_star", 2),
                 ),
             ),
         )
@@ -170,7 +173,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
 
     def test_repeat_purchase_is_atomic(self):
         self._open_management_phase()
-        self.engine.state.successful_greenery_maintenance_count = 4
+        self.engine.state.campsite_star = 2
         self.assertTrue(self.engine.purchase_growth_project("greenery_lv1")["success"])
         before = self._snapshot()
 
@@ -184,6 +187,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self._open_management_phase(balance=5000)
         greenery = self.engine.facilities["greenery"]
         greenery.greenery_satisfaction = 4.0
+        self.engine.state.campsite_star = 3
         self.engine.state.successful_greenery_maintenance_count = 12
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
 
@@ -202,6 +206,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
         self._open_management_phase()
         greenery = self.engine.facilities["greenery"]
         greenery.greenery_satisfaction = 4.0
+        self.engine.state.campsite_star = 2
         self.engine.state.successful_greenery_maintenance_count = 4
         self.assertTrue(self.engine.purchase_growth_project("greenery_lv1")["success"])
         expected_balance = self.engine.state.balance
@@ -245,7 +250,7 @@ class GrowthGreeneryPurchaseTests(unittest.TestCase):
                 self._greenery_satisfaction = value
 
         self._open_management_phase()
-        self.engine.state.successful_greenery_maintenance_count = 4
+        self.engine.state.campsite_star = 2
         self.engine.facilities["greenery"] = FailingGreenery()
         balance_before = self.engine.state.balance
         self.engine.state.greenery_processed_today = False

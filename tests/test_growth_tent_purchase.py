@@ -155,20 +155,18 @@ class GrowthTentPurchaseTests(unittest.TestCase):
         self.assertIn("already_completed", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
-    def test_tent_3_can_use_served_groups_or_day_fallback(self):
+    def test_tent_3_requires_two_star(self):
         self._open_management_phase(day=2)
         self.engine.tents[2].is_unlocked = True
-        self.engine.state.total_served_groups = 15
-        self.assertTrue(self.engine.purchase_growth_project("tent_3")["success"])
-
-        self.setUp()
-        self._open_management_phase(day=7)
-        self.engine.tents[2].is_unlocked = True
+        blocked = self.engine.purchase_growth_project("tent_3")
+        self.assertFalse(blocked["success"])
+        self.assertIn("campsite_star_required", blocked["unmet_conditions"])
+        self.engine.state.campsite_star = 2
         self.assertTrue(self.engine.purchase_growth_project("tent_3")["success"])
 
     def test_same_turn_purchase_immediately_unlocks_the_next_prerequisite(self):
         self._open_management_phase()
-        self.engine.state.total_served_groups = 15
+        self.engine.state.campsite_star = 2
 
         self.assertTrue(self.engine.purchase_growth_project("tent_2")["success"])
         result = self.engine.purchase_growth_project("tent_3")
@@ -178,7 +176,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
     def test_same_turn_can_purchase_all_tents_when_conditions_and_balance_allow(self):
         self._open_management_phase(balance=20000)
-        self.engine.state.total_served_groups = 150
+        self.engine.state.campsite_star = 5
         nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
 
         for project_id in ("tent_2", "tent_3", "tent_4", "tent_5", "tent_6"):
@@ -204,11 +202,6 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
     def _qualify_hot_spring(self, *, day=1, balance=10000):
         self._open_management_phase(balance=balance, day=day)
-        for tent_id in range(2, 6):
-            self.engine.tents[tent_id].is_unlocked = True
-        self.engine.facilities["dining"].level = 2
-        self.engine.facilities["entertainment"].level = 2
-        self.engine.state.total_served_groups = 150 if day < 25 else 0
         self.engine.state.campsite_star = 4
 
     def test_hot_spring_purchase_is_atomic_repeat_safe_and_persistent(self):
@@ -235,7 +228,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
 
     def test_hot_spring_qualification_failures_are_atomic(self):
         cases = (
-            (1, 10000, "served_groups_or_days_required"),
+            (1, 10000, "campsite_star_required"),
             (25, 2999, "insufficient_balance"),
         )
         for day, balance, expected_code in cases:
@@ -243,7 +236,7 @@ class GrowthTentPurchaseTests(unittest.TestCase):
                 self.setUp()
                 self._qualify_hot_spring(day=day, balance=balance)
                 if day == 1:
-                    self.engine.state.total_served_groups = 0
+                    self.engine.state.campsite_star = 3
                 before = self._snapshot()
                 result = self.engine.purchase_growth_project("hot_spring")
                 self.assertFalse(result["success"])
@@ -251,13 +244,12 @@ class GrowthTentPurchaseTests(unittest.TestCase):
                 self._assert_snapshot_unchanged(before)
                 self.tearDown()
 
-    def test_hot_spring_requires_five_nodes_and_open_unsettled_turn_six(self):
+    def test_hot_spring_requires_four_star_and_open_unsettled_turn_six(self):
         self._open_management_phase(balance=10000, day=25)
-        self.engine.state.total_served_groups = 150
         before = self._snapshot()
         result = self.engine.purchase_growth_project("hot_spring")
         self.assertFalse(result["success"])
-        self.assertIn("growth_nodes_required", result["unmet_conditions"])
+        self.assertIn("campsite_star_required", result["unmet_conditions"])
         self._assert_snapshot_unchanged(before)
 
         self._qualify_hot_spring()
