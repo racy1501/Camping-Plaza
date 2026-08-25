@@ -78,7 +78,7 @@ class DebtApiMcpTests(unittest.TestCase):
 
         self.assertEqual(human_repay["params"], {"amount": None})
         self.assertEqual(human_repay["required_params"][0]["name"], "amount")
-        self.assertEqual(human_repay["max_amount"], self.engine.state.debt_remaining)
+        self.assertEqual(human_repay["max_amount"], self.engine.state.balance)
         self.assertTrue(human_repay["enabled"])
         self.assertEqual(
             self._facts([human_repay]), self._facts([mcp_repay])
@@ -124,7 +124,7 @@ class DebtApiMcpTests(unittest.TestCase):
         results = {item["action"]: item for item in result["results"]}
         self.assertTrue(results["repay_debt"]["success"])
         self.assertTrue(results["clean_tents"]["success"])
-        self.assertEqual(self.engine.state.debt_remaining, 5800)
+        self.assertEqual(self.engine.state.debt_remaining, 20800)
 
     def test_completed_day_end_hides_candidates_in_both_catalogs(self):
         self.engine.state.day_end_completed = True
@@ -164,7 +164,7 @@ class DebtApiMcpTests(unittest.TestCase):
             result["results"][0]["error_code"], "repayment_not_available"
         )
         self.assertEqual(self.engine.state.balance, balance_before)
-        self.assertEqual(self.engine.state.debt_remaining, 6000)
+        self.assertEqual(self.engine.state.debt_remaining, 21000)
 
     def test_query_debt_is_read_only(self):
         before = (

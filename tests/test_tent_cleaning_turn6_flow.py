@@ -70,7 +70,7 @@ class TentCleaningFlowTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertTrue(all(item["success"] for item in result["results"]))
         self.assertEqual(self.engine.state.balance, 800)
-        self.assertEqual(self.engine.state.debt_remaining, 5800)
+        self.assertEqual(self.engine.state.debt_remaining, 20800)
         self.assertEqual(self.engine.state.decisions_left, 3)
         self.assertEqual(self.engine.tents[1].status, "available")
         self.assertTrue(self.engine.state.day_end_completed)

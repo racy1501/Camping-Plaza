@@ -580,7 +580,7 @@ class HiddenPendingReviewApiTests(ApiPersistenceTestCase):
 
 class ReviewAndSummaryStateApiTests(ApiPersistenceTestCase):
     def test_api_state_exposes_formal_debt_remaining(self):
-        self.assertEqual(game_api.get_state()["debt_remaining"], 6000)
+        self.assertEqual(game_api.get_state()["debt_remaining"], 21000)
 
         self.engine.state.debt_remaining = 12345
         self.assertEqual(game_api.get_state()["debt_remaining"], 12345)
@@ -1903,6 +1903,7 @@ class DayEndApiTests(ApiPersistenceTestCase):
 
     def test_turn6_budget_hint_is_shared_by_human_and_mcp_actions(self):
         self._reach_turn6()
+        self.engine.state.day = 25
         human_actions = game_api.get_human_actions()
         mcp_actions = game_api.mcp_available_actions()
 

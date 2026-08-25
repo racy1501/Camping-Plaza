@@ -141,7 +141,7 @@ class RestartGameTests(unittest.TestCase):
         self.assertEqual(restored["player_name"], "露营者")
         self.assertEqual((restored["day"], restored["turn"]), (1, 1))
         self.assertEqual(restored["balance"], 1000)
-        self.assertEqual(restored["debt_remaining"], 6000)
+        self.assertEqual(restored["debt_remaining"], 21000)
         self.assertEqual(restored["food_stock"], 8)
         self.assertEqual(restored["reservations"], [])
         self.assertEqual(restored["review_history"], [])

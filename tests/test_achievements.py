@@ -25,6 +25,10 @@ class AchievementTests(unittest.TestCase):
             self.db_path,
             os.path.join(self._db_dir, "paid-achievements.sqlite"),
             os.path.join(self._db_dir, "unpaid-achievements.sqlite"),
+            *(
+                os.path.join(self._db_dir, f"{name}-deadline.sqlite")
+                for name in ("paid", "partial", "unpaid")
+            ),
         ]
         for path in self._extra_paths:
             try:
@@ -162,7 +166,7 @@ class AchievementTests(unittest.TestCase):
 
     def test_day_25_repayment_results_determine_the_day_26_achievement(self):
         cases = (
-            ("paid", 6000, "debt_paid_by_deadline"),
+            ("paid", 21000, "debt_paid_by_deadline"),
             ("partial", 2000, "debt_unpaid_by_deadline"),
             ("unpaid", None, "debt_unpaid_by_deadline"),
         )
@@ -173,7 +177,7 @@ class AchievementTests(unittest.TestCase):
                 )
                 engine.state.day = 25
                 engine.state.turn = 6
-                engine.state.balance = 6000
+                engine.state.balance = 21000
                 actions = [] if amount is None else [{
                     "action": "repay_debt", "params": {"amount": amount},
                 }]
