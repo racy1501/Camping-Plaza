@@ -188,7 +188,10 @@ def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
     balance = eng.state.balance
     candidates = []
 
-    if eng.state.debt_remaining > 0:
+    if (
+        eng.state.day >= eng.state.repayment_deadline_day
+        and eng.state.debt_remaining > 0
+    ):
         max_amount = min(balance, eng.state.debt_remaining)
         enabled = max_amount > 0
         candidates.append({

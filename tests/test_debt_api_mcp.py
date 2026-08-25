@@ -15,13 +15,14 @@ class DebtApiMcpTests(unittest.TestCase):
         self.engine.state.today_conflict_event = None
         self.original_engine = game_api.engine
         game_api.engine = self.engine
+        self.engine.state.day = 25
         self.engine.state.turn = 6
         self.engine.state.balance = 10000
         self.engine.tents[1].status = "broken"
         self.engine.tents[2].is_unlocked = True
         self.engine.tents[2].status = "cleaning"
         self.engine.facilities["greenery"].greenery_satisfaction = 1.0
-        self.engine.state.successful_dining_groups = 8
+        self.engine.state.campsite_star = 2
 
     def tearDown(self):
         game_api.engine = self.original_engine
@@ -129,6 +130,41 @@ class DebtApiMcpTests(unittest.TestCase):
         self.engine.state.day_end_completed = True
         self.assertEqual(self._human_candidates(), [])
         self.assertEqual(self._mcp_candidates(), [])
+
+    def test_repayment_candidate_is_hidden_before_day_25_and_returns_afterward(self):
+        self.engine.state.day = 24
+        self.assertNotIn("repay_debt", [
+            candidate["action"] for candidate in self._human_candidates()
+        ])
+        self.assertNotIn("repay_debt", [
+            candidate["action"] for candidate in self._mcp_candidates()
+        ])
+
+        self.engine.state.day = 26
+        self.assertIn("repay_debt", [
+            candidate["action"] for candidate in self._human_candidates()
+        ])
+        self.engine.state.debt_remaining = 0
+        self.assertNotIn("repay_debt", [
+            candidate["action"] for candidate in self._mcp_candidates()
+        ])
+
+    def test_day_24_day_end_submission_cannot_bypass_repayment_window(self):
+        self.engine.state.day = 24
+        balance_before = self.engine.state.balance
+        result = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[
+            game_api.ActionRequest(
+                action="repay_debt", params={"amount": 200}
+            ),
+        ]))
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["results"][0]["success"])
+        self.assertEqual(
+            result["results"][0]["error_code"], "repayment_not_available"
+        )
+        self.assertEqual(self.engine.state.balance, balance_before)
+        self.assertEqual(self.engine.state.debt_remaining, 6000)
 
     def test_query_debt_is_read_only(self):
         before = (

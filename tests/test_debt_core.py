@@ -27,6 +27,10 @@ class DebtCoreTests(unittest.TestCase):
         self.db_path = os.path.join(self._temp_dir.name, "debt_test.db")
         self.engine = CampingPlazaEngine(db_path=self.db_path)
 
+    def _open_repayment_window(self, *, day=25):
+        self.engine.state.day = day
+        self.engine.state.turn = 6
+
     def test_new_game_uses_formal_debt_defaults(self):
         state = self.engine.state
         self.assertEqual(state.initial_debt, 6000)
@@ -34,6 +38,7 @@ class DebtCoreTests(unittest.TestCase):
         self.assertEqual(state.repayment_deadline_day, 25)
 
     def test_partial_and_multiple_repayments(self):
+        self._open_repayment_window()
         self.engine.state.balance = 5000
 
         first = self.engine.repay_debt(2000)
@@ -45,7 +50,8 @@ class DebtCoreTests(unittest.TestCase):
         self.assertEqual(self.engine.state.debt_remaining, 3000)
         self.assertEqual(self.engine.get_debt_summary()["debt_repaid_total"], 3000)
 
-    def test_repayment_is_available_outside_turn6_and_not_an_operating_expense(self):
+    def test_repayment_does_not_count_as_an_operating_expense(self):
+        self._open_repayment_window()
         self.engine.state.balance = 5000
         expenses_before = dict(self.engine.state.today_expenses)
         decisions_before = self.engine.state.decisions_left
@@ -53,7 +59,7 @@ class DebtCoreTests(unittest.TestCase):
         result = self.engine.repay_debt(1000)
 
         self.assertTrue(result["success"])
-        self.assertEqual(self.engine.state.turn, 1)
+        self.assertEqual(self.engine.state.turn, 6)
         self.assertEqual(self.engine.state.decisions_left, decisions_before)
         self.assertEqual(self.engine.state.today_expenses, expenses_before)
 
@@ -66,6 +72,8 @@ class DebtCoreTests(unittest.TestCase):
         for income, operating_expense, repayment, expected_net in cases:
             with self.subTest(income=income, operating_expense=operating_expense):
                 engine = CampingPlazaEngine(db_path=self.db_path)
+                engine.state.day = 25
+                engine.state.turn = 6
                 engine.state.day_start_balance = 1000
                 engine.state.today_income["accommodation"] = income
                 engine.state.today_expenses["food"] = operating_expense
@@ -87,6 +95,7 @@ class DebtCoreTests(unittest.TestCase):
                 self.assertEqual(engine.state.debt_remaining, 6000 - repayment)
 
     def test_exact_payoff_then_repayment_is_rejected(self):
+        self._open_repayment_window()
         self.engine.state.balance = 6000
 
         result = self.engine.repay_debt(6000)
@@ -98,6 +107,7 @@ class DebtCoreTests(unittest.TestCase):
         self.assertEqual(again["error_code"], "debt_already_paid_off")
 
     def test_invalid_repayments_do_not_change_state_or_record_success_event(self):
+        self._open_repayment_window()
         self.engine.state.balance = 5000
         before = (self.engine.state.balance, self.engine.state.debt_remaining)
         invalid_amounts = (0, -1, True, 1.5, "2000", 7000, 21000)
@@ -113,6 +123,7 @@ class DebtCoreTests(unittest.TestCase):
         ))
 
     def test_repayment_cannot_exceed_remaining_debt(self):
+        self._open_repayment_window()
         self.engine.state.balance = 5000
         self.engine.state.debt_remaining = 2000
         before = (self.engine.state.balance, self.engine.state.debt_remaining)
@@ -123,9 +134,20 @@ class DebtCoreTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "repayment_exceeds_debt")
         self.assertEqual((self.engine.state.balance, self.engine.state.debt_remaining), before)
 
+    def test_repayment_cannot_exceed_balance_after_window_opens(self):
+        self._open_repayment_window()
+        self.engine.state.balance = 5000
+        before = (self.engine.state.balance, self.engine.state.debt_remaining)
+
+        result = self.engine.repay_debt(5001)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "repayment_exceeds_balance")
+        self.assertEqual((self.engine.state.balance, self.engine.state.debt_remaining), before)
+
     def test_summary_deadline_semantics_and_success_event(self):
+        self._open_repayment_window()
         self.engine.state.balance = 3000
-        self.engine.state.day = 25
         result = self.engine.repay_debt(1000)
         summary = self.engine.get_debt_summary()
 
@@ -150,6 +172,7 @@ class DebtCoreTests(unittest.TestCase):
         self.assertFalse(self.engine.get_debt_summary()["is_overdue"])
 
     def test_save_restore_keeps_debt_fields(self):
+        self._open_repayment_window()
         self.engine.state.balance = 7000
         self.assertTrue(self.engine.repay_debt(3000)["success"])
         self.assertTrue(self.engine.save_state())
@@ -160,6 +183,69 @@ class DebtCoreTests(unittest.TestCase):
         self.assertEqual(restored.state.debt_remaining, 3000)
         self.assertEqual(restored.state.repayment_deadline_day, 25)
         self.assertEqual(restored.get_debt_summary()["debt_repaid_total"], 3000)
+
+    def test_repayment_is_rejected_before_day_25_without_state_change(self):
+        self.engine.state.day = 24
+        self.engine.state.turn = 6
+        self.engine.state.balance = 5000
+        before = (self.engine.state.balance, self.engine.state.debt_remaining)
+
+        result = self.engine.repay_debt(1000)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "repayment_not_available")
+        self.assertEqual((self.engine.state.balance, self.engine.state.debt_remaining), before)
+        self.assertFalse(any(
+            event.get("event_type") == "repay_debt"
+            for event in self.engine.state.event_history
+        ))
+
+    def test_repayment_is_rejected_outside_turn_six_on_day_25(self):
+        self.engine.state.day = 25
+        self.engine.state.turn = 5
+        self.engine.state.balance = 5000
+        before = (self.engine.state.balance, self.engine.state.debt_remaining)
+
+        result = self.engine.repay_debt(1000)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "repayment_not_available")
+        self.assertEqual((self.engine.state.balance, self.engine.state.debt_remaining), before)
+
+    def test_repayment_remains_available_after_deadline_at_turn_six(self):
+        self._open_repayment_window(day=26)
+        self.engine.state.balance = 1000
+
+        result = self.engine.repay_debt(1000)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(self.engine.state.debt_remaining, 5000)
+
+    def test_legacy_debt_values_remain_unchanged_until_repayment_opens(self):
+        self.engine.state.day = 18
+        self.engine.state.turn = 6
+        self.engine.state.balance = 4321
+        self.engine.state.debt_remaining = 3000
+        self.assertTrue(self.engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(restored.state.balance, 4321)
+        self.assertEqual(restored.state.debt_remaining, 3000)
+        self.assertFalse(restored.repay_debt(1)["success"])
+
+        restored.state.day = 25
+        self.assertTrue(restored.repay_debt(1)["success"])
+        self.assertEqual(restored.state.debt_remaining, 2999)
+
+    def test_legacy_paid_off_debt_is_not_restored(self):
+        self.engine.state.day = 18
+        self.engine.state.balance = 4321
+        self.engine.state.debt_remaining = 0
+        self.assertTrue(self.engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertEqual(restored.state.balance, 4321)
+        self.assertEqual(restored.state.debt_remaining, 0)
 
 
 if __name__ == "__main__":

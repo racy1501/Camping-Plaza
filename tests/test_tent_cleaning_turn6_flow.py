@@ -55,6 +55,7 @@ class TentCleaningFlowTests(unittest.TestCase):
         self.assertEqual(tent.status, "occupied")
 
     def test_day_end_can_repay_and_clean_in_one_submission(self):
+        self.engine.state.day = 25
         self.engine.state.turn = 6
         self.engine.state.balance = 1000
         self.engine.state.decisions_left = 3
@@ -86,11 +87,12 @@ class Turn6McpFlowTests(unittest.TestCase):
         game_api.engine = self.original_engine
 
     def test_turn6_returns_summary_unified_day_end_actions_and_queries(self):
+        self.engine.state.day = 25
         self.engine.state.turn = 6
         self.engine.tents[1].status = "broken"
         self.engine.tents[1].needs_cleaning = True
         self.engine.state.event_history.append({
-            "day": 1,
+            "day": 25,
             "event_type": "food_discard",
             "data": {"portions": 3},
         })

@@ -1079,6 +1079,15 @@ class CampingPlazaEngine:
             return {"success": False, "error_code": "repayment_exceeds_balance", "message": "还款金额不能超过当前余额"}
         if amount > self.state.debt_remaining:
             return {"success": False, "error_code": "repayment_exceeds_debt", "message": "还款金额不能超过剩余负债"}
+        if (
+            self.state.day < self.state.repayment_deadline_day
+            or self.state.turn != 6
+        ):
+            return {
+                "success": False,
+                "error_code": "repayment_not_available",
+                "message": "主动还款仅在 Day 25 及之后的 Turn 6 开放",
+            }
 
         balance_before = self.state.balance
         debt_before = self.state.debt_remaining

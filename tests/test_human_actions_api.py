@@ -341,6 +341,7 @@ class Turn6Tests(HumanActionsApiTestCase):
         self.assertIn("buy_food_package", candidate_actions)
 
     def test_turn6_day_end_candidates_follow_current_conditions(self):
+        self.engine.state.day = 25
         self.engine.tents[1].status = "broken"
         self.engine.state.balance = 0
         actions = self._actions()

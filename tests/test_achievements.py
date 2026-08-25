@@ -160,6 +160,39 @@ class AchievementTests(unittest.TestCase):
             ["debt_unpaid_by_deadline"],
         )
 
+    def test_day_25_repayment_results_determine_the_day_26_achievement(self):
+        cases = (
+            ("paid", 6000, "debt_paid_by_deadline"),
+            ("partial", 2000, "debt_unpaid_by_deadline"),
+            ("unpaid", None, "debt_unpaid_by_deadline"),
+        )
+        for name, amount, expected_achievement in cases:
+            with self.subTest(name=name):
+                engine = CampingPlazaEngine(
+                    db_path=os.path.join(self._db_dir, f"{name}-deadline.sqlite")
+                )
+                engine.state.day = 25
+                engine.state.turn = 6
+                engine.state.balance = 6000
+                actions = [] if amount is None else [{
+                    "action": "repay_debt", "params": {"amount": amount},
+                }]
+
+                day_end = engine.submit_day_end_actions(actions)
+                result = engine.start_next_day()
+
+                self.assertTrue(day_end["success"])
+                self.assertEqual(engine.state.day, 26)
+                self.assertEqual(
+                    [item["id"] for item in result["achievement_notifications"]],
+                    [expected_achievement],
+                )
+                self.assertEqual(
+                    set(engine.state.unlocked_achievement_ids)
+                    & engine.DEBT_RESULT_ACHIEVEMENT_IDS,
+                    {expected_achievement},
+                )
+
     def test_hot_spring_and_normal_growth_achievements(self):
         self.engine.state.turn = 6
         self.engine.state.day = 12
