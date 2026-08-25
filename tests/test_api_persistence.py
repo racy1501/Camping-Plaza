@@ -680,7 +680,25 @@ class CampsiteStarProgressApiTests(ApiPersistenceTestCase):
         self.assertEqual(api_progress, action_progress)
         self.assertEqual(api_progress["next_star"], 3)
         self.assertFalse(api_progress["conditions"]["historical_rating"]["met"])
+        self.assertFalse(api_progress["pending_morning_upgrade"])
         self.assertIsNone(self.engine.state.pending_turn_plan)
+
+    def test_state_and_mcp_interfaces_expose_pending_morning_upgrade(self):
+        self.engine.state.campsite_star = 2
+        self.engine.state.total_served_groups = 45
+        self.engine.state.historical_highest_rating = 4.1
+        self.engine.tents[2].is_unlocked = True
+        self.engine.tents[3].is_unlocked = True
+        self.engine.facilities["dining"].level = 1
+        self.engine.facilities["entertainment"].level = 1
+        self.engine.facilities["greenery"].level = 1
+
+        api_progress = game_api.get_state()["campsite_star"]
+        self.assertTrue(api_progress["pending_morning_upgrade"])
+        self.assertEqual(api_progress, game_api.mcp_state()["campsite_star"])
+        self.assertEqual(
+            api_progress, game_api.mcp_available_actions()["campsite_star"]
+        )
 
     def test_one_and_three_actions_can_submit(self):
         self.engine.state.turn = 2

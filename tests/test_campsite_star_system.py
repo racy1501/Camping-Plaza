@@ -76,6 +76,10 @@ class CampsiteStarSystemTests(unittest.TestCase):
             conn.close()
         return CampingPlazaEngine(db_path=self.db_path)
 
+    def _finish_day_and_start_next(self):
+        self.assertTrue(self.engine.submit_day_end_actions([])["success"])
+        self.assertTrue(self.engine.start_next_day()["success"])
+
     def test_new_game_defaults_to_one_star(self):
         self.assertEqual(self.engine.state.campsite_star, 1)
         self.assertIsNone(self.engine.state.historical_highest_rating)
@@ -120,6 +124,7 @@ class CampsiteStarSystemTests(unittest.TestCase):
         self.assertIsNone(max_progress["next_star"])
         self.assertTrue(max_progress["is_max_star"])
         self.assertTrue(max_progress["requirement_met"])
+        self.assertFalse(max_progress["pending_morning_upgrade"])
         self.assertNotIn("conditions", max_progress)
 
     def test_insufficient_conditions_do_not_upgrade(self):
@@ -164,13 +169,92 @@ class CampsiteStarSystemTests(unittest.TestCase):
         self.assertFalse(self.engine._update_campsite_star())
         self.assertEqual(self.engine.state.campsite_star, 5)
 
-    def test_settled_reviews_record_historical_peak_for_star_conditions(self):
-        self._set_star_conditions(served=90, nodes=9)
+    def test_pending_morning_upgrade_is_derived_from_next_star_conditions(self):
+        self._set_star_conditions(served=15, nodes=1)
+
+        pending = self.engine.get_campsite_star_progress()
+        self.assertTrue(pending["requirement_met"])
+        self.assertTrue(pending["pending_morning_upgrade"])
+
+        self._set_star_conditions(served=14, nodes=1)
+        self.assertFalse(
+            self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
+        )
+
+    def test_served_groups_upgrade_only_on_next_morning(self):
+        self._set_star_conditions(served=14, nodes=1)
         self.engine.state.day = 2
-        self.engine.state.pending_reviews = [{"created_day": 1, "rating": 5}]
+        self.engine.state.turn = 6
 
-        self.engine._settle_pending_reviews({"events": []})
+        self.engine._record_served_group_once(
+            NPCGroup(id=901, group_size=1, visit_type="day")
+        )
 
+        self.assertEqual(self.engine.state.campsite_star, 1)
+        self.assertTrue(
+            self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
+        )
+        self._finish_day_and_start_next()
+        self.assertEqual(self.engine.state.campsite_star, 2)
+
+    def test_growth_purchase_waits_until_next_morning_to_unlock_next_star_projects(self):
+        self.engine.state.campsite_star = 2
+        self.engine.state.total_served_groups = 45
+        self.engine.state.historical_highest_rating = 4.1
+        self.engine.state.day = 2
+        self.engine.state.turn = 6
+        self.engine.state.balance = 5000
+        self.engine.tents[2].is_unlocked = True
+        self.engine.tents[3].is_unlocked = True
+        self.engine.facilities["dining"].level = 1
+        self.engine.facilities["entertainment"].level = 1
+
+        self.assertTrue(
+            self.engine.purchase_growth_project("greenery_lv1")["success"]
+        )
+        self.assertEqual(self.engine.state.campsite_star, 2)
+        self.assertTrue(
+            self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
+        )
+
+        blocked = self.engine.purchase_growth_project("tent_4")
+        self.assertFalse(blocked["success"])
+        self.assertIn("campsite_star_required", blocked["unmet_conditions"])
+
+        self._finish_day_and_start_next()
+        self.assertEqual(self.engine.state.campsite_star, 3)
+        next_progress = self.engine.get_campsite_star_progress()
+        self.assertEqual(next_progress["next_star"], 4)
+        self.assertFalse(next_progress["pending_morning_upgrade"])
+        self.engine.state.turn = 6
+        self.assertTrue(self.engine.purchase_growth_project("tent_4")["success"])
+
+    def test_hot_spring_completion_upgrades_to_five_stars_next_morning(self):
+        self._set_star_conditions(served=150, nodes=10, rating=4.6)
+        self.engine.state.campsite_star = 4
+        self.engine.state.day = 2
+        self.engine.state.turn = 6
+        self.engine.state.balance = 3000
+
+        self.assertTrue(self.engine.purchase_growth_project("hot_spring")["success"])
+        self.assertEqual(self.engine.state.campsite_star, 4)
+        self.assertTrue(
+            self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
+        )
+        self._finish_day_and_start_next()
+        self.assertEqual(self.engine.state.campsite_star, 5)
+        self.assertFalse(
+            self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
+        )
+
+    def test_morning_review_settlement_updates_rating_then_upgrades_once(self):
+        self._set_star_conditions(served=90, nodes=9)
+        self.engine.state.campsite_star = 3
+        self.engine.state.day = 2
+        self.engine.state.turn = 6
+        self.engine.state.pending_reviews = [{"created_day": 2, "rating": 5}]
+
+        self._finish_day_and_start_next()
         self.assertEqual(self.engine.state.historical_highest_rating, 5.0)
         self.assertEqual(self.engine.state.campsite_star, 4)
 

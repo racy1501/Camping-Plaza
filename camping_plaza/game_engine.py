@@ -857,9 +857,11 @@ class CampingPlazaEngine:
                 condition["met"] for condition in conditions.values()
             )
             progress["next_star_requirement_met"] = progress["requirement_met"]
+            progress["pending_morning_upgrade"] = progress["requirement_met"]
         else:
             progress["requirement_met"] = True
             progress["next_star_requirement_met"] = None
+            progress["pending_morning_upgrade"] = False
         return progress
 
     def _get_campsite_star_condition_progress(
@@ -2036,7 +2038,6 @@ class CampingPlazaEngine:
         for threshold in (50, 100, 150):
             if self.state.total_served_groups >= threshold:
                 self._unlock_achievement(f"served_groups_{threshold}")
-        self._update_campsite_star()
         return True
 
     def _record_successful_dining_once(self, npc: NPCGroup) -> bool:
@@ -2325,7 +2326,6 @@ class CampingPlazaEngine:
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
-            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2357,7 +2357,6 @@ class CampingPlazaEngine:
                 }
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
-            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2403,7 +2402,6 @@ class CampingPlazaEngine:
 
             self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
             self._record_growth_project_achievements(project_id)
-            self._update_campsite_star()
             return {
                 "success": True,
                 "project_id": project_id,
@@ -2437,7 +2435,6 @@ class CampingPlazaEngine:
 
         self.state.today_expenses["growth"] = self.state.today_expenses.get("growth", 0) + project_status["price"]
         self._record_growth_project_achievements(project_id)
-        self._update_campsite_star()
         result = {
             "success": True,
             "project_id": project_id,
@@ -5149,7 +5146,6 @@ class CampingPlazaEngine:
             )
         ):
             self.state.historical_highest_rating = current_rating
-        self._update_campsite_star()
         result["events"].append(f"晨间更新了{len(ratings)}条评价。")
 
     def _apply_review_rating(self, rating: int):
@@ -5636,6 +5632,7 @@ class CampingPlazaEngine:
         self.state.day_start_balance = self.state.balance
 
         self._settle_pending_reviews(result if result is not None else {"events": []})
+        self._update_campsite_star()
 
         self._ensure_today_arrival_plan()
         self._assign_reserved_tents_for_today()
