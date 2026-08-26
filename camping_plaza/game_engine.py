@@ -150,6 +150,8 @@ class GameState:
     last_food_preorder_day: int = 0
     hot_spring_built: bool = False
     hot_spring_people_served_today: int = 0
+    nature_observation_station_built: bool = False
+    discovered_insects: list[str] = field(default_factory=list)
 
     # 长期成长进度账本。旧快照缺少这些字段时保持默认 0，不补算历史。
     total_served_groups: int = 0
@@ -466,6 +468,27 @@ class CampingPlazaEngine:
             "price": 3000, "sequence": 12,
             "operation": "campsite_star", "required_campsite_star": 4,
         },
+        {
+            "project_id": "nature_observation_station",
+            "category": "nature_observation_station",
+            "display_name": "自然观察站", "price": 800, "sequence": 13,
+            "operation": "campsite_star", "required_campsite_star": 3,
+        },
+    )
+    NATURE_OBSERVATION_PARTICIPATION_PERCENT = 25
+    INSECT_CATALOG = (
+        {"id": "ladybug", "name": "七星瓢虫", "rarity": "common", "weight": 4},
+        {"id": "white_butterfly", "name": "粉蝶", "rarity": "common", "weight": 4},
+        {"id": "dragonfly", "name": "蜻蜓", "rarity": "common", "weight": 4},
+        {"id": "cicada", "name": "蝉", "rarity": "common", "weight": 4},
+        {"id": "mantis", "name": "螳螂", "rarity": "common", "weight": 4},
+        {"id": "grasshopper", "name": "蚱蜢", "rarity": "common", "weight": 4},
+        {"id": "swallowtail", "name": "凤蝶", "rarity": "uncommon", "weight": 3},
+        {"id": "firefly", "name": "萤火虫", "rarity": "uncommon", "weight": 3},
+        {"id": "longhorn_beetle", "name": "天牛", "rarity": "uncommon", "weight": 3},
+        {"id": "stick_insect", "name": "竹节虫", "rarity": "uncommon", "weight": 3},
+        {"id": "rhinoceros_beetle", "name": "独角仙", "rarity": "rare", "weight": 2},
+        {"id": "stag_beetle", "name": "锹形虫", "rarity": "rare", "weight": 2},
     )
     TURN_PLAN_ACTIONS = {
         "clean_tents": {
@@ -661,6 +684,7 @@ class CampingPlazaEngine:
             "source": source,
             "arrival_status": "pending",
             "planned_actions": [],
+            "observation_plan": None,
             "is_reserved": npc.is_reserved,
             "paid": npc.paid,
             "tent_id": tent_id,
@@ -792,6 +816,58 @@ class CampingPlazaEngine:
         self._schedule_planned_actions(
             entry["arrival_turn"], entry["planned_actions"], shuffle_actions=False
         )
+
+    def _normalize_discovered_insects(self, insect_ids) -> list[str]:
+        """只保留正式目录中的虫种，并固定为目录顺序。"""
+        if not isinstance(insect_ids, (list, tuple, set)):
+            return []
+        known_ids = {insect["id"] for insect in self.INSECT_CATALOG}
+        discovered = {
+            insect_id for insect_id in insect_ids
+            if isinstance(insect_id, str) and insect_id in known_ids
+        }
+        return [
+            insect["id"] for insect in self.INSECT_CATALOG
+            if insect["id"] in discovered
+        ]
+
+    def _get_nature_observation_discovery_percent(self) -> int:
+        discovered_count = len(self._normalize_discovered_insects(
+            self.state.discovered_insects
+        ))
+        if discovered_count < 3:
+            return 35
+        if discovered_count < 6:
+            return 45
+        if discovered_count < 9:
+            return 55
+        return 65
+
+    def _roll_nature_observation_result(self, discovery_percent: int) -> str:
+        """对未发现与全部正式虫种做一次完整的整数权重抽取。"""
+        insect_weight_total = sum(insect["weight"] for insect in self.INSECT_CATALOG)
+        weighted_results = [("not_found", (100 - discovery_percent) * insect_weight_total)]
+        weighted_results.extend(
+            (insect["id"], discovery_percent * insect["weight"])
+            for insect in self.INSECT_CATALOG
+        )
+        total_weight = sum(weight for _, weight in weighted_results)
+        roll = random.randrange(total_weight)
+        for result, weight in weighted_results:
+            if roll < weight:
+                return result
+            roll -= weight
+        raise RuntimeError("nature observation weight pool is invalid")
+
+    def _append_observation_plan(self, entry: dict, discovery_percent: int) -> None:
+        """为一组客人写入独立的隐藏自然观察计划，不占普通行动槽。"""
+        if random.randrange(100) >= self.NATURE_OBSERVATION_PARTICIPATION_PERCENT:
+            return
+        entry["observation_plan"] = {
+            "planned_turn": random.choice(tuple(range(entry["arrival_turn"], 6))),
+            "status": "pending",
+            "result": self._roll_nature_observation_result(discovery_percent),
+        }
 
     def _find_arrival_plan_entry(
         self,
@@ -1237,6 +1313,10 @@ class CampingPlazaEngine:
 
         demand = self._calculate_daily_visitor_demand()
         planned_entries = []
+        observation_discovery_percent = (
+            self._get_nature_observation_discovery_percent()
+            if self.state.nature_observation_station_built else None
+        )
 
         remaining_reservations = []
         for reservation in self.state.reservations:
@@ -1265,6 +1345,8 @@ class CampingPlazaEngine:
                 tent_id=reservation.get("tent_id"),
             )
             self._append_planned_actions(entry)
+            if observation_discovery_percent is not None:
+                self._append_observation_plan(entry, observation_discovery_percent)
             planned_entries.append(entry)
         self.state.reservations = remaining_reservations
 
@@ -1282,6 +1364,8 @@ class CampingPlazaEngine:
             source = "natural_day" if guest.visit_type == "day" else "natural_overnight"
             entry = self._build_arrival_plan_entry(guest, arrival_turn, source)
             self._append_planned_actions(entry)
+            if observation_discovery_percent is not None:
+                self._append_observation_plan(entry, observation_discovery_percent)
             planned_entries.append(entry)
 
         self.state.today_arrival_plan = planned_entries
@@ -1912,6 +1996,12 @@ class CampingPlazaEngine:
                     "hot_spring", "tip",
                 )
             }
+            restored_state.nature_observation_station_built = bool(
+                restored_state.nature_observation_station_built
+            )
+            restored_state.discovered_insects = self._normalize_discovered_insects(
+                restored_state.discovered_insects
+            )
             restored_state.unlocked_achievement_ids = self._normalize_achievement_ids(
                 restored_state.unlocked_achievement_ids
             )
@@ -2209,6 +2299,11 @@ class CampingPlazaEngine:
                 prerequisite_met = True
                 progress = {}
                 prerequisite_unmet_code = ""
+            elif category == "nature_observation_station":
+                completed = self.state.nature_observation_station_built
+                prerequisite_met = True
+                progress = {}
+                prerequisite_unmet_code = ""
             else:
                 current_level = facility_levels[category]
                 completed = current_level >= project["target_level"]
@@ -2280,7 +2375,10 @@ class CampingPlazaEngine:
             }
 
         category = project_definition["category"]
-        if category not in ("tent", "dining", "entertainment", "greenery", "hot_spring"):
+        if category not in (
+            "tent", "dining", "entertainment", "greenery", "hot_spring",
+            "nature_observation_station",
+        ):
             return {
                 "success": False,
                 "project_id": project_id,
@@ -2366,6 +2464,40 @@ class CampingPlazaEngine:
                 "balance_before": balance_before,
                 "balance_after": self.state.balance,
                 "hot_spring_built": self.state.hot_spring_built,
+                "completed_growth_nodes": self.get_growth_progress()[
+                    "completed_growth_nodes"
+                ],
+            }
+
+        if category == "nature_observation_station":
+            previous_built = self.state.nature_observation_station_built
+            try:
+                self.state.balance -= project_status["price"]
+                self.state.nature_observation_station_built = True
+            except Exception as exc:
+                self.state.balance = balance_before
+                self.state.nature_observation_station_built = previous_built
+                return {
+                    "success": False,
+                    "project_id": project_id,
+                    "category": category,
+                    "error_code": "growth_project_purchase_failed",
+                    "error": str(exc),
+                }
+            self.state.today_expenses["growth"] = (
+                self.state.today_expenses.get("growth", 0) + project_status["price"]
+            )
+            return {
+                "success": True,
+                "project_id": project_id,
+                "category": category,
+                "display_name": project_status["display_name"],
+                "price": project_status["price"],
+                "balance_before": balance_before,
+                "balance_after": self.state.balance,
+                "nature_observation_station_built": (
+                    self.state.nature_observation_station_built
+                ),
                 "completed_growth_nodes": self.get_growth_progress()[
                     "completed_growth_nodes"
                 ],
@@ -3374,6 +3506,7 @@ class CampingPlazaEngine:
             self._process_dining(result)
             self._process_entertainment(result)
             self._process_hot_spring(result)
+            self._process_nature_observation_plans()
             if self.state.turn == 5:
                 self._settle_tips(result)
                 self._process_day_guest_departures(result)
@@ -3498,6 +3631,36 @@ class CampingPlazaEngine:
 
         # 清理已离开的NPC
         self._cleanup_left_npcs()
+
+    def _process_nature_observation_plans(self) -> None:
+        """静默执行本 Turn 已锁定的自然观察结果。"""
+        for entry in self.state.today_arrival_plan:
+            if entry.get("planned_day") != self.state.day:
+                continue
+            observation_plan = entry.get("observation_plan")
+            if (
+                not isinstance(observation_plan, dict)
+                or observation_plan.get("status") != "pending"
+                or observation_plan.get("planned_turn") != self.state.turn
+            ):
+                continue
+
+            npc = self._find_npc(entry.get("npc_id"))
+            if (
+                entry.get("arrival_status") != "arrived"
+                or npc is None
+                or npc.has_left
+            ):
+                observation_plan["status"] = "skipped"
+                continue
+
+            observation_plan["status"] = "completed"
+            result = observation_plan.get("result")
+            if result == "not_found":
+                continue
+            self.state.discovered_insects = self._normalize_discovered_insects(
+                list(self.state.discovered_insects) + [result]
+            )
 
     def _restore_active_npc_base_locations(self):
         """在本 Turn 行为执行前恢复仍在场 NPC 的基础位置。"""

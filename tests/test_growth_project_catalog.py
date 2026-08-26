@@ -41,7 +41,7 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         self.engine.state.turn = 6
         self.engine.state.balance = 100000
 
-    def test_catalog_has_fixed_twelve_projects_in_order_with_prices(self):
+    def test_catalog_has_fixed_projects_in_order_with_prices(self):
         catalog = self.engine.get_growth_project_catalog()
 
         self.assertEqual(
@@ -50,12 +50,12 @@ class GrowthProjectCatalogTests(unittest.TestCase):
                 "tent_2", "tent_3", "tent_4", "tent_5", "tent_6",
                 "dining_lv1", "dining_lv2", "entertainment_lv1",
                 "entertainment_lv2", "greenery_lv1", "greenery_lv2",
-                "hot_spring",
+                "hot_spring", "nature_observation_station",
             ],
         )
         self.assertEqual(
             [project["price"] for project in catalog],
-            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 3000],
+            [600, 1100, 1900, 3200, 4800, 700, 1800, 600, 1600, 600, 1600, 3000, 800],
         )
         self.assertEqual(
             [project["project_id"] for project in CampingPlazaEngine.GROWTH_PROJECT_CATALOG],
@@ -63,7 +63,55 @@ class GrowthProjectCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             [project["sequence"] for project in CampingPlazaEngine.GROWTH_PROJECT_CATALOG],
-            list(range(1, 13)),
+            list(range(1, 14)),
+        )
+
+    def test_nature_observation_station_requires_three_star_and_is_not_growth_node(self):
+        self._open_management_phase()
+        nodes_before = self.engine.get_growth_progress()["completed_growth_nodes"]
+
+        project = self._catalog()["nature_observation_station"]
+        self.assertFalse(project["operation_requirement_met"])
+        self.assertIn("campsite_star_required", project["unmet_conditions"])
+
+        self.engine.state.campsite_star = 3
+        project = self._catalog()["nature_observation_station"]
+        self.assertTrue(project["can_purchase_now"])
+        result = self.engine.purchase_growth_project("nature_observation_station")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["price"], 800)
+        self.assertTrue(self.engine.state.nature_observation_station_built)
+        self.assertEqual(
+            self.engine.get_growth_progress()["completed_growth_nodes"], nodes_before
+        )
+
+        balance_after_purchase = self.engine.state.balance
+        repeated = self.engine.purchase_growth_project("nature_observation_station")
+        self.assertFalse(repeated["success"])
+        self.assertEqual(self.engine.state.balance, balance_after_purchase)
+
+    def test_nature_observation_station_purchase_failures_are_atomic(self):
+        self._open_management_phase()
+        self.engine.state.campsite_star = 3
+        self.engine.state.balance = 799
+        before_nodes = self.engine.get_growth_progress()["completed_growth_nodes"]
+        before_star = self.engine.state.campsite_star
+
+        insufficient = self.engine.purchase_growth_project("nature_observation_station")
+        self.assertFalse(insufficient["success"])
+        self.assertEqual(self.engine.state.balance, 799)
+        self.assertFalse(self.engine.state.nature_observation_station_built)
+
+        self.engine.state.balance = 800
+        self.engine.state.turn = 5
+        wrong_turn = self.engine.purchase_growth_project("nature_observation_station")
+        self.assertFalse(wrong_turn["success"])
+        self.assertEqual(self.engine.state.balance, 800)
+        self.assertFalse(self.engine.state.nature_observation_station_built)
+        self.assertEqual(self.engine.state.campsite_star, before_star)
+        self.assertEqual(
+            self.engine.get_growth_progress()["completed_growth_nodes"], before_nodes
         )
 
     def test_hot_spring_requires_four_star_only(self):

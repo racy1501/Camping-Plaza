@@ -552,6 +552,43 @@ class MissingTentUnlockedFieldFallbackTests(PersistenceTestCase):
             self.assertFalse(restored.tents[tent_id].is_unlocked)
 
 
+class NatureObservationPersistenceTests(PersistenceTestCase):
+    def test_nature_observation_fields_roundtrip_and_old_snapshot_defaults(self):
+        engine = CampingPlazaEngine(db_path=self.db_path)
+        engine.state.nature_observation_station_built = True
+        engine.state.discovered_insects = ["stag_beetle", "invalid", "ladybug", "stag_beetle"]
+        engine.state.today_arrival_plan = [{
+            "npc_id": 1,
+            "planned_day": engine.state.day,
+            "arrival_status": "pending",
+            "planned_actions": [],
+            "observation_plan": {
+                "planned_turn": 4,
+                "status": "pending",
+                "result": "firefly",
+            },
+        }]
+        engine.state.today_arrival_plan_day = engine.state.day
+        self.assertTrue(engine.save_state())
+
+        restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertTrue(restored.state.nature_observation_station_built)
+        self.assertEqual(restored.state.discovered_insects, ["ladybug", "stag_beetle"])
+        self.assertEqual(
+            restored.state.today_arrival_plan[0]["observation_plan"]["result"],
+            "firefly",
+        )
+
+        rows = self._snapshot_rows()
+        payload = json.loads(rows[0][1])
+        payload["state"].pop("nature_observation_station_built")
+        payload["state"].pop("discovered_insects")
+        self._write_snapshot_dict(payload)
+        old_restored = CampingPlazaEngine(db_path=self.db_path)
+        self.assertFalse(old_restored.state.nature_observation_station_built)
+        self.assertEqual(old_restored.state.discovered_insects, [])
+
+
 class DiningPersistenceTests(PersistenceTestCase):
     def test_last_dining_day_roundtrip_and_same_day_protection_survives_restore(self):
         engine = CampingPlazaEngine(db_path=self.db_path)

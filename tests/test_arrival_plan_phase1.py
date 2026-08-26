@@ -344,3 +344,23 @@ class ArrivalPlanPhase1Tests(unittest.TestCase):
                 self.assertEqual(engine.state.today_arrival_plan[0]["arrival_turn"], arrival_turn)
                 self.assertEqual(engine.state.today_arrival_plan[0]["source"], "reservation")
                 self.assertEqual(engine.state.today_arrival_plan[0]["tent_id"], reservation["tent_id"])
+
+    def test_nature_observation_is_a_separate_hidden_plan_not_a_planned_action(self):
+        engine = self._new_engine()
+        engine.state.nature_observation_station_built = True
+        engine.state.day = 4
+        engine.state.turn = 1
+
+        with mock.patch.object(
+            CampingPlazaEngine,
+            "_calculate_daily_visitor_demand",
+            return_value={"day_guest_count": 1, "overnight_guest_count": 0},
+        ), mock.patch.object(CampingPlazaEngine, "_roll_arrival_turn", return_value=3), \
+             mock.patch("game_engine.random.randrange", side_effect=[0, 2600]), \
+             mock.patch("game_engine.random.choice", return_value=5):
+            self.assertTrue(engine._ensure_today_arrival_plan())
+
+        entry = engine.state.today_arrival_plan[0]
+        self.assertEqual(entry["observation_plan"]["planned_turn"], 5)
+        self.assertGreaterEqual(entry["observation_plan"]["planned_turn"], entry["arrival_turn"])
+        self.assertFalse(any(action.get("action") == "observation" for action in entry["planned_actions"]))
