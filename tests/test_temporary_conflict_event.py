@@ -540,6 +540,24 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.assertTrue(fire["success"])
         self.assertIn(501, fire.get("affected_npc_ids", self.engine.state.campfire_affected_npc_ids))
 
+    def test_campfire_and_stargazing_keep_sixty_percent_hit_rate(self):
+        guest = NPCGroup(id=502, group_size=1, visit_type="day", campsite_slot=1)
+        self.engine.npc_pool.append(guest)
+        self.engine.state.turn = 4
+        with mock.patch("game_engine.random.random", return_value=0.59):
+            fire = self.engine.hold_campfire(consume_decision=False)
+        self.assertIn(guest.id, fire.get("affected_npc_ids", self.engine.state.campfire_affected_npc_ids))
+
+        self.engine.state.turn = 5
+        with mock.patch("game_engine.random.random", return_value=0.59):
+            sky = self.engine.go_stargazing(consume_decision=False)
+        self.assertIn(guest.id, sky.get("affected_npc_ids", self.engine.state.stargazing_affected_npc_ids))
+
+        self.engine.state.turn = 4
+        with mock.patch("game_engine.random.random", return_value=0.60):
+            fire = self.engine.hold_campfire(consume_decision=False)
+        self.assertNotIn(guest.id, fire.get("affected_npc_ids", self.engine.state.campfire_affected_npc_ids))
+
     def test_clean_campsite_is_limited_to_two_daily_uses_and_one_plan_action(self):
         self.engine.state.turn = 3
         self.assertTrue(self.engine.clean_campsite(consume_decision=False)["success"])
@@ -705,10 +723,15 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.engine.state.stargazing_affected_npc_ids = [702]
         self.engine.state.turn = 5
         balance_before = self.engine.state.balance
-        with mock.patch("game_engine.random.random", side_effect=[0.30, 0.0]):
+        satisfaction_before = {guest.id: guest.total_satisfaction for guest in guests}
+        with mock.patch("game_engine.random.random", side_effect=[0.40, 0.0]):
             self.engine._settle_tips({"events": []})
-        self.assertEqual(self.engine.state.today_income["tip"], 50)
-        self.assertEqual(self.engine.state.balance, balance_before + 50)
+        self.assertEqual(self.engine.state.today_income["tip"], 65)
+        self.assertEqual(self.engine.state.balance, balance_before + 65)
+        self.assertEqual(
+            {guest.id: guest.total_satisfaction for guest in guests},
+            satisfaction_before,
+        )
 
     def test_successful_greenery_upgrade_skips_same_batch_maintenance(self):
         self.engine.state.turn = 6

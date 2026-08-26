@@ -4889,9 +4889,9 @@ class CampingPlazaEngine:
         for npc in self.npc_pool:
             if npc.has_left:
                 continue
-            probability = 0.35 if npc.id in campfire_ids else 0.20
+            probability = 0.45 if npc.id in campfire_ids else 0.20
             if random.random() < probability:
-                total += 30 if npc.id in stargazing_ids else 20
+                total += 45 if npc.id in stargazing_ids else 20
         self.state.today_income["tip"] += total
         if total:
             self.state.balance += total
