@@ -2201,7 +2201,47 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         result = {"events": []}
         engine._settle_pending_reviews(result)
         self.assertEqual(engine.state.review_history[0], pending)
-        self.assertEqual(result["events"], ["晨间更新了1条评价。"])
+        self.assertEqual(result["events"], [
+            "晨间更新了1条评价。",
+            "营地评分更新为 5.0★。",
+        ])
+
+    def test_morning_rating_change_message_covers_rise_fall_and_no_change(self):
+        cases = [
+            ([{"rating": 4}], [{"rating": 5}], "营地评分由 4.0★ 升至 4.5★。"),
+            ([{"rating": 5}], [{"rating": 4}], "营地评分由 5.0★ 降至 4.5★。"),
+            ([{"rating": 4}], [{"rating": 4}], None),
+        ]
+        for history, pending, expected_message in cases:
+            with self.subTest(expected_message=expected_message):
+                engine = make_engine()
+                engine.state.day = 2
+                engine.state.review_history = list(history)
+                engine.state.pending_reviews = [
+                    {"created_day": 1, **review} for review in pending
+                ]
+                result = {"events": []}
+
+                engine._settle_pending_reviews(result)
+
+                if expected_message is None:
+                    self.assertNotIn("营地评分", "".join(result["events"]))
+                else:
+                    self.assertIn(expected_message, result["events"])
+
+    def test_morning_first_rating_message_is_natural_and_not_repeated(self):
+        engine = make_engine()
+        engine.state.day = 2
+        engine.state.pending_reviews = [{"created_day": 1, "rating": 4}]
+        first_result = {"events": []}
+
+        engine._settle_pending_reviews(first_result)
+        second_result = {"events": []}
+        engine._settle_pending_reviews(second_result)
+
+        self.assertIn("营地评分更新为 4.0★。", first_result["events"])
+        self.assertNotIn("0.0★", "".join(first_result["events"]))
+        self.assertEqual(second_result["events"], [])
 
     def test_review_candidates_require_real_action_results(self):
         engine = make_engine()
@@ -2378,7 +2418,10 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         self.assertEqual(engine.state.pending_reviews, [])
         self.assertEqual(engine.state.review_history, reviews)
         self.assertEqual(engine.state.total_reviews, 2)
-        self.assertEqual(result["events"], ["晨间更新了2条评价。"])
+        self.assertEqual(result["events"], [
+            "晨间更新了2条评价。",
+            "营地评分更新为 4.5★。",
+        ])
 
     def test_unreviewed_guest_is_not_added_to_review_history(self):
         engine = make_engine()

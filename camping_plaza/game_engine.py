@@ -5349,6 +5349,7 @@ class CampingPlazaEngine:
         if not due_reviews:
             return
 
+        previous_rating = self.get_average_rating()
         ratings = []
         for review in due_reviews:
             rating = int(review["rating"])
@@ -5370,6 +5371,14 @@ class CampingPlazaEngine:
         ):
             self.state.historical_highest_rating = current_rating
         result["events"].append(f"晨间更新了{len(ratings)}条评价。")
+        if current_rating is not None and current_rating != previous_rating:
+            if previous_rating is None:
+                result["events"].append(f"营地评分更新为 {current_rating:.1f}★。")
+            else:
+                direction = "升至" if current_rating > previous_rating else "降至"
+                result["events"].append(
+                    f"营地评分由 {previous_rating:.1f}★ {direction} {current_rating:.1f}★。"
+                )
 
     def _apply_review_rating(self, rating: int):
         self.state.total_reviews += 1
