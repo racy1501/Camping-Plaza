@@ -861,9 +861,12 @@ def _get_temporary_event_summary(eng: CampingPlazaEngine) -> Optional[dict]:
     if event is None:
         return None
     return {
-        "description": (
-            f"{eng._visible_guest_label(event['npc_a_id'])}与"
-            f"{eng._visible_guest_label(event['npc_b_id'])}发生了争执。"
+        "description": eng._format_temporary_conflict_opening(
+            [
+                eng._visible_guest_label(event["npc_a_id"]),
+                eng._visible_guest_label(event["npc_b_id"]),
+            ],
+            event,
         ),
         "choices": [
             {

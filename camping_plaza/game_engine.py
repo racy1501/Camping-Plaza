@@ -218,6 +218,32 @@ class CampingPlazaEngine:
         "gift": {0: 0.05, 1: 0.15, 2: 0.30},
     }
     TEMPORARY_CONFLICT_GIFT_COST = 40
+    TEMPORARY_CONFLICT_TOPIC_TEMPLATES = {
+        "quiet_hours_noise": (
+            "因为休息时段说话声太大拌了几句嘴",
+            "因为休息时段的声音有些吵闹起了争执",
+        ),
+        "shared_area": (
+            "因为公共区域怎么使用拌了几句嘴",
+            "因为公共区域的使用起了争执",
+        ),
+        "campsite_boundary": (
+            "因为营位边界或物品摆放起了争执",
+            "因为营位边界和物品摆放闹得有些不愉快",
+        ),
+        "facility_queue": (
+            "因为公共设施的使用顺序闹得有些不愉快",
+            "因为公共设施前的先后顺序起了争执",
+        ),
+        "activity_disturbance": (
+            "因为活动时不小心打扰了邻近客人起了争执",
+            "因为活动动静打扰到邻近客人拌了几句嘴",
+        ),
+        "passage_blocked": (
+            "因为通行空间被临时占住起了争执",
+            "因为临时占住了通行空间闹得有些不愉快",
+        ),
+    }
     DINING_SET_MENUS = {
         "basic": {
             "display_name": "基础套餐",
@@ -1438,7 +1464,13 @@ class CampingPlazaEngine:
             "trigger_turn": trigger_turn,
             "verbal_result": self._roll_temporary_conflict_result(npc_a, npc_b, "verbal"),
             "gift_result": self._roll_temporary_conflict_result(npc_a, npc_b, "gift"),
+            "topic": random.choice(tuple(self.TEMPORARY_CONFLICT_TOPIC_TEMPLATES)),
+            "topic_variant": None,
         }
+        topic = self.state.today_conflict_event["topic"]
+        self.state.today_conflict_event["topic_variant"] = random.randrange(
+            len(self.TEMPORARY_CONFLICT_TOPIC_TEMPLATES[topic])
+        )
 
     def _get_temporary_conflict_probability(self, npc_a: dict, npc_b: dict) -> float:
         same_temperament = npc_a.get("temperament") == npc_b.get("temperament")
@@ -1506,14 +1538,16 @@ class CampingPlazaEngine:
             outcome_text = f"你准备了水果或小礼物安抚，但{affected_labels[0]}仍有些不满。"
         else:
             outcome_text = "你准备了水果或小礼物安抚，但双方情绪都没有完全平复。"
-        message = f"临时事件：{labels[0]}与{labels[1]}发生了争执。{outcome_text}"
+        opening = self._format_temporary_conflict_opening(labels, event)
+        message = f"临时事件：{opening}{outcome_text}"
         result["events"].append(message)
         self._record_business_event(
             self.state.day,
             event["trigger_turn"],
             "temporary_conflict",
             guest_ids=[event["npc_a_id"], event["npc_b_id"]],
-            data={"choice": choice, "affected_guest_ids": [
+            data={"choice": choice, "topic": event.get("topic"),
+                "topic_variant": event.get("topic_variant"), "affected_guest_ids": [
                 npc_id for npc_id, delta_key in (
                     (event["npc_a_id"], "npc_a_delta"),
                     (event["npc_b_id"], "npc_b_delta"),
@@ -1522,6 +1556,23 @@ class CampingPlazaEngine:
             merge=False,
         )
         event["status"] = "resolved"
+
+    def _format_temporary_conflict_opening(self, labels: list[str], event: dict) -> str:
+        """使用冲突生成时保存的主题生成稳定起因；旧档缺主题时回退泛化文案。"""
+        reason = None
+        topic = event.get("topic") if isinstance(event, dict) else None
+        variants = self.TEMPORARY_CONFLICT_TOPIC_TEMPLATES.get(topic)
+        if variants:
+            variant = event.get("topic_variant", 0)
+            if not isinstance(variant, int) or not 0 <= variant < len(variants):
+                variant = 0
+            reason = variants[variant]
+        opening = (
+            f"{labels[0]}与{labels[1]}"
+            if len(labels) > 1 and labels[1]
+            else labels[0]
+        )
+        return f"{opening}{reason}。" if reason else f"{opening}发生了争执。"
 
     def resolve_current_temporary_conflict(self, choice: str) -> dict:
         """在事件出现的当前 Turn 立即结算，普通经营计划仍可随后提交。"""
@@ -2742,7 +2793,10 @@ class CampingPlazaEngine:
                 outcome = f"但{affected}仍有些不满。"
             else:
                 outcome = "但双方情绪都没有完全平复。"
-            return f"临时事件：{guests}发生了争执。{choice}，{outcome}"
+            opening = self._format_temporary_conflict_opening(
+                [guests, ""], data
+            ).rstrip("。")
+            return f"临时事件：{opening}。{choice}，{outcome}"
         if event_type == "arrival_day":
             return f"{guests}到达营地。"
         if event_type == "arrival_overnight":

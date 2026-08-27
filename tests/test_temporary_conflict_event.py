@@ -53,9 +53,22 @@ class TemporaryConflictEventTests(unittest.TestCase):
         self.assertEqual(event["trigger_turn"], 5)
         self.assertEqual(event["verbal_result"], {"npc_a_delta": 0, "npc_b_delta": 0})
         self.assertEqual(event["gift_result"], {"npc_a_delta": 0, "npc_b_delta": 0})
+        self.assertIn(event["topic"], self.engine.TEMPORARY_CONFLICT_TOPIC_TEMPLATES)
+        self.assertIn(event["topic_variant"], range(
+            len(self.engine.TEMPORARY_CONFLICT_TOPIC_TEMPLATES[event["topic"]])
+        ))
         before = dict(event)
         self.engine._initialize_today_conflict_event()
         self.assertEqual(self.engine.state.today_conflict_event, before)
+
+    def test_all_conflict_topics_have_player_visible_opening(self):
+        for topic, variants in self.engine.TEMPORARY_CONFLICT_TOPIC_TEMPLATES.items():
+            for variant in range(len(variants)):
+                opening = self.engine._format_temporary_conflict_opening(
+                    ["甲组", "乙组"], {"topic": topic, "topic_variant": variant}
+                )
+                self.assertIn(variants[variant], opening)
+                self.assertNotEqual(opening, "甲组与乙组发生了争执。")
 
     def test_same_temperament_has_lower_conflict_weight_than_different(self):
         same = {"temperament": 1}
@@ -87,6 +100,25 @@ class TemporaryConflictEventTests(unittest.TestCase):
             result = self.engine.resolve_current_temporary_conflict("verbal")
 
         self.assertTrue(result["success"])
+
+    def test_topic_is_reused_in_resolution_and_history_without_reroll(self):
+        self.engine.state.turn = 3
+        self.engine.npc_pool.extend([
+            NPCGroup(id=1, group_size=1, visit_type="day", campsite_slot=1),
+            NPCGroup(id=2, group_size=1, visit_type="day", campsite_slot=2),
+        ])
+        event = {
+            "status": "scheduled", "npc_a_id": 1, "npc_b_id": 2,
+            "trigger_turn": 3, "topic": "facility_queue", "topic_variant": 1,
+            "verbal_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+            "gift_result": {"npc_a_delta": 0, "npc_b_delta": 0},
+        }
+        self.engine.state.today_conflict_event = event
+        with mock.patch("game_engine.random.random", side_effect=AssertionError("must not re-roll topic")):
+            result = self.engine.resolve_current_temporary_conflict("verbal")
+        self.assertIn("公共设施前的先后顺序", result["message"])
+        self.assertIn("公共设施前的先后顺序", self.engine.state.event_history[-1]["text"])
+        self.assertEqual(self.engine.state.event_history[-1]["data"]["topic"], "facility_queue")
 
     def test_plan_requires_immediate_conflict_resolution_only_on_trigger_turn(self):
         self.engine.state.turn = 3
