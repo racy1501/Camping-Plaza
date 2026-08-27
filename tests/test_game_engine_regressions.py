@@ -2477,6 +2477,10 @@ class DelayedReviewSettlementTests(unittest.TestCase):
         engine._settle_pending_reviews({"events": []})
 
         self.assertEqual(len(engine.state.review_history), 100)
+        self.assertEqual(
+            [review["npc_id"] for review in engine.state.review_history],
+            list(range(1, 101)),
+        )
         self.assertEqual(engine.state.review_history[0]["npc_id"], 1)
         self.assertEqual(engine.state.review_history[-1], newest)
 

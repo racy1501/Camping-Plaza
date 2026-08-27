@@ -5357,6 +5357,8 @@ class CampingPlazaEngine:
             ratings.append(rating)
             self.state.review_history.append(dict(review))
 
+        self.state.review_history = self.state.review_history[-100:]
+
         self.state.pending_reviews = [
             review for review in self.state.pending_reviews
             if review.get("created_day", self.state.day) >= self.state.day
