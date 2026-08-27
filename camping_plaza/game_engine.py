@@ -152,6 +152,7 @@ class GameState:
     hot_spring_built: bool = False
     hot_spring_people_served_today: int = 0
     nature_observation_station_built: bool = False
+    nature_observation_intro_seen: bool = False
     discovered_insects: list[str] = field(default_factory=list)
 
     # 长期成长进度账本。旧快照缺少这些字段时保持默认 0，不补算历史。
@@ -2000,6 +2001,9 @@ class CampingPlazaEngine:
             restored_state.nature_observation_station_built = bool(
                 restored_state.nature_observation_station_built
             )
+            restored_state.nature_observation_intro_seen = bool(
+                restored_state.nature_observation_intro_seen
+            )
             restored_state.discovered_insects = self._normalize_discovered_insects(
                 restored_state.discovered_insects
             )
@@ -2499,6 +2503,7 @@ class CampingPlazaEngine:
                 "nature_observation_station_built": (
                     self.state.nature_observation_station_built
                 ),
+                "message": "自然观察站建成了，从明天开始客人将有机会参加自然观察活动。",
                 "completed_growth_nodes": self.get_growth_progress()[
                     "completed_growth_nodes"
                 ],
@@ -3686,6 +3691,9 @@ class CampingPlazaEngine:
                     ),
                     "is_new_discovery": is_new_discovery,
                 }
+                discovered_count = len(self.state.discovered_insects)
+                if is_new_discovery and discovered_count in (3, 6, 9):
+                    event_data["observation_ability_unlocked"] = True
                 if insect:
                     event_data.update({
                         "insect_id": insect["id"],
@@ -6007,8 +6015,9 @@ class CampingPlazaEngine:
                         "id": insect["id"],
                         "name": insect["name"],
                         "rarity": insect["rarity"],
+                        "catalog_index": index,
                     }
-                    for insect in self.INSECT_CATALOG
+                    for index, insect in enumerate(self.INSECT_CATALOG, start=1)
                     if insect["id"] in self.state.discovered_insects
                 ],
             },

@@ -68,6 +68,13 @@
                 </span>
                 <span class="achievement-new-badge hidden" id="achievementNewBadge">新</span>
             </button>
+            <button class="metric-card achievement-card insect-catalog-card" id="insectCatalogButton" type="button" aria-haspopup="dialog">
+                <span class="metric-icon" aria-hidden="true">⌕</span>
+                <span>
+                    <small>昆虫图鉴</small>
+                    <strong id="insectCatalogProgress">-- / 12</strong>
+                </span>
+            </button>
         </header>
 
         <div class="achievement-modal hidden" id="achievementModal" role="dialog" aria-modal="true" aria-labelledby="achievementModalTitle">
@@ -77,6 +84,27 @@
                     <button class="achievement-close" id="achievementModalClose" type="button" aria-label="关闭成就图鉴">关闭</button>
                 </div>
                 <div class="achievement-grid" id="achievementGrid"></div>
+            </section>
+        </div>
+
+        <div class="achievement-modal hidden" id="insectCatalogModal" role="dialog" aria-modal="true" aria-labelledby="insectCatalogModalTitle">
+            <section class="achievement-dialog insect-catalog-dialog">
+                <div class="achievement-dialog-heading">
+                    <h2 id="insectCatalogModalTitle">昆虫图鉴</h2>
+                    <button class="achievement-close" id="insectCatalogModalClose" type="button" aria-label="关闭昆虫图鉴">关闭</button>
+                </div>
+                <p class="insect-catalog-progress" id="insectCatalogModalProgress">0 / 12</p>
+                <div class="insect-catalog-grid" id="insectCatalogGrid"></div>
+            </section>
+        </div>
+
+        <div class="achievement-modal hidden" id="natureObservationIntroModal" role="dialog" aria-modal="true" aria-labelledby="natureObservationIntroTitle">
+            <section class="achievement-dialog nature-observation-intro-dialog">
+                <div class="achievement-dialog-heading">
+                    <h2 id="natureObservationIntroTitle">新项目：自然观察站</h2>
+                    <button class="achievement-close" id="natureObservationIntroClose" type="button" aria-label="关闭说明">知道了</button>
+                </div>
+                <p id="natureObservationIntroText"></p>
             </section>
         </div>
 

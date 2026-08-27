@@ -64,6 +64,7 @@
     let visibilityPollingBound = false;
     let playerAnchorId = 'entrance';
     let onboardingSubmitting = false;
+    let natureObservationIntroShowing = false;
     const SESSION_STORAGE_KEY = 'camping_plaza_session_id';
     const ACHIEVEMENT_SEEN_KEY_PREFIX = 'seenAchievementCount_';
     let sessionId = '';
@@ -156,6 +157,15 @@
         els.achievementModal = document.getElementById('achievementModal');
         els.achievementModalClose = document.getElementById('achievementModalClose');
         els.achievementGrid = document.getElementById('achievementGrid');
+        els.insectCatalogButton = document.getElementById('insectCatalogButton');
+        els.insectCatalogProgress = document.getElementById('insectCatalogProgress');
+        els.insectCatalogModal = document.getElementById('insectCatalogModal');
+        els.insectCatalogModalClose = document.getElementById('insectCatalogModalClose');
+        els.insectCatalogModalProgress = document.getElementById('insectCatalogModalProgress');
+        els.insectCatalogGrid = document.getElementById('insectCatalogGrid');
+        els.natureObservationIntroModal = document.getElementById('natureObservationIntroModal');
+        els.natureObservationIntroClose = document.getElementById('natureObservationIntroClose');
+        els.natureObservationIntroText = document.getElementById('natureObservationIntroText');
         els.noticeList = document.getElementById('noticeList');
         els.logList = document.getElementById('logList');
         els.reminderList = document.getElementById('reminderList');
@@ -209,6 +219,20 @@
             els.achievementModal.addEventListener('click', event => {
                 if (event.target === els.achievementModal) closeAchievementCatalog();
             });
+        }
+        if (els.insectCatalogButton) {
+            els.insectCatalogButton.addEventListener('click', openInsectCatalog);
+        }
+        if (els.insectCatalogModalClose) {
+            els.insectCatalogModalClose.addEventListener('click', closeInsectCatalog);
+        }
+        if (els.insectCatalogModal) {
+            els.insectCatalogModal.addEventListener('click', event => {
+                if (event.target === els.insectCatalogModal) closeInsectCatalog();
+            });
+        }
+        if (els.natureObservationIntroClose) {
+            els.natureObservationIntroClose.addEventListener('click', closeNatureObservationIntro);
         }
         if (els.playerNameForm) {
             els.playerNameForm.addEventListener('submit', submitPlayerName);
@@ -567,6 +591,7 @@
         renderMap(state);
         renderNPCs(state.active_npcs || [], state.tents || {});
         renderIncome(state);
+        renderInsectCatalogState(state);
         renderReviewBook(state.review_history || []);
         renderOverview(state);
         renderReminders(state);
@@ -839,7 +864,7 @@
         const income = state.today_income || {};
         const expenses = state.today_expenses || {};
         const rows = (items, sign) => items.map(([label, key]) => `<div class="income-row"><span class="income-label">${label}</span><span class="income-value ${sign === '+' ? 'income-in' : 'income-out'}">${sign}${Number(items && (sign === '+' ? income : expenses)[key] || 0)}</span></div>`).join('');
-        const incomeItems = [['住宿', 'accommodation'], ['营位', 'campsite'], ['餐饮', 'dining'], ['娱乐', 'entertainment'], ['温泉', 'hot_spring'], ['小费', 'tip']];
+        const incomeItems = [['住宿', 'accommodation'], ['营位', 'campsite'], ['餐饮', 'dining'], ['娱乐', 'entertainment'], ['温泉', 'hot_spring'], ['自然探索体验包', 'nature_observation'], ['小费', 'tip']];
         const expenseItems = [['食材', 'food'], ['绿化', 'greenery'], ['维修', 'repair'], ['建设 / 升级', 'growth']];
         const incomeTotal = incomeItems.reduce((sum, [, key]) => sum + Number(income[key] || 0), 0);
         const expenseTotal = expenseItems.reduce((sum, [, key]) => sum + Number(expenses[key] || 0), 0);
@@ -965,9 +990,67 @@
         els.reminderList.innerHTML = reminders.map(r => `<li>${escapeHtml(r)}</li>`).join('');
     }
 
+    function natureObservationText(events) {
+        const groupCount = events.length;
+        const income = events.reduce((sum, event) => (
+            sum + Number(event && event.data && event.data.income || 0)
+        ), 0);
+        const newDiscoveries = [];
+        const repeats = [];
+        let notFoundCount = 0;
+        events.forEach(event => {
+            const data = event.data || {};
+            if (data.result === 'not_found') {
+                notFoundCount += 1;
+                return;
+            }
+            const name = data.insect_name || '昆虫';
+            if (data.is_new_discovery) {
+                if (!newDiscoveries.includes(name)) newDiscoveries.push(name);
+            } else if (!repeats.includes(name)) {
+                repeats.push(name);
+            }
+        });
+        const parts = [
+            `${groupCount}组客人参加了自然观察活动，共售出${groupCount}份自然探索体验包，收入${income}金币。`
+        ];
+        if (newDiscoveries.length) parts.push(`首次发现了${newDiscoveries.join('、')}，已记录进昆虫图鉴。`);
+        if (repeats.length) parts.push(`再次观察到了${repeats.join('、')}。`);
+        if (notFoundCount) parts.push(
+            groupCount === 1 ? '这次没有新的发现。' : `另有${notFoundCount}组没有新的发现。`
+        );
+        if (events.some(event => event.data && event.data.observation_ability_unlocked)) {
+            parts.push('自然观察记录更加丰富，今后的观察更容易有所发现。');
+        }
+        return parts.join('');
+    }
+
+    function mergeNatureObservationEvents(events) {
+        const grouped = new Map();
+        (events || []).forEach(event => {
+            if (!event || event.event_type !== 'nature_observation') return;
+            const key = `${event.day}|${event.turn}`;
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push(event);
+        });
+        const emitted = new Set();
+        return (events || []).flatMap(event => {
+            if (!event || event.event_type !== 'nature_observation') return [event];
+            const key = `${event.day}|${event.turn}`;
+            if (emitted.has(key)) return [];
+            emitted.add(key);
+            const group = grouped.get(key) || [event];
+            return [{
+                ...event,
+                text: natureObservationText(group),
+                sequence: Math.min(...group.map(item => Number(item.sequence) || 0)),
+            }];
+        });
+    }
+
     function renderEvents(events, todayEvents) {
         if (!els.logList) return;
-        const visibleEvents = (Array.isArray(events) ? events.slice() : []).concat(
+        const visibleEvents = mergeNatureObservationEvents(Array.isArray(events) ? events.slice() : []).concat(
             (Array.isArray(todayEvents) ? todayEvents : []).map((text, index) => ({
                 day: currentState && currentState.day,
                 turn: currentState && currentState.turn,
@@ -1033,6 +1116,7 @@
         clearDayEndSubmit();
         currentMode = actions.mode;
         currentActions = actions;
+        maybeShowNatureObservationIntro(actions.nature_observation_intro);
         if (actions.mode !== 'planning') renderTemporaryEventModal(null);
 
         if (els.operationsHeading) {
@@ -1225,6 +1309,81 @@
         } catch (err) {
             setActionMessage('无法读取成就图鉴：' + err.message, 'action-error');
         }
+    }
+
+    function rarityLabel(rarity) {
+        return {
+            common: '常见',
+            uncommon: '少见',
+            rare: '稀有',
+        }[rarity] || '已发现';
+    }
+
+    function renderInsectCatalogState(state) {
+        const nature = state && state.nature_observation || {};
+        const total = Number(nature.total_count) || 12;
+        const count = Number(nature.discovered_count) || 0;
+        if (els.insectCatalogProgress) els.insectCatalogProgress.textContent = `${count} / ${total}`;
+        if (els.insectCatalogModalProgress) els.insectCatalogModalProgress.textContent = `${count} / ${total}`;
+        if (!els.insectCatalogGrid) return;
+        const discovered = new Map((nature.discovered_insects || []).map(insect => [
+            Number(insect.catalog_index), insect
+        ]));
+        els.insectCatalogGrid.innerHTML = '';
+        for (let index = 1; index <= total; index += 1) {
+            const insect = discovered.get(index);
+            const card = document.createElement('article');
+            card.className = insect ? `insect-catalog-item ${insect.rarity || ''}` : 'insect-catalog-item unknown';
+            const name = document.createElement('h3');
+            const detail = document.createElement('p');
+            if (insect) {
+                name.textContent = insect.name || '已发现昆虫';
+                detail.textContent = rarityLabel(insect.rarity);
+            } else {
+                name.textContent = '？？？';
+                detail.textContent = '未发现';
+            }
+            card.append(name, detail);
+            els.insectCatalogGrid.appendChild(card);
+        }
+    }
+
+    function openInsectCatalog() {
+        renderInsectCatalogState(currentState || {});
+        if (els.insectCatalogModal) els.insectCatalogModal.classList.remove('hidden');
+    }
+
+    function closeInsectCatalog() {
+        if (els.insectCatalogModal) els.insectCatalogModal.classList.add('hidden');
+    }
+
+    async function acknowledgeNatureObservationIntro() {
+        if (!sessionId) return;
+        try {
+            const res = await fetch('/api/nature-observation/intro/seen', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(sessionBody())
+            });
+            if (!res.ok) throw new Error(`请求失败 (${res.status})`);
+        } catch (err) {
+            console.warn('自然观察说明已读状态保存失败：', err);
+        }
+    }
+
+    function maybeShowNatureObservationIntro(intro) {
+        if (!intro || natureObservationIntroShowing || !els.natureObservationIntroModal) return;
+        natureObservationIntroShowing = true;
+        if (els.natureObservationIntroText) {
+            const price = Number.isFinite(Number(intro.price)) ? Number(intro.price) : '—';
+            els.natureObservationIntroText.textContent = `${intro.description || ''} 建造价格：${price}金币。`;
+        }
+        els.natureObservationIntroModal.classList.remove('hidden');
+        acknowledgeNatureObservationIntro();
+    }
+
+    function closeNatureObservationIntro() {
+        if (els.natureObservationIntroModal) els.natureObservationIntroModal.classList.add('hidden');
     }
 
     function ensureRepairCandidate(candidates) {
@@ -1578,6 +1737,14 @@
                 appendGrowthProject(grid, '温泉', hotSpring, purchaseCandidates, budget);
             }
         }
+        const natureStation = projects.find(project => project.project_id === 'nature_observation_station');
+        if (natureStation && (natureStation.operation_requirement_met || natureStation.completed)) {
+            if (natureStation.completed) {
+                appendGrowthStatus(grid, '自然观察站', '已建设');
+            } else {
+                appendGrowthProject(grid, '自然观察站', natureStation, purchaseCandidates, budget);
+            }
+        }
         panel.appendChild(section);
     }
 
@@ -1609,6 +1776,9 @@
             `${label}：${project.display_name}`,
             `价格：${project.price}金币`,
             `状态：${status}`,
+            project.project_id === 'nature_observation_station'
+                ? '开放自然观察活动与昆虫图鉴。'
+                : '',
             ...growthProgressLines(project),
             !project.completed && project.affordable === false
                 ? `金币不足：当前 ${currentState && currentState.balance != null ? currentState.balance : '--'} / 需要 ${project.price}`
@@ -1699,6 +1869,7 @@
             case 'manage_greenery':
                 return '维护绿化';
             case 'purchase_growth_project':
+                if (item.category === 'nature_observation_station') return '建成自然观察站';
                 return '购买成长项目';
             default:
                 return item.action || '日终行动';
@@ -1715,12 +1886,18 @@
             return `${dayEndActionResultLabel(item)}失败：${reason}`;
         }).join('；');
         const balance = Number.isFinite(result.balance) ? `当前余额 ${result.balance}。` : '';
+        const stationBuilt = succeeded.find(item => (
+            item.category === 'nature_observation_station'
+        ));
+        const stationMessage = stationBuilt && stationBuilt.message
+            ? ` ${stationBuilt.message}`
+            : '';
 
         switch (result.action_execution_status) {
             case 'all_succeeded':
-                return `日终处理完成：${successes}。${balance}请确认进入新的一天。`;
+                return `日终处理完成：${successes}。${balance}${stationMessage}请确认进入新的一天。`;
             case 'partial_success':
-                return `日终处理完成。已执行：${successes}；未执行：${failures}。${balance}请确认进入新的一天。`;
+                return `日终处理完成。已执行：${successes}；未执行：${failures}。${balance}${stationMessage}请确认进入新的一天。`;
             case 'all_failed':
                 return `本次日终行动均未执行：${failures}。${balance}请确认进入新的一天。`;
             case 'no_actions':

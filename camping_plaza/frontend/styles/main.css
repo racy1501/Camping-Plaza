@@ -200,7 +200,7 @@ button:disabled {
 /* 顶部概览：独立状态卡 */
 .top-dashboard {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 12px;
     margin-bottom: 12px;
 }
@@ -742,8 +742,59 @@ button:disabled {
     background: rgba(111, 135, 103, 0.16);
 }
 
+.insect-catalog-progress {
+    margin: -4px 0 14px;
+    color: var(--text-light);
+    font-size: 13px;
+}
+
+.insect-catalog-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.insect-catalog-item {
+    min-height: 82px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(231, 239, 221, 0.56);
+}
+
+.insect-catalog-item h3,
+.insect-catalog-item p {
+    margin: 0;
+}
+
+.insect-catalog-item h3 {
+    font-size: 14px;
+}
+
+.insect-catalog-item p {
+    margin-top: 7px;
+    color: var(--text-light);
+    font-size: 12px;
+}
+
+.insect-catalog-item.unknown {
+    color: var(--text-light);
+    border-style: dashed;
+    background: rgba(247, 243, 237, 0.72);
+}
+
+.nature-observation-intro-dialog p {
+    margin: 0;
+    color: var(--text);
+    line-height: 1.7;
+}
+
 @media (max-width: 720px) {
     .achievement-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .insect-catalog-grid {
         grid-template-columns: 1fr;
     }
 }

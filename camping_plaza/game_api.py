@@ -263,14 +263,21 @@ def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
             })
 
     for project in eng.get_growth_project_catalog():
-        if project.get("can_purchase_now"):
+        show_station_option = (
+            project.get("project_id") == "nature_observation_station"
+            and not project.get("completed")
+            and project.get("prerequisite_met")
+            and project.get("operation_requirement_met")
+        )
+        if project.get("can_purchase_now") or show_station_option:
+            enabled = bool(project.get("can_purchase_now"))
             candidates.append({
                 "action": "purchase_growth_project",
                 "params": {"project_id": project["project_id"]},
                 "required_params": [_required_day_end_param("project_id", "string")],
                 "cost": project["price"],
-                "enabled": True,
-                "reason": "",
+                "enabled": enabled,
+                "reason": "" if enabled else "金币不足",
             })
     return candidates
 
@@ -299,6 +306,8 @@ def _build_human_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]
                 if project["project_id"] == params["project_id"]
             )
             item["label"] = f"购买{project['display_name']}"
+            if project["project_id"] == "nature_observation_station":
+                item["description"] = "开放自然观察活动与昆虫图鉴。"
         candidates.append(item)
     return candidates
 
@@ -626,6 +635,24 @@ def _build_human_action_catalog(eng: CampingPlazaEngine) -> dict:
         }
         if not day_end_completed:
             response["decision_summary"] = eng.get_turn6_decision_summary()
+            station_option = next(
+                (
+                    item for item in day_end_action_candidates
+                    if item.get("action") == "purchase_growth_project"
+                    and item.get("params", {}).get("project_id") == "nature_observation_station"
+                ),
+                None,
+            )
+            if station_option is not None and not eng.state.nature_observation_intro_seen:
+                response["nature_observation_intro"] = {
+                    "title": "新项目：自然观察站",
+                    "price": station_option["cost"],
+                    "description": (
+                        "建成后从次日起，客人有机会参加自然观察活动，"
+                        "并购买自然探索体验包。活动中可能发现昆虫，"
+                        "首次发现会记录进昆虫图鉴。"
+                    ),
+                }
         return response
 
     # Turn 2~5
@@ -918,6 +945,28 @@ def get_human_actions(session_id: Optional[str] = None):
     catalog = _build_human_action_catalog(eng)
     catalog["achievement_unlocked_count"] = eng.get_achievement_catalog()["unlocked_count"]
     return catalog
+
+
+@app.post("/api/nature-observation/intro/seen")
+def acknowledge_nature_observation_intro(req: Optional[SessionRequest] = None):
+    """网页展示完整说明后确认已读；不影响自然观察机制。"""
+    eng = get_engine(req.session_id if req is not None else None)
+    _require_onboarding_complete(eng)
+    station = next(
+        project for project in eng.get_growth_project_catalog()
+        if project["project_id"] == "nature_observation_station"
+    )
+    if (
+        eng.state.turn != 6
+        or eng.state.day_end_completed
+        or station["completed"]
+        or not station["operation_requirement_met"]
+    ):
+        return {"success": False, "error_code": "intro_not_available"}
+    if not eng.state.nature_observation_intro_seen:
+        eng.state.nature_observation_intro_seen = True
+        eng.save_state()
+    return {"success": True, "seen": True}
 
 
 # =============================================================================
