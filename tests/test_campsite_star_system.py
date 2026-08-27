@@ -194,8 +194,20 @@ class CampsiteStarSystemTests(unittest.TestCase):
         self.assertTrue(
             self.engine.get_campsite_star_progress()["pending_morning_upgrade"]
         )
-        self._finish_day_and_start_next()
+        self.assertTrue(self.engine.submit_day_end_actions([])["success"])
+        next_day = self.engine.start_next_day()
+        self.assertTrue(next_day["success"])
         self.assertEqual(self.engine.state.campsite_star, 2)
+        self.assertIn("营地升级到 2 星。", next_day["events"])
+
+    def test_morning_without_star_upgrade_has_no_upgrade_announcement(self):
+        self._set_star_conditions(served=14, nodes=1)
+        self.engine.state.turn = 6
+        self.assertTrue(self.engine.submit_day_end_actions([])["success"])
+        next_day = self.engine.start_next_day()
+        self.assertTrue(next_day["success"])
+        self.assertEqual(self.engine.state.campsite_star, 1)
+        self.assertNotIn("营地升级到", "".join(next_day["events"]))
 
     def test_growth_purchase_waits_until_next_morning_to_unlock_next_star_projects(self):
         self.engine.state.campsite_star = 2

@@ -6015,7 +6015,11 @@ class CampingPlazaEngine:
             result["events"].append("提醒：明早将结算启动资金。")
 
         self._settle_pending_reviews(result if result is not None else {"events": []})
-        self._update_campsite_star()
+        upgraded = self._update_campsite_star()
+        if upgraded and result is not None:
+            result["events"].append(
+                f"营地升级到 {self.state.campsite_star} 星。"
+            )
 
         self._ensure_today_arrival_plan()
         self._assign_reserved_tents_for_today()
