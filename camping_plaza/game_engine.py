@@ -123,6 +123,7 @@ class GameState:
         "dining": 0,
         "entertainment": 0,
         "hot_spring": 0,
+        "nature_observation": 0,
         "tip": 0,
     })
     today_expenses: dict = field(default_factory=lambda: {
@@ -1993,7 +1994,7 @@ class CampingPlazaEngine:
                 category: int((restored_state.today_income or {}).get(category, 0) or 0)
                 for category in (
                     "accommodation", "campsite", "dining", "entertainment",
-                    "hot_spring", "tip",
+                    "hot_spring", "nature_observation", "tip",
                 )
             }
             restored_state.nature_observation_station_built = bool(
@@ -2741,6 +2742,12 @@ class CampingPlazaEngine:
                 suffix = f"，满意度+{satisfaction}" if satisfaction is not None else ""
                 return f"{guests}使用温泉，收入{data['income']}金币{suffix}。"
             return f"{guests}使用温泉。"
+        if event_type == "nature_observation":
+            if data.get("result") == "not_found":
+                return f"{guests}参加自然观察，收入{data.get('income', 0)}金币，没有新的发现。"
+            insect_name = data.get("insect_name") or data.get("insect_id", "未知昆虫")
+            discovery_text = "首次点亮图鉴" if data.get("is_new_discovery") else "再次观察到"
+            return f"{guests}参加自然观察，收入{data.get('income', 0)}金币，{discovery_text}{insect_name}。"
         if event_type == "review_pending":
             return f"有{data.get('count', 0)}组客人留下评价，将于次日晨间结算。"
         if event_type == "repay_debt":
@@ -3506,7 +3513,7 @@ class CampingPlazaEngine:
             self._process_dining(result)
             self._process_entertainment(result)
             self._process_hot_spring(result)
-            self._process_nature_observation_plans()
+            self._process_nature_observation_plans(result)
             if self.state.turn == 5:
                 self._settle_tips(result)
                 self._process_day_guest_departures(result)
@@ -3632,8 +3639,8 @@ class CampingPlazaEngine:
         # 清理已离开的NPC
         self._cleanup_left_npcs()
 
-    def _process_nature_observation_plans(self) -> None:
-        """静默执行本 Turn 已锁定的自然观察结果。"""
+    def _process_nature_observation_plans(self, result: Optional[dict] = None) -> None:
+        """执行本 Turn 已锁定的自然观察结果，并只公开已完成事实。"""
         for entry in self.state.today_arrival_plan:
             if entry.get("planned_day") != self.state.day:
                 continue
@@ -3654,13 +3661,55 @@ class CampingPlazaEngine:
                 observation_plan["status"] = "skipped"
                 continue
 
-            observation_plan["status"] = "completed"
-            result = observation_plan.get("result")
-            if result == "not_found":
-                continue
-            self.state.discovered_insects = self._normalize_discovered_insects(
-                list(self.state.discovered_insects) + [result]
+            observation_result = observation_plan.get("result")
+            insects_by_id = {insect["id"]: insect for insect in self.INSECT_CATALOG}
+            insect = insects_by_id.get(observation_result)
+            is_new_discovery = bool(
+                insect and observation_result not in self.state.discovered_insects
             )
+            previous_income = self.state.today_income.get("nature_observation", 0)
+            previous_discovered = list(self.state.discovered_insects)
+            history_length = len(self.state.event_history)
+            try:
+                observation_plan["status"] = "completed"
+                self.state.today_income["nature_observation"] = previous_income + 20
+                if is_new_discovery:
+                    self.state.discovered_insects = self._normalize_discovered_insects(
+                        previous_discovered + [observation_result]
+                    )
+                event_data = {
+                    "income": 20,
+                    "result": (
+                        observation_result
+                        if observation_result == "not_found" or insect
+                        else "not_found"
+                    ),
+                    "is_new_discovery": is_new_discovery,
+                }
+                if insect:
+                    event_data.update({
+                        "insect_id": insect["id"],
+                        "insect_name": insect["name"],
+                        "rarity": insect["rarity"],
+                    })
+                self._record_business_event(
+                    self.state.day,
+                    self.state.turn,
+                    "nature_observation",
+                    guest_ids=[entry.get("npc_id")],
+                    data=event_data,
+                    merge=False,
+                )
+                if result is not None and self.state.event_history:
+                    result.setdefault("events", []).append(
+                        self.state.event_history[-1]["text"]
+                    )
+            except Exception:
+                observation_plan["status"] = "pending"
+                self.state.today_income["nature_observation"] = previous_income
+                self.state.discovered_insects = previous_discovered
+                del self.state.event_history[history_length:]
+                raise
 
     def _restore_active_npc_base_locations(self):
         """在本 Turn 行为执行前恢复仍在场 NPC 的基础位置。"""
@@ -5766,6 +5815,7 @@ class CampingPlazaEngine:
             "dining": 0,
             "entertainment": 0,
             "hot_spring": 0,
+            "nature_observation": 0,
             "tip": 0,
         }
         self.state.today_expenses = {
@@ -5947,6 +5997,20 @@ class CampingPlazaEngine:
                 "max": greenery_max,
                 "maintained_today": greenery_maintained_today,
                 "decay_next_day": greenery_decay_next_day,
+            },
+            "nature_observation": {
+                "station_built": self.state.nature_observation_station_built,
+                "discovered_count": len(self.state.discovered_insects),
+                "total_count": len(self.INSECT_CATALOG),
+                "discovered_insects": [
+                    {
+                        "id": insect["id"],
+                        "name": insect["name"],
+                        "rarity": insect["rarity"],
+                    }
+                    for insect in self.INSECT_CATALOG
+                    if insect["id"] in self.state.discovered_insects
+                ],
             },
             "active_npcs": safe_npcs,
             "reservations": safe_reservations,

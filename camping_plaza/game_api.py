@@ -1036,6 +1036,13 @@ def _format_mcp_event(eng: CampingPlazaEngine, event: dict) -> str:
             return f"{guests}使用温泉，共收入{data['income']}金币。"
         return f"{guests}使用温泉。"
 
+    if event_type == "nature_observation":
+        if data.get("result") == "not_found":
+            return f"{guests}参加自然观察，收入{data.get('income', 0)}金币，没有新的发现。"
+        insect_name = data.get("insect_name") or data.get("insect_id", "未知昆虫")
+        discovery_text = "首次点亮图鉴" if data.get("is_new_discovery") else "再次观察到"
+        return f"{guests}参加自然观察，收入{data.get('income', 0)}金币，{discovery_text}{insect_name}。"
+
     if event_type == "review_pending":
         return f"有{data.get('count', 0)}组客人留下评价，将于次日晨间结算。"
 
@@ -1324,7 +1331,17 @@ def mcp_state(session_id: Optional[str] = None):
         "facilities": {
             k: v["level"] for k, v in state["facilities"].items()
         },
+        "nature_observation": {
+            "station_built": state["nature_observation"]["station_built"],
+            "discovered_count": state["nature_observation"]["discovered_count"],
+            "total_count": state["nature_observation"]["total_count"],
+        },
     }
+    discovered_insects = state["nature_observation"]["discovered_insects"]
+    if discovered_insects:
+        response["nature_observation"]["discovered_insects"] = [
+            insect["id"] for insect in discovered_insects
+        ]
     actionable_tents = {
         tid: {"status": t["status"]}
         for tid, t in state["tents"].items()
