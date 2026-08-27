@@ -57,7 +57,7 @@ class PlayerNameOnboardingTests(unittest.TestCase):
         self.assertEqual(set(state.json()), {"onboarding"})
         onboarding = state.json()["onboarding"]
         self.assertEqual(onboarding["game"], "露营广场")
-        self.assertIn("6,000", onboarding["message"])
+        self.assertIn("21,000", onboarding["message"])
         self.assertIn("25", onboarding["message"])
         self.assertIn("2-3", onboarding["name_rules"])
 
