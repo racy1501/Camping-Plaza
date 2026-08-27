@@ -86,6 +86,49 @@ class NatureObservationPhase2ATests(unittest.TestCase):
         self.assertEqual(self.engine.state.today_income["nature_observation"], 40)
         self.assertEqual(self.engine.state.balance, balance_before + 40)
 
+    def test_insect_collection_achievements_use_unique_discoveries_and_thresholds(self):
+        insect_ids = [insect["id"] for insect in self.engine.INSECT_CATALOG]
+        for index, insect_id in enumerate(insect_ids):
+            self.engine.state.turn = index % 6 + 1
+            self._prepare(insect_id, npc_id=index + 1)
+            self.engine._process_nature_observation_plans({"events": []})
+            unlocked = set(self.engine.state.unlocked_achievement_ids)
+            if index == 0:
+                self.assertIn("first_insect_discovered", unlocked)
+                self.assertNotIn("insects_discovered_6", unlocked)
+            if index == 4:
+                self.assertNotIn("insects_discovered_6", unlocked)
+            if index == 5:
+                self.assertIn("insects_discovered_6", unlocked)
+            if index == 10:
+                self.assertNotIn("all_insects_discovered", unlocked)
+            if index == 11:
+                self.assertIn("all_insects_discovered", unlocked)
+
+        self.assertEqual(len(self.engine.state.discovered_insects), 12)
+        self.assertEqual(
+            self.engine.state.pending_achievement_ids.count("first_insect_discovered"),
+            1,
+        )
+        self.assertEqual(
+            self.engine.state.pending_achievement_ids.count("insects_discovered_6"),
+            1,
+        )
+        self.assertEqual(
+            self.engine.state.pending_achievement_ids.count("all_insects_discovered"),
+            1,
+        )
+
+    def test_repeated_insect_does_not_change_count_or_unlock_again(self):
+        self._prepare("ladybug")
+        self.engine._process_nature_observation_plans({"events": []})
+        pending_before = list(self.engine.state.pending_achievement_ids)
+        self.engine.state.turn = 4
+        self._prepare("ladybug", npc_id=2)
+        self.engine._process_nature_observation_plans({"events": []})
+        self.assertEqual(self.engine.state.discovered_insects, ["ladybug"])
+        self.assertEqual(self.engine.state.pending_achievement_ids, pending_before)
+
     def test_skipped_does_not_charge_or_publish_event(self):
         history_before = len(self.engine.state.event_history)
         balance_before = self.engine.state.balance

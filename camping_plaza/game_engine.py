@@ -350,6 +350,21 @@ class CampingPlazaEngine:
             "hint": "营地真正热闹起来以后。",
             "condition": "累计成功接待 150 组客人。",
         },
+        "first_insect_discovered": {
+            "title": "草丛来客",
+            "hint": "草丛里，好像有点动静。",
+            "condition": "首次发现一种昆虫。",
+        },
+        "insects_discovered_6": {
+            "title": "虫脉拓宽",
+            "hint": "再认识一些营地里的小邻居。",
+            "condition": "累计发现 6 种不同昆虫。",
+        },
+        "all_insects_discovered": {
+            "title": "虫口普查完成",
+            "hint": "还有小家伙藏在角落里。",
+            "condition": "发现全部 12 种昆虫。",
+        },
         "bad_luck_breakdowns": {
             "title": "坏事成双",
             "hidden_title": "今天是不是有点太衰了？",
@@ -383,6 +398,9 @@ class CampingPlazaEngine:
         "served_groups_50": "客人来了",
         "served_groups_100": "越来越热闹",
         "served_groups_150": "生意兴隆",
+        "first_insect_discovered": "草丛来客",
+        "insects_discovered_6": "虫脉拓宽",
+        "all_insects_discovered": "虫口普查完成",
         "bad_luck_breakdowns": "坏事成双",
         "debt_paid_by_deadline": "一身轻",
         "debt_unpaid_by_deadline": "没关系",
@@ -835,6 +853,18 @@ class CampingPlazaEngine:
             insect["id"] for insect in self.INSECT_CATALOG
             if insect["id"] in discovered
         ]
+
+    def _unlock_insect_discovery_achievements(self) -> None:
+        """按已发现的不同虫种数量即时解锁图鉴成就。"""
+        discovered_count = len(self._normalize_discovered_insects(
+            self.state.discovered_insects
+        ))
+        if discovered_count >= 1:
+            self._unlock_achievement("first_insect_discovered")
+        if discovered_count >= 6:
+            self._unlock_achievement("insects_discovered_6")
+        if discovered_count >= len(self.INSECT_CATALOG):
+            self._unlock_achievement("all_insects_discovered")
 
     def _get_nature_observation_discovery_percent(self) -> int:
         discovered_count = len(self._normalize_discovered_insects(
@@ -3740,6 +3770,8 @@ class CampingPlazaEngine:
                     result.setdefault("events", []).append(
                         self.state.event_history[-1]["text"]
                     )
+                if is_new_discovery:
+                    self._unlock_insect_discovery_achievements()
             except Exception:
                 observation_plan["status"] = "pending"
                 self.state.balance = previous_balance

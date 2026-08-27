@@ -41,6 +41,9 @@ class AchievementCatalogEngineTests(unittest.TestCase):
             ("served_groups_50", "客人来了", "营地渐渐有了稳定的人气。", "累计成功接待 50 组客人。"),
             ("served_groups_100", "越来越热闹", "这份人气继续往上积累。", "累计成功接待 100 组客人。"),
             ("served_groups_150", "生意兴隆", "营地真正热闹起来以后。", "累计成功接待 150 组客人。"),
+            ("first_insect_discovered", "草丛来客", "草丛里，好像有点动静。", "首次发现一种昆虫。"),
+            ("insects_discovered_6", "虫脉拓宽", "再认识一些营地里的小邻居。", "累计发现 6 种不同昆虫。"),
+            ("all_insects_discovered", "虫口普查完成", "还有小家伙藏在角落里。", "发现全部 12 种昆虫。"),
         ]
         catalog = self.engine.get_achievement_catalog()["achievements"]
         normal = [
