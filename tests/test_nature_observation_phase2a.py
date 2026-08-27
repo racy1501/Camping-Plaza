@@ -49,11 +49,13 @@ class NatureObservationPhase2ATests(unittest.TestCase):
 
     def test_completed_not_found_charges_once_and_records_event(self):
         history_before = len(self.engine.state.event_history)
+        balance_before = self.engine.state.balance
         entry = self._prepare("not_found")
         turn_result = {"events": []}
         self.engine._process_nature_observation_plans(turn_result)
         self.assertEqual(entry["observation_plan"]["status"], "completed")
         self.assertEqual(self.engine.state.today_income["nature_observation"], 20)
+        self.assertEqual(self.engine.state.balance, balance_before + 20)
         event = self.engine.state.event_history[-1]
         self.assertEqual(event["event_type"], "nature_observation")
         self.assertEqual(event["guest_ids"], [1])
@@ -64,9 +66,11 @@ class NatureObservationPhase2ATests(unittest.TestCase):
         self.assertIn("收入20金币", turn_result["events"][0])
         self.engine._process_nature_observation_plans({"events": []})
         self.assertEqual(self.engine.state.today_income["nature_observation"], 20)
+        self.assertEqual(self.engine.state.balance, balance_before + 20)
         self.assertEqual(len(self.engine.state.event_history), history_before + 1)
 
     def test_completed_insect_charges_and_marks_new_or_repeat(self):
+        balance_before = self.engine.state.balance
         self._prepare("ladybug")
         self.engine._process_nature_observation_plans({"events": []})
         event = self.engine.state.event_history[-1]
@@ -80,15 +84,31 @@ class NatureObservationPhase2ATests(unittest.TestCase):
         self.assertFalse(self.engine.state.event_history[-1]["data"]["is_new_discovery"])
         self.assertEqual(self.engine.state.discovered_insects, ["ladybug"])
         self.assertEqual(self.engine.state.today_income["nature_observation"], 40)
+        self.assertEqual(self.engine.state.balance, balance_before + 40)
 
     def test_skipped_does_not_charge_or_publish_event(self):
         history_before = len(self.engine.state.event_history)
+        balance_before = self.engine.state.balance
         entry = self._prepare("ladybug", arrived=False)
         self.engine._process_nature_observation_plans({"events": []})
         self.assertEqual(entry["observation_plan"]["status"], "skipped")
         self.assertEqual(self.engine.state.today_income["nature_observation"], 0)
+        self.assertEqual(self.engine.state.balance, balance_before)
         self.assertEqual(len(self.engine.state.event_history), history_before)
 
+    def test_station_day_end_log_says_build_not_upgrade(self):
+        engine = CampingPlazaEngine(db_path=":memory:")
+        engine.state.turn = 6
+        engine.state.campsite_star = 3
+        engine.state.balance = 800
+        result = engine.submit_day_end_actions([{
+            "action": "purchase_growth_project",
+            "params": {"project_id": "nature_observation_station"},
+        }])
+        self.assertTrue(result["success"])
+        history_texts = [event["text"] for event in engine.state.event_history]
+        self.assertIn("日终完成：建设自然观察站，共支出800金币。", history_texts)
+        self.assertNotIn("升级自然观察站", "\n".join(history_texts))
     def test_api_state_exposes_only_current_catalog_and_not_hidden_plan(self):
         self.engine.state.discovered_insects = ["ladybug"]
         self.engine.state.today_arrival_plan = [{

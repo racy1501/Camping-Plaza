@@ -3672,11 +3672,13 @@ class CampingPlazaEngine:
             is_new_discovery = bool(
                 insect and observation_result not in self.state.discovered_insects
             )
+            previous_balance = self.state.balance
             previous_income = self.state.today_income.get("nature_observation", 0)
             previous_discovered = list(self.state.discovered_insects)
             history_length = len(self.state.event_history)
             try:
                 observation_plan["status"] = "completed"
+                self.state.balance += 20
                 self.state.today_income["nature_observation"] = previous_income + 20
                 if is_new_discovery:
                     self.state.discovered_insects = self._normalize_discovered_insects(
@@ -3714,6 +3716,7 @@ class CampingPlazaEngine:
                     )
             except Exception:
                 observation_plan["status"] = "pending"
+                self.state.balance = previous_balance
                 self.state.today_income["nature_observation"] = previous_income
                 self.state.discovered_insects = previous_discovered
                 del self.state.event_history[history_length:]
@@ -4569,7 +4572,7 @@ class CampingPlazaEngine:
         if action_name == "purchase_growth_project":
             display_name = item_result.get("display_name") or "成长项目"
             category = item_result.get("category")
-            if category in {"tent", "hot_spring"}:
+            if category in {"tent", "hot_spring", "nature_observation_station"}:
                 return f"建设{display_name}"
             return f"升级{display_name}"
         return ""
