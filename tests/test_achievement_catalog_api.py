@@ -115,6 +115,13 @@ class AchievementCatalogEngineTests(unittest.TestCase):
         self.assertEqual({item["description"] for item in before_result.values()}, {""})
 
         self.engine.state.day = 26
+        self.engine.state.startup_debt_settlement_completed = True
+        still_hidden = {
+            item["id"]: item
+            for item in self.engine.get_achievement_catalog()["achievements"]
+            if item["id"] in debt_ids
+        }
+        self.assertEqual({item["status"] for item in still_hidden.values()}, {"hidden"})
         self.engine._unlock_achievement("debt_paid_by_deadline")
         after_result = {
             item["id"]: item

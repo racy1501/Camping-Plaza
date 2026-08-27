@@ -2,6 +2,7 @@
 
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, "camping_plaza")
 
@@ -15,8 +16,9 @@ class DebtApiMcpTests(unittest.TestCase):
         self.engine.state.today_conflict_event = None
         self.original_engine = game_api.engine
         game_api.engine = self.engine
-        self.engine.state.day = 25
+        self.engine.state.day = 26
         self.engine.state.turn = 6
+        self.engine.state.startup_debt_settlement_completed = True
         self.engine.state.balance = 10000
         self.engine.tents[1].status = "broken"
         self.engine.tents[2].is_unlocked = True
@@ -131,8 +133,9 @@ class DebtApiMcpTests(unittest.TestCase):
         self.assertEqual(self._human_candidates(), [])
         self.assertEqual(self._mcp_candidates(), [])
 
-    def test_repayment_candidate_is_hidden_before_day_25_and_returns_afterward(self):
-        self.engine.state.day = 24
+    def test_repayment_candidate_is_hidden_through_day_25_and_returns_after_settlement(self):
+        self.engine.state.day = 25
+        self.engine.state.startup_debt_settlement_completed = False
         self.assertNotIn("repay_debt", [
             candidate["action"] for candidate in self._human_candidates()
         ])
@@ -141,6 +144,7 @@ class DebtApiMcpTests(unittest.TestCase):
         ])
 
         self.engine.state.day = 26
+        self.engine.state.startup_debt_settlement_completed = True
         self.assertIn("repay_debt", [
             candidate["action"] for candidate in self._human_candidates()
         ])
@@ -149,8 +153,9 @@ class DebtApiMcpTests(unittest.TestCase):
             candidate["action"] for candidate in self._mcp_candidates()
         ])
 
-    def test_day_24_day_end_submission_cannot_bypass_repayment_window(self):
-        self.engine.state.day = 24
+    def test_day_25_day_end_submission_cannot_bypass_repayment_window(self):
+        self.engine.state.day = 25
+        self.engine.state.startup_debt_settlement_completed = False
         balance_before = self.engine.state.balance
         result = game_api.submit_day_end(game_api.DayEndRequest(day_end_actions=[
             game_api.ActionRequest(
@@ -188,6 +193,30 @@ class DebtApiMcpTests(unittest.TestCase):
             ),
             before,
         )
+
+    def test_api_and_mcp_reflect_day_26_auto_settlement(self):
+        self.engine.state.day = 25
+        self.engine.state.turn = 6
+        self.engine.state.day_end_completed = True
+        self.engine.state.balance = 2000
+        self.engine.state.startup_debt_settlement_completed = False
+        self.engine.state.player_name = "测试"
+
+        with mock.patch.object(self.engine, "_ensure_today_arrival_plan", return_value=False), \
+             mock.patch.object(self.engine, "_generate_daily_reservation", return_value=None):
+            start_result = game_api.start_next_day()
+
+        self.assertTrue(start_result["success"])
+        self.assertIn("仍可继续经营", "".join(start_result["events"]))
+        debt = game_api.mcp_query_debt()
+        self.assertEqual(debt["balance"], 0)
+        self.assertEqual(debt["debt_remaining"], 19000)
+        self.assertTrue(debt["automatic_settlement_completed"])
+        self.assertEqual(game_api.mcp_state()["balance"], debt["balance"])
+
+        self.engine.state.turn = 6
+        candidates = self._mcp_candidates()
+        self.assertIn("repay_debt", [item["action"] for item in candidates])
 
 
 if __name__ == "__main__":

@@ -106,7 +106,9 @@ class GameState:
     balance: int = 1000
     initial_debt: int = 21000
     debt_remaining: int = 21000
-    repayment_deadline_day: int = 25
+    repayment_deadline_day: int = 26
+    # Day 26 晨间启动资金结算的唯一完成标记；不得用余额或事件文本推断。
+    startup_debt_settlement_completed: bool = False
     day_start_balance: Optional[int] = None
     previous_day_summary: Optional[dict] = None
     total_reviews: int = 0
@@ -357,12 +359,12 @@ class CampingPlazaEngine:
         "debt_paid_by_deadline": {
             "title": "一身轻",
             "hint": "",
-            "condition": "进入 Day 26 时启动资金已经全部还清。",
+            "condition": "Day 26 晨间启动资金结算时，一次性结清全部剩余启动资金。",
         },
         "debt_unpaid_by_deadline": {
             "title": "没关系",
             "hint": "",
-            "condition": "进入 Day 26 时启动资金仍未全部还清。",
+            "condition": "Day 26 晨间启动资金结算时，现有资金不足以结清全部剩余启动资金。",
         },
     }
     ACHIEVEMENT_DEFINITIONS = {
@@ -607,6 +609,7 @@ class CampingPlazaEngine:
 
     # 快照版本号，结构变更时递增
     SNAPSHOT_VERSION = 1
+    STARTUP_DEBT_SETTLEMENT_DAY = 26
 
     def __init__(
         self,
@@ -1031,15 +1034,15 @@ class CampingPlazaEngine:
             "initial_debt": self.state.initial_debt,
             "debt_remaining": debt_remaining,
             "debt_repaid_total": self.state.initial_debt - debt_remaining,
-            "repayment_deadline_day": self.state.repayment_deadline_day,
+            "repayment_deadline_day": self.STARTUP_DEBT_SETTLEMENT_DAY,
             "days_until_deadline": max(
-                0, self.state.repayment_deadline_day - self.state.day
+                0, self.STARTUP_DEBT_SETTLEMENT_DAY - self.state.day
+            ),
+            "automatic_settlement_completed": (
+                self.state.startup_debt_settlement_completed
             ),
             "is_paid_off": debt_remaining == 0,
-            "is_overdue": (
-                self.state.day > self.state.repayment_deadline_day
-                and debt_remaining > 0
-            ),
+            "is_overdue": False,
         }
 
     @classmethod
@@ -1087,7 +1090,10 @@ class CampingPlazaEngine:
     def get_achievement_catalog(self) -> dict:
         """返回图鉴展示所需的最小派生数据，不新增成就持久化状态。"""
         unlocked_ids = set(self.state.unlocked_achievement_ids)
-        debt_result_revealed = self.state.day > self.state.repayment_deadline_day
+        # 幂等标记只说明“不再自动扣款”；结果卡是否揭晓必须有真实成就事实。
+        debt_result_revealed = bool(
+            unlocked_ids & self.DEBT_RESULT_ACHIEVEMENT_IDS
+        )
         achievements = []
         for achievement_id, definition in self.ACHIEVEMENT_CATALOG.items():
             title = definition["title"]
@@ -1160,13 +1166,14 @@ class CampingPlazaEngine:
         if amount > self.state.debt_remaining:
             return {"success": False, "error_code": "repayment_exceeds_debt", "message": "还款金额不能超过剩余负债"}
         if (
-            self.state.day < self.state.repayment_deadline_day
+            self.state.day < self.STARTUP_DEBT_SETTLEMENT_DAY
+            or not self.state.startup_debt_settlement_completed
             or self.state.turn != 6
         ):
             return {
                 "success": False,
                 "error_code": "repayment_not_available",
-                "message": "主动还款仅在 Day 25 及之后的 Turn 6 开放",
+                "message": "偿还剩余启动资金仅在 Day 26 晨间结算后、Turn 6 开放",
             }
 
         balance_before = self.state.balance
@@ -1965,6 +1972,9 @@ class CampingPlazaEngine:
             legacy_campsite_star_state = not {
                 "campsite_star", "historical_highest_rating",
             }.issubset(raw_state)
+            legacy_debt_settlement_state = (
+                "startup_debt_settlement_completed" not in raw_state
+            )
             state_fields = {f for f in GameState.__dataclass_fields__}
             restored_state = GameState()
             for key, value in raw_state.items():
@@ -2010,6 +2020,22 @@ class CampingPlazaEngine:
             restored_state.unlocked_achievement_ids = self._normalize_achievement_ids(
                 restored_state.unlocked_achievement_ids
             )
+            # 旧快照在 Day 26 或之后没有结算标记时，无法可靠补造当时的
+            # 自动扣款事实；只将其视为已处理，保留余额、债务和既有成就。
+            if legacy_debt_settlement_state:
+                restored_state.startup_debt_settlement_completed = (
+                    restored_state.day >= self.STARTUP_DEBT_SETTLEMENT_DAY
+                    or bool(
+                        set(restored_state.unlocked_achievement_ids)
+                        & self.DEBT_RESULT_ACHIEVEMENT_IDS
+                    )
+                )
+            else:
+                restored_state.startup_debt_settlement_completed = bool(
+                    restored_state.startup_debt_settlement_completed
+                )
+            # 旧字段保留为接口兼容名称，但其正式含义已是 Day 26 晨间结算日。
+            restored_state.repayment_deadline_day = self.STARTUP_DEBT_SETTLEMENT_DAY
             restored_state.pending_achievement_ids = [
                 achievement_id
                 for achievement_id in self._normalize_achievement_ids(
@@ -4498,7 +4524,7 @@ class CampingPlazaEngine:
             "today_net_income": income_total - expense_total,
             "balance": self.state.balance,
             "debt_remaining": self.state.debt_remaining,
-            "repayment_deadline_day": self.state.repayment_deadline_day,
+            "repayment_deadline_day": self.STARTUP_DEBT_SETTLEMENT_DAY,
         }
         broken_tents = [
             tent.id for tent in self._get_unlocked_tents()
@@ -5772,6 +5798,47 @@ class CampingPlazaEngine:
         interval = random.randint(base_interval, base_interval + 10)
         tent.next_breakdown_turn = self._absolute_turn() + interval
 
+    def _settle_startup_debt_on_day_26(self, result: Optional[dict]) -> None:
+        """在 Day 26 晨间执行一次启动资金结算。"""
+        if (
+            self.state.day != self.STARTUP_DEBT_SETTLEMENT_DAY
+            or self.state.startup_debt_settlement_completed
+        ):
+            return
+
+        balance_before = self.state.balance
+        debt_before = self.state.debt_remaining
+        amount = min(balance_before, debt_before)
+        self.state.balance -= amount
+        self.state.debt_remaining -= amount
+        self.state.startup_debt_settlement_completed = True
+
+        if self.state.debt_remaining == 0:
+            self._unlock_achievement("debt_paid_by_deadline")
+            message = "Day 26 晨间已自动结清全部启动资金。"
+        else:
+            self._unlock_achievement("debt_unpaid_by_deadline")
+            message = (
+                "本次未能全部结清启动资金，存档仍可继续经营；"
+                "如愿意，也可以自行重新开始新存档。"
+            )
+        if result is not None:
+            result["events"].append(message)
+        self._record_business_event(
+            self.state.day,
+            self.state.turn,
+            "startup_debt_settlement",
+            data={
+                "amount": amount,
+                "balance_before": balance_before,
+                "balance_after": self.state.balance,
+                "debt_before": debt_before,
+                "debt_after": self.state.debt_remaining,
+            },
+            kind="system",
+            merge=False,
+        )
+
     def _new_day(self, result: Optional[dict] = None):
         """新的一天。修复 #5：绿化衰减逻辑"""
         income_total = sum(self.state.today_income.values())
@@ -5803,14 +5870,6 @@ class CampingPlazaEngine:
 
         if self.state.day == 1:
             self._unlock_achievement("first_day_complete")
-        if self.state.day == self.state.repayment_deadline_day:
-            achievement_id = (
-                "debt_paid_by_deadline"
-                if self.state.debt_remaining == 0
-                else "debt_unpaid_by_deadline"
-            )
-            self._unlock_achievement(achievement_id)
-
         review_result = {"events": []}
         for npc in self._get_active_overnight_tent_npcs():
             self._try_leave_review(npc, review_result)
@@ -5864,7 +5923,10 @@ class CampingPlazaEngine:
         self.state.hot_spring_people_served_today = 0
         # 重置绿化标记
         self.state.greenery_processed_today = False
-        self.state.day_start_balance = self.state.balance
+        if self.state.day == 20 and result is not None:
+            result["events"].append("提醒：Day 26 晨间将统一结算启动资金。")
+        if self.state.day == 25 and result is not None:
+            result["events"].append("提醒：明早将结算启动资金。")
 
         self._settle_pending_reviews(result if result is not None else {"events": []})
         self._update_campsite_star()
@@ -5872,6 +5934,8 @@ class CampingPlazaEngine:
         self._ensure_today_arrival_plan()
         self._assign_reserved_tents_for_today()
         self._generate_daily_reservation()
+        self._settle_startup_debt_on_day_26(result)
+        self.state.day_start_balance = self.state.balance
 
     def _process_greenery_decay(self) -> tuple[Optional[float], Optional[float]]:
         """绿化衰减"""

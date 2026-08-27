@@ -1921,7 +1921,8 @@ class DayEndApiTests(ApiPersistenceTestCase):
 
     def test_turn6_budget_hint_is_shared_by_human_and_mcp_actions(self):
         self._reach_turn6()
-        self.engine.state.day = 25
+        self.engine.state.day = 26
+        self.engine.state.startup_debt_settlement_completed = True
         human_actions = game_api.get_human_actions()
         mcp_actions = game_api.mcp_available_actions()
 

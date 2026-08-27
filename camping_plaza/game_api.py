@@ -189,7 +189,8 @@ def _build_turn6_day_end_candidates(eng: CampingPlazaEngine) -> list[dict]:
     candidates = []
 
     if (
-        eng.state.day >= eng.state.repayment_deadline_day
+        eng.state.day >= eng.STARTUP_DEBT_SETTLEMENT_DAY
+        and eng.state.startup_debt_settlement_completed
         and eng.state.debt_remaining > 0
     ):
         max_amount = min(balance, eng.state.debt_remaining)
@@ -1363,7 +1364,7 @@ def mcp_state(session_id: Optional[str] = None):
         return {
             "onboarding": {
                 "game": "露营广场",
-                "message": "欢迎来到《露营广场》！你将接手一座刚刚起步的露营地。为了让营地能够顺利开始营业，这里已经完成了一些基础设施建设，因此还有 21,000 金币的建设费用需要偿还。请在第 25 天结束前还清。开门营业前，先告诉我你的名字吧。",
+                "message": "欢迎来到《露营广场》！你将接手一座刚刚起步的露营地。为了让营地能够顺利开始营业，这里已经完成了一些基础设施建设，因此还有 21,000 金币的建设费用需要偿还。Day 26 晨间将统一结算启动资金；若未能全部结清，仍可继续经营。开门营业前，先告诉我你的名字吧。",
                 "name_rules": "中文名限 2-3 个汉字；英文名限 2-6 个字母或数字，不使用空格、标点或特殊符号。",
             }
         }

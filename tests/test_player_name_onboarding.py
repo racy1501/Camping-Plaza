@@ -58,7 +58,8 @@ class PlayerNameOnboardingTests(unittest.TestCase):
         onboarding = state.json()["onboarding"]
         self.assertEqual(onboarding["game"], "露营广场")
         self.assertIn("21,000", onboarding["message"])
-        self.assertIn("25", onboarding["message"])
+        self.assertIn("Day 26 晨间将统一结算", onboarding["message"])
+        self.assertNotIn("第 25 天结束前还清", onboarding["message"])
         self.assertIn("2-3", onboarding["name_rules"])
 
         actions = self.client.get("/mcp/actions", params={"session_id": session_id})

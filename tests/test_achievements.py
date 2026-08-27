@@ -137,14 +137,14 @@ class AchievementTests(unittest.TestCase):
             "served_groups_150",
         }.issubset(self.engine.state.unlocked_achievement_ids))
 
-    def test_debt_deadline_achievements_are_mutually_exclusive(self):
+    def test_day_26_auto_settlement_achievements_are_mutually_exclusive(self):
         paid_engine = CampingPlazaEngine(
             db_path=os.path.join(self._db_dir, "paid-achievements.sqlite")
         )
         paid_engine.state.day = 25
         paid_engine.state.turn = 6
         paid_engine.state.day_end_completed = True
-        paid_engine.state.debt_remaining = 0
+        paid_engine.state.balance = 21000
         paid_result = paid_engine.start_next_day()
         self.assertEqual(
             [item["id"] for item in paid_result["achievement_notifications"]],
@@ -157,32 +157,29 @@ class AchievementTests(unittest.TestCase):
         unpaid_engine.state.day = 25
         unpaid_engine.state.turn = 6
         unpaid_engine.state.day_end_completed = True
-        unpaid_engine.state.debt_remaining = 1
+        unpaid_engine.state.balance = 1
         unpaid_result = unpaid_engine.start_next_day()
         self.assertEqual(
             [item["id"] for item in unpaid_result["achievement_notifications"]],
             ["debt_unpaid_by_deadline"],
         )
 
-    def test_day_25_repayment_results_determine_the_day_26_achievement(self):
+    def test_day_26_auto_settlement_results_determine_the_achievement(self):
         cases = (
             ("paid", 21000, "debt_paid_by_deadline"),
             ("partial", 2000, "debt_unpaid_by_deadline"),
-            ("unpaid", None, "debt_unpaid_by_deadline"),
+            ("unpaid", 0, "debt_unpaid_by_deadline"),
         )
-        for name, amount, expected_achievement in cases:
+        for name, balance, expected_achievement in cases:
             with self.subTest(name=name):
                 engine = CampingPlazaEngine(
                     db_path=os.path.join(self._db_dir, f"{name}-deadline.sqlite")
                 )
                 engine.state.day = 25
                 engine.state.turn = 6
-                engine.state.balance = 21000
-                actions = [] if amount is None else [{
-                    "action": "repay_debt", "params": {"amount": amount},
-                }]
+                engine.state.balance = balance
 
-                day_end = engine.submit_day_end_actions(actions)
+                day_end = engine.submit_day_end_actions([])
                 result = engine.start_next_day()
 
                 self.assertTrue(day_end["success"])
